@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+htmlcov/
+
+# App data (local cache lives in XDG dirs, but ignore any stray local copies)
+*.sqlite
+*.sqlite3

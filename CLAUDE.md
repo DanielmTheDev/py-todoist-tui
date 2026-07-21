@@ -1,0 +1,93 @@
+# py-todoist-tui — Project Rules
+
+Rich, fully keyboard-driven Todoist TUI. Personal, single-user. Built
+iteratively in small, reviewed steps.
+
+## Stack & commands
+- Python ≥3.12, `uv`-managed. TUI: **Textual**. HTTP: **httpx** (Todoist API v1).
+- Install: `uv sync`
+- Test: `uv run pytest` (live-API `smoke` tests excluded by default)
+- Live smoke (opt-in): `uv run pytest -m smoke`
+- Lint/format: `uv run ruff check` · `uv run ruff format`
+- Types: `uv run pyright`
+- Dep-graph: `uv run lint-imports` (enforces the layer rule below)
+- Run app: `uv run todoist-tui`
+
+## Architecture (layered, pragmatic tactical DDD)
+```
+src/todoist_tui/
+  domain/       entities (Task, Project, Section, Label),
+                value objects (Due, Priority, TaskId, FilterQuery). No I/O.
+  store/        repository interfaces + SQLite cache, sync-token state.
+  api/          httpx v1 client: incremental /sync + batched commands.
+  application/  workflows as services (schedule, postpone-redistribute, bulk ops).
+  tui/          Textual app, screens, widgets, keymap. No direct I/O.
+  config.py     token/config loading.
+tests/          mirrors src/. tests/smoke/ = opt-in live-API.
+```
+**Dependency rule (hard):** `tui → application → domain`. `application` reaches
+`store`/`api` only through interfaces. `domain` imports nothing outward. TUI
+never calls httpx or the DB directly. Enforced by `import-linter`
+(`uv run lint-imports`) — config in `pyproject.toml`.
+
+## Coding guideline
+- **TDD, no exceptions.** Failing test first → minimal code to pass → refactor.
+  No production code without a test that drove it.
+- **Testable by design.** All I/O (http, db, clock, filesystem) behind an
+  injected interface. Pure domain logic has zero I/O.
+- **Concise & self-documenting.** Names carry intent. Comments explain *why* /
+  non-obvious tradeoffs only — never restate *what*. No dead code, no
+  speculative generality (YAGNI).
+- **DDD, pragmatic.** Ubiquitous language matching Todoist terms. Value objects
+  (frozen dataclasses) for concepts with rules; entities for identity;
+  repository interfaces abstract the store; workflows are application services.
+  No domain events / CQRS until a real need appears.
+- **Types.** Full hints; `pyright` strict clean. Prefer immutable value objects.
+- **Small & modular.** Short functions (one job, early returns, shallow
+  nesting); small focused classes (single responsibility, few public methods).
+  Split modules before they sprawl; group by domain concept, not by kind. If a
+  function/class is hard to name or test, it's doing too much — split it.
+- **Style.** `ruff` check + format clean before commit.
+- **Commits.** Conventional, small, one logical change; message says *why*.
+
+## Data safety
+- Token read from `~/.config/todoist/config.json` key `"token"` (shared with
+  todoist-cli + the i3 quick-add scripts). Never invent a new env var.
+- **No live-API writes in automated tests.** Unit tests mock httpx (`respx`).
+  Live calls only in `tests/smoke/`, marked `smoke`, excluded from default runs.
+- Destructive ops honor a `--dry-run` where applicable. Never mutate the real
+  account from an automated/CI run.
+
+## Development loop
+Each increment is one small, single-purpose diff:
+1. Write the failing test.
+2. Minimal implementation to green.
+3. Refactor (tests stay green).
+4. `ruff` + `pyright` clean.
+5. **Reviewer subagent** checks it against the checklist below.
+6. **User reviews**, then commit.
+Keep diffs small so review is fast. No big-bang PRs.
+
+## Reviewer checklist (subagent uses this)
+1. Test-first honored; test exercises real behavior, not trivial.
+2. New logic covered incl. edge cases; no untested public method.
+3. Dependency rule respected (no outward domain import; TUI no direct I/O).
+4. DDD: logic in the right layer (domain vs application vs infra); language matches.
+5. Concise: no what-comments, no dead/speculative code, clear names.
+6. Types complete; `pyright` strict + `ruff` clean.
+7. No live-API or account-mutating test.
+8. Diff small and single-purpose.
+
+Reviewer output: one line per finding — `path:line: severity: problem. fix.`
+No praise, no scope creep.
+
+## Subagent briefs
+Give agents: the task, the relevant rules subset, acceptance criteria, output
+format. **No persona role-play** — rules and checklists shape quality, not
+characters.
+
+## Reference (do not copy code, same-user prior art)
+- `~/git/todoist-tui` — old F#/.NET client; has the workflow logic (load
+  balancing, postpone-redistribute) worth mirroring behaviorally.
+- `~/git/i3-dotfiles/scripts/i3/gui-todoist-quickadd.py` — capture + token
+  convention.
