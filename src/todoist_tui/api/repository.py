@@ -22,6 +22,9 @@ class ApiTaskRepository:
             for record in await self._client.projects()
         ]
 
+    async def complete(self, task_id: TaskId) -> None:
+        await self._client.close_item(str(task_id))
+
 
 def _to_task(record: dict[str, Any]) -> Task:
     due = record.get("due")

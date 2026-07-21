@@ -3,12 +3,14 @@ from dataclasses import dataclass
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import TaskRepository
+from todoist_tui.domain.task import TaskId
 
 
 @dataclass(frozen=True, slots=True)
 class TodayRow:
     """A task due today, ready to render: project resolved to its name."""
 
+    id: TaskId
     content: str
     priority: Priority
     due: Due | None
@@ -20,6 +22,7 @@ async def load_today(repo: TaskRepository) -> list[TodayRow]:
     names = {project.id: project.name for project in await repo.projects()}
     return [
         TodayRow(
+            id=task.id,
             content=task.content,
             priority=task.priority,
             due=task.due,

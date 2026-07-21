@@ -1,8 +1,11 @@
+import json
+from urllib.parse import parse_qs
+
 import httpx
 import pytest
 import respx
 
-from todoist_tui.api.client import BASE_URL, TodoistClient
+from todoist_tui.api.client import BASE_URL, SyncCommandError, TodoistClient
 
 
 @pytest.mark.anyio
@@ -72,4 +75,42 @@ async def test_raises_on_http_error() -> None:
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.today_tasks()
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_close_item_posts_item_close_command() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.close_item("6X4")
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer tok"
+    assert "application/x-www-form-urlencoded" in request.headers["content-type"]
+    commands = json.loads(parse_qs(request.content.decode())["commands"][0])
+    assert commands == [{"type": "item_close", "uuid": "u-1", "args": {"id": "6X4"}}]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_close_item_raises_on_command_error() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sync_status": {
+                    "u-1": {"error_tag": "ITEM_NOT_FOUND", "error": "not found"}
+                }
+            },
+        )
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    with pytest.raises(SyncCommandError, match="not found"):
+        await client.close_item("nope")
     await client.aclose()

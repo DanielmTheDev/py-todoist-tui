@@ -20,6 +20,9 @@ class FakeRepository:
     async def projects(self) -> list[Project]:
         return self._projects
 
+    async def complete(self, task_id: TaskId) -> None:
+        self._tasks = [t for t in self._tasks if t.id != task_id]
+
 
 def _task(content: str, project_id: str) -> Task:
     return Task(
@@ -41,6 +44,7 @@ async def test_load_today_joins_project_name() -> None:
 
     assert rows == [
         TodayRow(
+            id=TaskId("Buy milk"),
             content="Buy milk",
             priority=Priority.P2,
             due=Due(date=datetime.date(2026, 7, 21)),

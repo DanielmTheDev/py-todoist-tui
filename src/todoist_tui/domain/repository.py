@@ -1,7 +1,7 @@
 from typing import Protocol
 
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.task import Task
+from todoist_tui.domain.task import Task, TaskId
 
 
 class TaskRepository(Protocol):
@@ -10,3 +10,5 @@ class TaskRepository(Protocol):
     async def today(self) -> list[Task]: ...
 
     async def projects(self) -> list[Project]: ...
+
+    async def complete(self, task_id: TaskId) -> None: ...
