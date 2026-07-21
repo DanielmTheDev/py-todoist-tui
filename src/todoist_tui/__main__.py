@@ -1,9 +1,28 @@
+import asyncio
+import sys
 from collections.abc import Sequence
+
+from todoist_tui.api.client import TodoistClient
+from todoist_tui.api.repository import ApiTaskRepository
+from todoist_tui.config import ConfigError, default_config_path, load_token
+from todoist_tui.tui.app import TodoistApp
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    print("todoist-tui: scaffold only, no UI yet")
+    try:
+        token = load_token(default_config_path())
+    except ConfigError as error:
+        print(f"todoist-tui: {error}", file=sys.stderr)
+        return 1
+
+    asyncio.run(_run(token))
     return 0
+
+
+async def _run(token: str) -> None:
+    async with TodoistClient.create(token) as client:
+        app = TodoistApp(ApiTaskRepository(client))
+        await app.run_async()
 
 
 if __name__ == "__main__":
