@@ -30,11 +30,19 @@ class FakeRepository:
 
 
 @pytest.mark.anyio
+async def test_cursor_is_row() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).cursor_type == "row"
+
+
+@pytest.mark.anyio
 async def test_mount_renders_today_tasks_in_table() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Buy milk",
-        priority=Priority.P2,
+        priority=Priority.P1,
         due=Due(date=datetime.date(2026, 7, 21), time=datetime.time(9, 30)),
         project_id="220",
     )
@@ -42,10 +50,29 @@ async def test_mount_renders_today_tasks_in_table() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        table = app.query_one(DataTable[str])
+        table = app.query_one(DataTable[object])
         assert table.row_count == 1
         row = table.get_row_at(0)
-        assert row == ["P2", "09:30", "Buy milk", "Errands"]
+        assert row[0] == "🔴"
+        assert row[1] == "09:30"
+        assert row[2] == "Buy milk"
+        assert str(row[3]) == "Errands"
+
+
+@pytest.mark.anyio
+async def test_p4_has_no_dot() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Someday",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""
 
 
 @pytest.mark.anyio
@@ -61,7 +88,23 @@ async def test_all_day_task_has_blank_time() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[str]).get_row_at(0)[1] == ""
+        assert app.query_one(DataTable[object]).get_row_at(0)[1] == ""
+
+
+@pytest.mark.anyio
+async def test_task_without_project_blank() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Solo",
+        priority=Priority.P3,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], []))  # no matching project name
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == ""
 
 
 @pytest.mark.anyio
@@ -78,15 +121,15 @@ async def test_pressing_e_completes_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[str]).row_count == 1
+        assert app.query_one(DataTable[object]).row_count == 1
         await pilot.press("e")
         # optimistic: row is gone before the network command resolves
-        assert app.query_one(DataTable[str]).row_count == 0
+        assert app.query_one(DataTable[object]).row_count == 0
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
         assert repo.completed == [TaskId("6X4")]
-        assert app.query_one(DataTable[str]).row_count == 0
+        assert app.query_one(DataTable[object]).row_count == 0
         assert "No tasks due today" in str(app.query_one("#status", Static).render())
         assert repo.today_calls == 1  # snappy: no reload round-trip on success
 
@@ -129,7 +172,7 @@ async def test_complete_failure_is_surfaced() -> None:
         assert "Failed to complete task: boom" in str(
             app.query_one("#status", Static).render()
         )
-        assert app.query_one(DataTable[str]).row_count == 1
+        assert app.query_one(DataTable[object]).row_count == 1
 
 
 class FailingLoadRepository(FakeRepository):
@@ -154,5 +197,5 @@ async def test_empty_shows_status_message() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[str]).row_count == 0
+        assert app.query_one(DataTable[object]).row_count == 0
         assert "No tasks due today" in str(app.query_one("#status", Static).render())
