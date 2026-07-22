@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.api.repository import ApiTaskRepository
 from todoist_tui.config import ConfigError, default_config_path, load_token
+from todoist_tui.store.repository import CachingTaskRepository
 from todoist_tui.tui.app import TodoistApp
 
 
@@ -21,7 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 async def _run(token: str) -> None:
     async with TodoistClient.create(token) as client:
-        app = TodoistApp(ApiTaskRepository(client))
+        app = TodoistApp(CachingTaskRepository(ApiTaskRepository(client)))
         await app.run_async()
 
 

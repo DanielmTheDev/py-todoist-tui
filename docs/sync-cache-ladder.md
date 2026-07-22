@@ -19,11 +19,13 @@ the inbox id, once for names) + the task fetch = 3 serial trips. No cache
   proves parity (both available → parity-testable), then replace.
 
 ## Checklist
-- [ ] **R1 — Projects cache (in-memory).** ← NEXT
-  Memoize `projects()` for the session behind a `store/` caching repository.
-  Kills the redundant projects trip per view switch/complete + the inbox
-  double-fetch.
-- [ ] **R2 — Parallelize `load_view`.**
+- [x] **R1 — Projects cache (in-memory).**
+  `store/CachingTaskRepository` memoizes `projects()` for the session (wraps the
+  port). Kills the redundant projects trip per view switch/complete + the
+  `load_view` half of the inbox render. Note: `inbox()`'s *internal*
+  `client.projects()` (api layer) is out of reach of a store wrapper — that
+  residual trip dies at R3.
+- [ ] **R2 — Parallelize `load_view`.** ← NEXT
   `asyncio.gather` the task-fetch and `projects()` (serial→parallel). ~halves
   first-load latency. Isolated to `views.py`.
 - [ ] **R3 — `/sync` snapshot (in-memory).**
