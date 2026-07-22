@@ -12,6 +12,9 @@ class FakeRepository:
     async def today(self) -> list[Task]:
         return []
 
+    async def inbox(self) -> list[Task]:
+        return []
+
     async def projects(self) -> list[Project]:
         return []
 

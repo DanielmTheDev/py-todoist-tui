@@ -28,12 +28,16 @@ the inbox id, once for names) + the task fetch = 3 serial trips. No cache
 - [x] **R2 — Parallelize `load_view`.**
   `asyncio.gather` the task-fetch and `projects()` (serial→parallel). ~halves
   first-load latency. Isolated to `views.py`.
-- [ ] **R3 — `/sync` snapshot (in-memory).**
-  `TodoistClient.sync(token="*")` → POST `/sync` returns items + projects
-  (+sections/labels) in one trip. `store/` snapshot repo serves
-  `projects()`/`inbox()`/project tasks from it. `today()` still hits server
-  `/tasks/filter` (hybrid). Complete must update/invalidate the snapshot.
-- [ ] **R4 — Persist snapshot + `sync_token` (SQLite).**
+- [x] **R3 — `/sync` snapshot (in-memory).**
+  `TodoistClient.sync()` → POST `/sync` (`sync_token="*"`,
+  `resource_types=["items","projects"]`) in one trip. `store/`
+  `SnapshotTaskRepository` (via new `SnapshotSource` port) serves
+  `projects()`/`inbox()` from a memoized snapshot — kills the double-`/projects`
+  trip R1 couldn't reach. `today()` still hits server `/tasks/filter` (hybrid).
+  Complete invalidates the snapshot. Inbox modeled as a normal project
+  (`Project.is_inbox`). Sections/labels + `sync_token` persistence deferred.
+  `CachingTaskRepository` (R1) removed — superseded.
+- [ ] **R4 — Persist snapshot + `sync_token` (SQLite).** ← NEXT
   `store/` SQLite cache; load on startup → instant offline cold start, refresh
   in background.
 - [ ] **R5 — Incremental sync.**

@@ -115,6 +115,31 @@ async def test_close_item_posts_item_close_command() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_sync_posts_full_sync_and_returns_body() -> None:
+    body = {
+        "items": [{"id": "1"}],
+        "projects": [{"id": "220", "name": "Inbox"}],
+        "sync_token": "abc",
+        "full_sync": True,
+    }
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    client = TodoistClient.create("tok")
+
+    assert await client.sync() == body
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer tok"
+    assert "application/x-www-form-urlencoded" in request.headers["content-type"]
+    form = parse_qs(request.content.decode())
+    assert form["sync_token"] == ["*"]
+    assert json.loads(form["resource_types"][0]) == ["items", "projects"]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_close_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(

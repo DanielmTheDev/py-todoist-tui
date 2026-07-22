@@ -4,6 +4,7 @@ from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -25,13 +26,32 @@ class ApiTaskRepository:
         return [_to_task(record) for record in records]
 
     async def projects(self) -> list[Project]:
-        return [
-            Project(id=str(record["id"]), name=str(record["name"]))
-            for record in await self._client.projects()
-        ]
+        return [_to_project(record) for record in await self._client.projects()]
 
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
+
+
+class ApiSnapshotSource:
+    """Builds a domain `Snapshot` from a single Todoist `/sync` trip."""
+
+    def __init__(self, client: TodoistClient) -> None:
+        self._client = client
+
+    async def snapshot(self) -> Snapshot:
+        body = await self._client.sync()
+        return Snapshot(
+            projects=[_to_project(record) for record in body["projects"]],
+            tasks=[_to_task(record) for record in body["items"]],
+        )
+
+
+def _to_project(record: dict[str, Any]) -> Project:
+    return Project(
+        id=str(record["id"]),
+        name=str(record["name"]),
+        is_inbox=bool(record.get("inbox_project")),
+    )
 
 
 def _to_task(record: dict[str, Any]) -> Task:

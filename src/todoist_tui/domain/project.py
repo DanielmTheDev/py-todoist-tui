@@ -5,3 +5,4 @@ from dataclasses import dataclass
 class Project:
     id: str
     name: str
+    is_inbox: bool = False

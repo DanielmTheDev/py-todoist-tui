@@ -7,7 +7,7 @@ import pytest
 import respx
 
 from todoist_tui.api.client import BASE_URL, TodoistClient
-from todoist_tui.api.repository import ApiTaskRepository
+from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import TaskId
 
@@ -135,15 +135,58 @@ async def test_projects_maps_json_to_domain_project() -> None:
     respx.get(f"{BASE_URL}/projects").mock(
         return_value=httpx.Response(
             200,
-            json={"results": [{"id": "220", "name": "Inbox"}], "next_cursor": None},
+            json={
+                "results": [
+                    {"id": "220", "name": "Inbox", "inbox_project": True},
+                    {"id": "9", "name": "Work", "inbox_project": False},
+                ],
+                "next_cursor": None,
+            },
         )
     )
     repo = ApiTaskRepository(TodoistClient.create("tok"))
 
-    (project,) = await repo.projects()
+    inbox, work = await repo.projects()
 
-    assert project.id == "220"
-    assert project.name == "Inbox"
+    assert (inbox.id, inbox.name, inbox.is_inbox) == ("220", "Inbox", True)
+    assert (work.id, work.name, work.is_inbox) == ("9", "Work", False)
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_snapshot_maps_projects_and_tasks_from_one_sync() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": "6X4",
+                        "content": "Sort me",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                    }
+                ],
+                "projects": [
+                    {"id": "220", "name": "Eingang", "inbox_project": True},
+                    {"id": "9", "name": "Work", "inbox_project": False},
+                ],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    snapshot = await source.snapshot()
+
+    assert [(p.id, p.is_inbox) for p in snapshot.projects] == [
+        ("220", True),
+        ("9", False),
+    ]
+    (task,) = snapshot.tasks
+    assert task.id == TaskId("6X4")
+    assert task.project_id == "220"
 
 
 @pytest.mark.anyio

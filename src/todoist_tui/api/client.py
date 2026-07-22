@@ -54,6 +54,17 @@ class TodoistClient:
     async def projects(self) -> list[dict[str, Any]]:
         return await self._paginate("/projects", {})
 
+    async def sync(self) -> dict[str, Any]:
+        response = await self._http.post(
+            "/sync",
+            data={
+                "sync_token": "*",
+                "resource_types": json.dumps(["items", "projects"]),
+            },
+        )
+        response.raise_for_status()
+        return cast("dict[str, Any]", response.json())
+
     async def close_item(self, task_id: str) -> None:
         command_uuid = self._uuid()
         command = {"type": "item_close", "uuid": command_uuid, "args": {"id": task_id}}
