@@ -20,3 +20,6 @@ htmlcov/
 # App data (local cache lives in XDG dirs, but ignore any stray local copies)
 *.sqlite
 *.sqlite3
+
+# Smoke-test credentials (throwaway account token). Never commit.
+.env

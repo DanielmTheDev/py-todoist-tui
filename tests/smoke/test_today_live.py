@@ -5,18 +5,13 @@ import pytest
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.api.repository import ApiTaskRepository
 from todoist_tui.application.today import load_today
-from todoist_tui.config import ConfigError, default_config_path, load_token
 from todoist_tui.domain.task import Task
 
 pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture
-def repo() -> ApiTaskRepository:
-    try:
-        token = load_token(default_config_path())
-    except ConfigError as error:
-        pytest.skip(f"no Todoist token: {error}")
+def repo(token: str) -> ApiTaskRepository:
     return ApiTaskRepository(TodoistClient.create(token))
 
 
