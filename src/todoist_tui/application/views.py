@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -31,8 +32,8 @@ INBOX = View("Inbox", lambda repo: repo.inbox())
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
-    tasks = await view.fetch(repo)
-    names = {project.id: project.name for project in await repo.projects()}
+    tasks, projects = await asyncio.gather(view.fetch(repo), repo.projects())
+    names = {project.id: project.name for project in projects}
     return [
         TaskRow(
             id=task.id,

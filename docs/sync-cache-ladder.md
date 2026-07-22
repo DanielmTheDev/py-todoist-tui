@@ -25,7 +25,7 @@ the inbox id, once for names) + the task fetch = 3 serial trips. No cache
   `load_view` half of the inbox render. Note: `inbox()`'s *internal*
   `client.projects()` (api layer) is out of reach of a store wrapper — that
   residual trip dies at R3.
-- [ ] **R2 — Parallelize `load_view`.** ← NEXT
+- [x] **R2 — Parallelize `load_view`.**
   `asyncio.gather` the task-fetch and `projects()` (serial→parallel). ~halves
   first-load latency. Isolated to `views.py`.
 - [ ] **R3 — `/sync` snapshot (in-memory).**

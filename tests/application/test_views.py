@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 
 import pytest
@@ -95,3 +96,33 @@ async def test_load_view_empty() -> None:
 def test_view_titles() -> None:
     assert TODAY.title == "Today"
     assert INBOX.title == "Inbox"
+
+
+class BarrierRepository:
+    """Each fetch waits for the other to start — deadlocks unless run concurrently."""
+
+    def __init__(self) -> None:
+        self._today_started = asyncio.Event()
+        self._projects_started = asyncio.Event()
+
+    async def today(self) -> list[Task]:
+        self._today_started.set()
+        await self._projects_started.wait()
+        return [_task("Buy milk", "220")]
+
+    async def inbox(self) -> list[Task]:
+        return []
+
+    async def projects(self) -> list[Project]:
+        self._projects_started.set()
+        await self._today_started.wait()
+        return [Project(id="220", name="Errands")]
+
+    async def complete(self, task_id: TaskId) -> None: ...
+
+
+@pytest.mark.anyio
+async def test_load_view_fetches_tasks_and_projects_concurrently() -> None:
+    rows = await asyncio.wait_for(load_view(BarrierRepository(), TODAY), timeout=1.0)
+
+    assert [row.content for row in rows] == ["Buy milk"]
