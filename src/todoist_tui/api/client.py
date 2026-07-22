@@ -48,6 +48,9 @@ class TodoistClient:
     async def today_tasks(self) -> list[dict[str, Any]]:
         return await self._paginate("/tasks/filter", {"query": "today"})
 
+    async def tasks_in_project(self, project_id: str) -> list[dict[str, Any]]:
+        return await self._paginate("/tasks", {"project_id": project_id})
+
     async def projects(self) -> list[dict[str, Any]]:
         return await self._paginate("/projects", {})
 

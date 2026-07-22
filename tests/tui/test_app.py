@@ -1,7 +1,7 @@
 import datetime
 
 import pytest
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
@@ -11,9 +11,15 @@ from todoist_tui.tui.app import TodoistApp
 
 
 class FakeRepository:
-    def __init__(self, tasks: list[Task], projects: list[Project]) -> None:
+    def __init__(
+        self,
+        tasks: list[Task],
+        projects: list[Project],
+        inbox: list[Task] | None = None,
+    ) -> None:
         self._tasks = tasks
         self._projects = projects
+        self._inbox = inbox or []
         self.completed: list[TaskId] = []
         self.today_calls = 0
 
@@ -21,12 +27,25 @@ class FakeRepository:
         self.today_calls += 1
         return list(self._tasks)
 
+    async def inbox(self) -> list[Task]:
+        return list(self._inbox)
+
     async def projects(self) -> list[Project]:
         return self._projects
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
         self._tasks = [t for t in self._tasks if t.id != task_id]
+
+
+@pytest.mark.anyio
+async def test_footer_lists_shortcuts() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        footer = app.query_one(Footer)
+        shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
+        assert {"e", "t", "i"} <= shown
 
 
 @pytest.mark.anyio
@@ -130,7 +149,7 @@ async def test_pressing_e_completes_optimistically() -> None:
 
         assert repo.completed == [TaskId("6X4")]
         assert app.query_one(DataTable[object]).row_count == 0
-        assert "No tasks due today" in str(app.query_one("#status", Static).render())
+        assert "Today · no tasks" in str(app.query_one("#status", Static).render())
         assert repo.today_calls == 1  # snappy: no reload round-trip on success
 
 
@@ -198,4 +217,46 @@ async def test_empty_shows_status_message() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
-        assert "No tasks due today" in str(app.query_one("#status", Static).render())
+        assert "Today · no tasks" in str(app.query_one("#status", Static).render())
+
+
+def _row(content: str, project_id: str = "220") -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id=project_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_pressing_i_switches_to_inbox() -> None:
+    repo = FakeRepository([_row("Today thing")], [], inbox=[_row("Inbox thing")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[2] == "Today thing"
+
+        await pilot.press("i")
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        assert table.get_row_at(0)[2] == "Inbox thing"
+        assert "Inbox · 1 task(s)" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_pressing_t_switches_back_to_today() -> None:
+    repo = FakeRepository([_row("Today thing")], [], inbox=[_row("Inbox thing")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        assert table.get_row_at(0)[2] == "Today thing"
+        assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())

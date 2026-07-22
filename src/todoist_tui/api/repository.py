@@ -16,6 +16,14 @@ class ApiTaskRepository:
     async def today(self) -> list[Task]:
         return [_to_task(record) for record in await self._client.today_tasks()]
 
+    async def inbox(self) -> list[Task]:
+        projects = await self._client.projects()
+        inbox = next((p for p in projects if p.get("inbox_project")), None)
+        if inbox is None:
+            raise LookupError("no inbox project found")
+        records = await self._client.tasks_in_project(str(inbox["id"]))
+        return [_to_task(record) for record in records]
+
     async def projects(self) -> list[Project]:
         return [
             Project(id=str(record["id"]), name=str(record["name"]))

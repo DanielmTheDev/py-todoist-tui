@@ -73,6 +73,64 @@ async def test_today_maps_task_without_due() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_inbox_fetches_tasks_of_inbox_project() -> None:
+    respx.get(f"{BASE_URL}/projects").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "9", "name": "Work", "inbox_project": False},
+                    {"id": "220", "name": "Eingang", "inbox_project": True},
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    tasks_route = respx.get(f"{BASE_URL}/tasks").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Sort me",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.inbox()
+
+    assert task.id == TaskId("6X4")
+    assert tasks_route.calls.last.request.url.params["project_id"] == "220"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_inbox_raises_when_no_inbox_project() -> None:
+    respx.get(f"{BASE_URL}/projects").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [{"id": "9", "name": "Work", "inbox_project": False}],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    with pytest.raises(LookupError, match="inbox"):
+        await repo.inbox()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_projects_maps_json_to_domain_project() -> None:
     respx.get(f"{BASE_URL}/projects").mock(
         return_value=httpx.Response(
