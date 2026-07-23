@@ -38,6 +38,10 @@ never calls httpx or the DB directly. Enforced by `import-linter`
 - **Concise & self-documenting.** Names carry intent. Comments explain *why* /
   non-obvious tradeoffs only — never restate *what*. No dead code, no
   speculative generality (YAGNI).
+- **No duplication (DRY).** One source of truth for each rule, constant, or
+  behavior. Extract a shared function/value object before copy-pasting logic;
+  don't restate the same knowledge in two layers. But prefer a little
+  duplication over the wrong abstraction — couple only what changes together.
 - **DDD, pragmatic.** Ubiquitous language matching Todoist terms. Value objects
   (frozen dataclasses) for concepts with rules; entities for identity;
   repository interfaces abstract the store; workflows are application services.
