@@ -65,7 +65,14 @@ Each increment is one small, single-purpose diff:
 3. Refactor (tests stay green).
 4. `ruff` + `pyright` clean.
 5. **Reviewer subagent** checks it against the checklist below.
-6. **User reviews**, then commit.
+6. **User acceptance test.** Every feature ends with a concrete UAT: the exact
+   end-to-end steps the user runs to see the behavior for real (usually
+   `uv run todoist-tui` with the precise keys/actions and expected on-screen
+   result; include setup/teardown, e.g. delete the cache to force a cold start).
+   Automated tests passing is *not* sufficient — spell out the manual check and
+   present it before handing over. Skip only for non-behavioral diffs (docs,
+   pure refactors with no observable change).
+7. **User reviews** (runs the UAT), then commit.
 Keep diffs small so review is fast. No big-bang PRs.
 
 ## Reviewer checklist (subagent uses this)
