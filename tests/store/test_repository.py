@@ -5,8 +5,20 @@ import pytest
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.store.repository import SnapshotTaskRepository
+
+
+def _full_delta(snapshot: Snapshot) -> SyncDelta:
+    return SyncDelta(
+        projects=snapshot.projects,
+        tasks=snapshot.tasks,
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token=snapshot.sync_token,
+        full_sync=True,
+    )
 
 
 def _task(task_id: str, project_id: str) -> Task:
@@ -45,14 +57,18 @@ class FakeInner:
 
 
 class FakeSource:
-    def __init__(self, snapshot: Snapshot) -> None:
-        self._snapshot = snapshot
-        self.snapshot_calls = 0
+    def __init__(self, delta: SyncDelta) -> None:
+        self._delta = delta
+        self.since: list[str | None] = []
 
-    async def snapshot(self) -> Snapshot:
+    @property
+    def snapshot_calls(self) -> int:
+        return len(self.since)
+
+    async def delta(self, since: str | None) -> SyncDelta:
         await asyncio.sleep(0)  # yield so concurrent readers actually interleave
-        self.snapshot_calls += 1
-        return self._snapshot
+        self.since.append(since)
+        return self._delta
 
 
 class FakeCache:
@@ -83,7 +99,7 @@ def _snapshot(sync_token: str = "tok") -> Snapshot:
 
 @pytest.mark.anyio
 async def test_projects_and_inbox_share_one_sync() -> None:
-    source = FakeSource(_snapshot())
+    source = FakeSource(_full_delta(_snapshot()))
     repo = SnapshotTaskRepository(FakeInner(), source, FakeCache())
 
     projects = await repo.projects()
@@ -99,7 +115,9 @@ async def test_inbox_raises_when_no_inbox_project() -> None:
     snapshot = Snapshot(
         projects=[Project(id="9", name="Work")], tasks=[], sync_token="tok"
     )
-    repo = SnapshotTaskRepository(FakeInner(), FakeSource(snapshot), FakeCache())
+    repo = SnapshotTaskRepository(
+        FakeInner(), FakeSource(_full_delta(snapshot)), FakeCache()
+    )
 
     with pytest.raises(LookupError, match="inbox"):
         await repo.inbox()
@@ -108,7 +126,7 @@ async def test_inbox_raises_when_no_inbox_project() -> None:
 @pytest.mark.anyio
 async def test_today_delegates_to_inner_without_syncing() -> None:
     inner = FakeInner(today=[_task("t", "9")])
-    source = FakeSource(_snapshot())
+    source = FakeSource(_full_delta(_snapshot()))
     repo = SnapshotTaskRepository(inner, source, FakeCache())
 
     assert [t.id for t in await repo.today()] == [TaskId("t")]
@@ -118,7 +136,7 @@ async def test_today_delegates_to_inner_without_syncing() -> None:
 
 @pytest.mark.anyio
 async def test_cold_start_serves_from_cache_without_network() -> None:
-    source = FakeSource(_snapshot("net"))
+    source = FakeSource(_full_delta(_snapshot("net")))
     cache = FakeCache(stored=_snapshot("cached"))
     repo = SnapshotTaskRepository(FakeInner(), source, cache)
 
@@ -132,7 +150,7 @@ async def test_cold_start_serves_from_cache_without_network() -> None:
 @pytest.mark.anyio
 async def test_cache_miss_syncs_and_writes_through() -> None:
     snapshot = _snapshot("net")
-    source = FakeSource(snapshot)
+    source = FakeSource(_full_delta(snapshot))
     cache = FakeCache()
     repo = SnapshotTaskRepository(FakeInner(), source, cache)
 
@@ -142,39 +160,51 @@ async def test_cache_miss_syncs_and_writes_through() -> None:
     assert cache.saved == [snapshot]
 
 
+def _incremental(sync_token: str, deleted_task: str) -> SyncDelta:
+    return SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset({deleted_task}),
+        sync_token=sync_token,
+        full_sync=False,
+    )
+
+
 @pytest.mark.anyio
-async def test_refresh_resyncs_from_network_and_saves() -> None:
-    fresh = _snapshot("fresh")
-    source = FakeSource(fresh)
+async def test_refresh_syncs_incrementally_from_stored_token_and_merges() -> None:
+    source = FakeSource(_incremental("fresh", deleted_task="a"))
     cache = FakeCache(stored=_snapshot("stale"))
     repo = SnapshotTaskRepository(FakeInner(), source, cache)
 
     await repo.refresh()
 
-    assert source.snapshot_calls == 1
-    assert cache.saved == [fresh]
-    assert (await repo.projects())[0].id == "220"  # served from memo, no reload
-    assert source.snapshot_calls == 1
+    assert source.since == ["stale"]  # reuses the cached token, not a full sync
+    (saved,) = cache.saved
+    assert saved.sync_token == "fresh"
+    assert [str(t.id) for t in saved.tasks] == ["b", "c"]  # "a" folded out
+    assert [str(t.id) for t in await repo.inbox()] == ["c"]  # served from memo
 
 
 @pytest.mark.anyio
-async def test_complete_forwards_then_bypasses_cache_on_next_read() -> None:
+async def test_complete_then_read_syncs_incrementally_and_drops_the_task() -> None:
     inner = FakeInner()
-    source = FakeSource(_snapshot("net"))
+    source = FakeSource(_incremental("after", deleted_task="a"))
     cache = FakeCache(stored=_snapshot("cached"))
     repo = SnapshotTaskRepository(inner, source, cache)
 
     await repo.projects()  # served from cache
     await repo.complete(TaskId("a"))
-    await repo.projects()  # dirty -> must resync from the network
+    inbox = await repo.inbox()  # dirty -> incremental resync from the cached token
 
     assert inner.completed == [TaskId("a")]
-    assert source.snapshot_calls == 1
+    assert source.since == ["cached"]
+    assert [str(t.id) for t in inbox] == ["c"]
 
 
 @pytest.mark.anyio
 async def test_concurrent_first_fetch_shares_single_sync() -> None:
-    source = FakeSource(_snapshot())
+    source = FakeSource(_full_delta(_snapshot()))
     repo = SnapshotTaskRepository(FakeInner(), source, FakeCache())
 
     await asyncio.gather(repo.projects(), repo.inbox())

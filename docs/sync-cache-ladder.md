@@ -45,10 +45,16 @@ the inbox id, once for names) + the task fetch = 3 serial trips. No cache
   re-syncs from the network and re-renders (offline → keeps the cache). `Snapshot`
   now carries `sync_token` (captured by `ApiSnapshotSource`, seeds R5). blocking
   `sqlite3` wrapped in `asyncio.to_thread`; no new dep.
-- [ ] **R5 — Incremental sync.** ← NEXT
-  Startup uses stored `sync_token`; POST `/sync` with it; apply deltas (updated
-  items, `deleted` ids) to SQLite. Fast steady-state refresh.
-- [ ] **R6 — Domain filter engine (today first).**
+- [x] **R5 — Incremental sync.**
+  `client.sync(sync_token)` gained the token param. New domain `SyncDelta` value
+  object + pure `merge(prior, delta)->Snapshot` (upsert-by-id, drop deleted).
+  `SnapshotSource.snapshot()`→`delta(since)`: `ApiSnapshotSource` sends the
+  stored token, splits `is_deleted`/`checked` items into deleted-id sets, carries
+  `full_sync`. `SnapshotTaskRepository._sync` threads the prior token and merges,
+  so `refresh()` and the post-`complete()` read are cheap incrementals (full sync
+  only when cold or on a `full_sync` response). Cache save stays full-rewrite
+  (SQL-level upsert deferred, YAGNI). Live smoke verifies token reuse.
+- [ ] **R6 — Domain filter engine (today first).** ← NEXT
   `FilterQuery` evaluator in `domain/` over cached items. Parity-test vs server
   `/tasks/filter` in smoke tests; once "today" matches, cut over, then extend
   filters (p1, overdue, project, label, boolean combos). Server filter calls

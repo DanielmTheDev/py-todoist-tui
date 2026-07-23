@@ -1,10 +1,11 @@
+from collections.abc import Callable
 from typing import Any
 
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -36,18 +37,37 @@ class ApiTaskRepository:
 
 
 class ApiSnapshotSource:
-    """Builds a domain `Snapshot` from a single Todoist `/sync` trip."""
+    """Builds a domain `SyncDelta` from a single Todoist `/sync` trip."""
 
     def __init__(self, client: TodoistClient) -> None:
         self._client = client
 
-    async def snapshot(self) -> Snapshot:
-        body = await self._client.sync()
-        return Snapshot(
-            projects=[_to_project(record) for record in body["projects"]],
-            tasks=[_to_task(record) for record in body["items"]],
+    async def delta(self, since: str | None) -> SyncDelta:
+        body = await self._client.sync(since if since is not None else "*")
+        projects, deleted_projects = _split(body["projects"], _to_project)
+        tasks, deleted_tasks = _split(body["items"], _to_task, _is_gone)
+        return SyncDelta(
+            projects=projects,
+            tasks=tasks,
+            deleted_project_ids=deleted_projects,
+            deleted_task_ids=deleted_tasks,
             sync_token=str(body["sync_token"]),
+            full_sync=bool(body["full_sync"]),
         )
+
+
+def _is_gone(record: dict[str, Any]) -> bool:
+    return bool(record.get("is_deleted") or record.get("checked"))
+
+
+def _split[T](
+    records: list[dict[str, Any]],
+    to_domain: Callable[[dict[str, Any]], T],
+    gone: Callable[[dict[str, Any]], bool] = lambda r: bool(r.get("is_deleted")),
+) -> tuple[list[T], frozenset[str]]:
+    live = [to_domain(r) for r in records if not gone(r)]
+    deleted = frozenset(str(r["id"]) for r in records if gone(r))
+    return live, deleted
 
 
 def _to_project(record: dict[str, Any]) -> Project:

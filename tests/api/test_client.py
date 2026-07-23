@@ -140,6 +140,21 @@ async def test_sync_posts_full_sync_and_returns_body() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_sync_sends_given_token_for_incremental() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"full_sync": False})
+    )
+    client = TodoistClient.create("tok")
+
+    await client.sync("prev-token")
+
+    form = parse_qs(route.calls.last.request.content.decode())
+    assert form["sync_token"] == ["prev-token"]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_close_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(

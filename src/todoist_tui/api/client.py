@@ -54,11 +54,11 @@ class TodoistClient:
     async def projects(self) -> list[dict[str, Any]]:
         return await self._paginate("/projects", {})
 
-    async def sync(self) -> dict[str, Any]:
+    async def sync(self, sync_token: str = "*") -> dict[str, Any]:
         response = await self._http.post(
             "/sync",
             data={
-                "sync_token": "*",
+                "sync_token": sync_token,
                 "resource_types": json.dumps(["items", "projects"]),
             },
         )

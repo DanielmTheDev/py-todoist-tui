@@ -154,11 +154,12 @@ async def test_projects_maps_json_to_domain_project() -> None:
 
 @pytest.mark.anyio
 @respx.mock
-async def test_snapshot_maps_projects_and_tasks_from_one_sync() -> None:
-    respx.post(f"{BASE_URL}/sync").mock(
+async def test_delta_none_does_a_full_sync() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(
             200,
             json={
+                "full_sync": True,
                 "items": [
                     {
                         "id": "6X4",
@@ -178,16 +179,68 @@ async def test_snapshot_maps_projects_and_tasks_from_one_sync() -> None:
     )
     source = ApiSnapshotSource(TodoistClient.create("tok"))
 
-    snapshot = await source.snapshot()
+    delta = await source.delta(None)
 
-    assert [(p.id, p.is_inbox) for p in snapshot.projects] == [
-        ("220", True),
-        ("9", False),
-    ]
-    (task,) = snapshot.tasks
+    assert delta.full_sync is True
+    assert parse_qs(route.calls.last.request.content.decode())["sync_token"] == ["*"]
+    assert [(p.id, p.is_inbox) for p in delta.projects] == [("220", True), ("9", False)]
+    (task,) = delta.tasks
     assert task.id == TaskId("6X4")
-    assert task.project_id == "220"
-    assert snapshot.sync_token == "abc"
+    assert delta.sync_token == "abc"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_incremental_splits_deletions_and_completions() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": False,
+                "items": [
+                    {
+                        "id": "keep",
+                        "content": "still here",
+                        "priority": 1,
+                        "project_id": "9",
+                        "due": None,
+                    },
+                    {
+                        "id": "gone",
+                        "content": "removed",
+                        "priority": 1,
+                        "project_id": "9",
+                        "due": None,
+                        "is_deleted": True,
+                    },
+                    {
+                        "id": "done",
+                        "content": "completed",
+                        "priority": 1,
+                        "project_id": "9",
+                        "due": None,
+                        "checked": True,
+                    },
+                ],
+                "projects": [
+                    {"id": "9", "name": "Work", "inbox_project": False},
+                    {"id": "old", "name": "Gone", "is_deleted": True},
+                ],
+                "sync_token": "next",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta("prev")
+
+    assert parse_qs(route.calls.last.request.content.decode())["sync_token"] == ["prev"]
+    assert delta.full_sync is False
+    assert [str(t.id) for t in delta.tasks] == ["keep"]
+    assert delta.deleted_task_ids == frozenset({"gone", "done"})
+    assert [p.id for p in delta.projects] == ["9"]
+    assert delta.deleted_project_ids == frozenset({"old"})
+    assert delta.sync_token == "next"
 
 
 @pytest.mark.anyio

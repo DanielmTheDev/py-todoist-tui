@@ -7,6 +7,7 @@ from todoist_tui.domain.repository import (
     SnapshotSource,
     TaskRepository,
 )
+from todoist_tui.domain.sync_delta import merge
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -45,10 +46,12 @@ class SnapshotTaskRepository:
             return self._snapshot
 
     async def _sync(self) -> Snapshot:
-        snapshot = await self._source.snapshot()
-        await self._cache.save(snapshot)
+        prior = self._snapshot or await self._cache.load()
+        delta = await self._source.delta(prior.sync_token if prior else None)
+        merged = merge(prior, delta)
+        await self._cache.save(merged)
         self._dirty = False
-        return snapshot
+        return merged
 
     async def refresh(self) -> None:
         async with self._lock:

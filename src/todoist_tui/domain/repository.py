@@ -1,8 +1,11 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
+
+if TYPE_CHECKING:
+    from todoist_tui.domain.sync_delta import SyncDelta
 
 
 class TaskRepository(Protocol):
@@ -29,9 +32,13 @@ class Snapshot:
 
 
 class SnapshotSource(Protocol):
-    """Fetches a full account snapshot in a single trip."""
+    """Fetches account changes in a single /sync trip.
 
-    async def snapshot(self) -> Snapshot: ...
+    `since=None` requests a full sync; a token requests only the changes made
+    since it. Imported lazily to keep the delta type out of the port module.
+    """
+
+    async def delta(self, since: str | None) -> "SyncDelta": ...
 
 
 class SnapshotCache(Protocol):
