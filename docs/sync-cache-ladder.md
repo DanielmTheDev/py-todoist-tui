@@ -37,10 +37,15 @@ the inbox id, once for names) + the task fetch = 3 serial trips. No cache
   Complete invalidates the snapshot. Inbox modeled as a normal project
   (`Project.is_inbox`). Sections/labels + `sync_token` persistence deferred.
   `CachingTaskRepository` (R1) removed — superseded.
-- [ ] **R4 — Persist snapshot + `sync_token` (SQLite).** ← NEXT
-  `store/` SQLite cache; load on startup → instant offline cold start, refresh
-  in background.
-- [ ] **R5 — Incremental sync.**
+- [x] **R4 — Persist snapshot + `sync_token` (SQLite).**
+  `store/SqliteSnapshotCache` (new `SnapshotCache` port) persists the snapshot +
+  `sync_token` at `~/.cache/todoist/tui.sqlite3`. `SnapshotTaskRepository` reads
+  cache-first (instant offline cold start), writes through on a miss, and gains
+  `refresh()`. TUI `on_mount` renders the cached view, then a background worker
+  re-syncs from the network and re-renders (offline → keeps the cache). `Snapshot`
+  now carries `sync_token` (captured by `ApiSnapshotSource`, seeds R5). blocking
+  `sqlite3` wrapped in `asyncio.to_thread`; no new dep.
+- [ ] **R5 — Incremental sync.** ← NEXT
   Startup uses stored `sync_token`; POST `/sync` with it; apply deltas (updated
   items, `deleted` ids) to SQLite. Fast steady-state refresh.
 - [ ] **R6 — Domain filter engine (today first).**

@@ -1,29 +1,58 @@
 import asyncio
 
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.repository import Snapshot, SnapshotSource, TaskRepository
+from todoist_tui.domain.repository import (
+    Snapshot,
+    SnapshotCache,
+    SnapshotSource,
+    TaskRepository,
+)
 from todoist_tui.domain.task import Task, TaskId
 
 
 class SnapshotTaskRepository:
-    """Serves projects()/inbox() from one memoized /sync snapshot.
+    """Serves projects()/inbox() from a memoized /sync snapshot, cache-first.
 
-    today() stays on the server filter via `inner`; complete() forwards then
-    invalidates the snapshot so the next read re-syncs.
+    First read prefers the persisted cache (instant, offline cold start);
+    on a miss it syncs from `source` and writes through to the cache.
+    `refresh()` force-resyncs from the network. today() stays on the server
+    filter via `inner`. complete() marks the snapshot dirty so the next read
+    bypasses the now-stale cache and re-syncs.
     """
 
-    def __init__(self, inner: TaskRepository, source: SnapshotSource) -> None:
+    def __init__(
+        self, inner: TaskRepository, source: SnapshotSource, cache: SnapshotCache
+    ) -> None:
         self._inner = inner
         self._source = source
+        self._cache = cache
         self._snapshot: Snapshot | None = None
+        self._dirty = False
         self._lock = asyncio.Lock()
 
     async def _snapshot_now(self) -> Snapshot:
-        if self._snapshot is None:
-            async with self._lock:
-                if self._snapshot is None:
-                    self._snapshot = await self._source.snapshot()
-        return self._snapshot
+        if self._snapshot is not None:
+            return self._snapshot
+        async with self._lock:
+            if self._snapshot is not None:
+                return self._snapshot
+            if not self._dirty:
+                cached = await self._cache.load()
+                if cached is not None:
+                    self._snapshot = cached
+                    return cached
+            self._snapshot = await self._sync()
+            return self._snapshot
+
+    async def _sync(self) -> Snapshot:
+        snapshot = await self._source.snapshot()
+        await self._cache.save(snapshot)
+        self._dirty = False
+        return snapshot
+
+    async def refresh(self) -> None:
+        async with self._lock:
+            self._snapshot = await self._sync()
 
     async def projects(self) -> list[Project]:
         return (await self._snapshot_now()).projects
@@ -40,4 +69,6 @@ class SnapshotTaskRepository:
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
-        self._snapshot = None
+        async with self._lock:  # a concurrent reader must not re-cache stale state
+            self._snapshot = None
+            self._dirty = True

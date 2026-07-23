@@ -16,16 +16,27 @@ class TaskRepository(Protocol):
 
     async def complete(self, task_id: TaskId) -> None: ...
 
+    async def refresh(self) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
-    """One /sync trip's worth of state: all projects and tasks."""
+    """One /sync trip's worth of state: all projects, tasks and the sync token."""
 
     projects: list[Project]
     tasks: list[Task]
+    sync_token: str
 
 
 class SnapshotSource(Protocol):
     """Fetches a full account snapshot in a single trip."""
 
     async def snapshot(self) -> Snapshot: ...
+
+
+class SnapshotCache(Protocol):
+    """Persists the latest snapshot across restarts. `load` returns None when cold."""
+
+    async def load(self) -> Snapshot | None: ...
+
+    async def save(self, snapshot: Snapshot) -> None: ...

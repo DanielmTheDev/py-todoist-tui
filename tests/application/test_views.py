@@ -32,6 +32,8 @@ class FakeRepository:
 
     async def complete(self, task_id: TaskId) -> None: ...
 
+    async def refresh(self) -> None: ...
+
 
 def _task(content: str, project_id: str) -> Task:
     return Task(
@@ -119,6 +121,8 @@ class BarrierRepository:
         return [Project(id="220", name="Errands")]
 
     async def complete(self, task_id: TaskId) -> None: ...
+
+    async def refresh(self) -> None: ...
 
 
 @pytest.mark.anyio

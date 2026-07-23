@@ -22,6 +22,7 @@ class FakeRepository:
         self._inbox = inbox or []
         self.completed: list[TaskId] = []
         self.today_calls = 0
+        self.refresh_calls = 0
 
     async def today(self) -> list[Task]:
         self.today_calls += 1
@@ -36,6 +37,9 @@ class FakeRepository:
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
         self._tasks = [t for t in self._tasks if t.id != task_id]
+
+    async def refresh(self) -> None:
+        self.refresh_calls += 1
 
 
 @pytest.mark.anyio
@@ -140,7 +144,10 @@ async def test_pressing_e_completes_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 1
+        reloads = repo.today_calls
         await pilot.press("e")
         # optimistic: row is gone before the network command resolves
         assert app.query_one(DataTable[object]).row_count == 0
@@ -150,7 +157,7 @@ async def test_pressing_e_completes_optimistically() -> None:
         assert repo.completed == [TaskId("6X4")]
         assert app.query_one(DataTable[object]).row_count == 0
         assert "Today · no tasks" in str(app.query_one("#status", Static).render())
-        assert repo.today_calls == 1  # snappy: no reload round-trip on success
+        assert repo.today_calls == reloads  # snappy: no reload round-trip on success
 
 
 @pytest.mark.anyio
@@ -192,6 +199,66 @@ async def test_complete_failure_is_surfaced() -> None:
             app.query_one("#status", Static).render()
         )
         assert app.query_one(DataTable[object]).row_count == 1
+
+
+class RefreshingRepository(FakeRepository):
+    """Serves an empty (cached) view first, then fresh tasks on refresh."""
+
+    def __init__(self, projects: list[Project], after: list[Task]) -> None:
+        super().__init__([], projects)
+        self._after = after
+
+    async def refresh(self) -> None:
+        await super().refresh()
+        self._tasks = list(self._after)
+
+
+@pytest.mark.anyio
+async def test_background_refresh_rerenders_after_cache_load() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = RefreshingRepository([Project(id="220", name="Errands")], after=[task])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.refresh_calls == 1
+        assert repo.today_calls == 2  # cache-first load, then post-refresh re-render
+        assert app.query_one(DataTable[object]).row_count == 1  # fresh task rendered
+
+
+class OfflineRefreshRepository(FakeRepository):
+    async def refresh(self) -> None:
+        raise RuntimeError("offline")
+
+
+@pytest.mark.anyio
+async def test_background_refresh_failure_keeps_cached_view() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = OfflineRefreshRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert app.query_one(DataTable[object]).row_count == 1  # cached view survives
+        assert repo.today_calls == 1  # failed refresh does not re-render
 
 
 class FailingLoadRepository(FakeRepository):

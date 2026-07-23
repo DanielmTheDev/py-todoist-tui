@@ -39,6 +39,15 @@ class TodoistApp(App[None]):
         table = self.query_one(DataTable[object])
         table.cursor_type = "row"
         table.add_columns(*_COLUMNS)
+        await self._reload(self._view)  # instant: served from cache when present
+        self._refresh_on_start()
+
+    @work(exclusive=True, group="reload")
+    async def _refresh_on_start(self) -> None:
+        try:
+            await self._repo.refresh()
+        except Exception:  # offline or sync failed: keep the cached view
+            return
         await self._reload(self._view)
 
     def action_view_today(self) -> None:

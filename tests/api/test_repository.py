@@ -187,6 +187,7 @@ async def test_snapshot_maps_projects_and_tasks_from_one_sync() -> None:
     (task,) = snapshot.tasks
     assert task.id == TaskId("6X4")
     assert task.project_id == "220"
+    assert snapshot.sync_token == "abc"
 
 
 @pytest.mark.anyio
@@ -204,3 +205,10 @@ async def test_complete_closes_the_task() -> None:
     )
     assert commands[0]["type"] == "item_close"
     assert commands[0]["args"] == {"id": "6X4"}
+
+
+@pytest.mark.anyio
+async def test_refresh_is_a_noop() -> None:
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    assert await repo.refresh() is None  # no cache to invalidate, no network trip

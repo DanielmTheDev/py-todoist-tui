@@ -11,6 +11,10 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "todoist" / "config.json"
 
 
+def default_cache_path() -> Path:
+    return Path.home() / ".cache" / "todoist" / "tui.sqlite3"
+
+
 def load_token(path: Path) -> str:
     if not path.is_file():
         raise ConfigError(f"config not found: {path}")

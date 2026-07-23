@@ -31,6 +31,9 @@ class ApiTaskRepository:
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
 
+    async def refresh(self) -> None:
+        """No-op: every read already hits the network, so there is no cache."""
+
 
 class ApiSnapshotSource:
     """Builds a domain `Snapshot` from a single Todoist `/sync` trip."""
@@ -43,6 +46,7 @@ class ApiSnapshotSource:
         return Snapshot(
             projects=[_to_project(record) for record in body["projects"]],
             tasks=[_to_task(record) for record in body["items"]],
+            sync_token=str(body["sync_token"]),
         )
 
 

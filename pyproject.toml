@@ -64,4 +64,4 @@ layers = [
 name = "TUI has no direct I/O (must go through application)"
 type = "forbidden"
 source_modules = ["todoist_tui.tui"]
-forbidden_modules = ["todoist_tui.api", "todoist_tui.store", "httpx"]
+forbidden_modules = ["todoist_tui.api", "todoist_tui.store", "httpx", "sqlite3"]

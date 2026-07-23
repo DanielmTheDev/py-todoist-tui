@@ -21,6 +21,8 @@ class FakeRepository:
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
 
+    async def refresh(self) -> None: ...
+
 
 @pytest.mark.anyio
 async def test_complete_task_delegates_to_repo() -> None:

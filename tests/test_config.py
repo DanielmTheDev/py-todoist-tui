@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from todoist_tui.config import ConfigError, default_config_path, load_token
+from todoist_tui.config import (
+    ConfigError,
+    default_cache_path,
+    default_config_path,
+    load_token,
+)
 
 
 def _write_config(path: Path, payload: object) -> Path:
@@ -46,3 +51,7 @@ def test_load_token_invalid_json_raises(tmp_path: Path) -> None:
 
 def test_default_config_path_is_xdg_todoist_config() -> None:
     assert default_config_path() == Path.home() / ".config" / "todoist" / "config.json"
+
+
+def test_default_cache_path_is_xdg_cache_todoist() -> None:
+    assert default_cache_path() == Path.home() / ".cache" / "todoist" / "tui.sqlite3"
