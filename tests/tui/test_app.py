@@ -10,6 +10,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import TaskTable, TodoistApp
+from todoist_tui.tui.screens.filters import FilterScreen
 
 
 class FakeRepository:
@@ -18,10 +19,12 @@ class FakeRepository:
         tasks: list[Task],
         projects: list[Project],
         inbox: list[Task] | None = None,
+        filters: list[Filter] | None = None,
     ) -> None:
         self._tasks = tasks
         self._projects = projects
         self._inbox = inbox or []
+        self._filters = filters or []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self._removed: dict[TaskId, Task] = {}
@@ -42,7 +45,7 @@ class FakeRepository:
         return self._projects
 
     async def filters(self) -> list[Filter]:
-        return []
+        return list(self._filters)
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -66,7 +69,104 @@ async def test_footer_lists_shortcuts() -> None:
         await pilot.pause()
         footer = app.query_one(Footer)
         shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "z", "t", "i", "r"} <= shown
+        assert {"e", "z", "t", "i", "f", "r"} <= shown
+
+
+@pytest.mark.anyio
+async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Filtered task",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository(
+        [task],
+        [Project(id="220", name="Errands")],
+        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert isinstance(app.screen, FilterScreen)
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert not isinstance(app.screen, FilterScreen)  # picker dismissed
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert table.get_row_at(0)[2] == "Filtered task"
+        status = str(app.query_one("#status", Static).render())
+        assert "My Filter" in status
+
+
+@pytest.mark.anyio
+async def test_f_with_no_saved_filters_reports_and_opens_nothing() -> None:
+    app = TodoistApp(FakeRepository([], [], filters=[]))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert not isinstance(app.screen, FilterScreen)
+        status = str(app.query_one("#status", Static).render())
+        assert "No saved filters" in status
+
+
+class FailingFiltersRepository(FakeRepository):
+    async def filters(self) -> list[Filter]:
+        raise RuntimeError("offline")
+
+
+@pytest.mark.anyio
+async def test_f_reports_when_filters_fail_to_load() -> None:
+    app = TodoistApp(FailingFiltersRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert not isinstance(app.screen, FilterScreen)
+        status = str(app.query_one("#status", Static).render())
+        assert "Failed to load filters: offline" in status
+
+
+@pytest.mark.anyio
+async def test_f_while_picker_open_does_not_stack_screens() -> None:
+    repo = FakeRepository(
+        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("f")  # second press must not stack a second picker
+        await pilot.pause()
+        pickers = [s for s in app.screen_stack if isinstance(s, FilterScreen)]
+        assert len(pickers) == 1
+
+
+@pytest.mark.anyio
+async def test_cancelling_filter_picker_keeps_current_view() -> None:
+    repo = FakeRepository(
+        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert isinstance(app.screen, FilterScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, FilterScreen)
+        status = str(app.query_one("#status", Static).render())
+        assert "Today" in status  # unchanged from the startup view
 
 
 @pytest.mark.anyio

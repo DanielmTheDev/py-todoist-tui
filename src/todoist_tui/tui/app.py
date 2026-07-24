@@ -8,10 +8,19 @@ from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
-from todoist_tui.application.views import INBOX, TODAY, TaskRow, View, load_view
+from todoist_tui.application.views import (
+    INBOX,
+    TODAY,
+    TaskRow,
+    View,
+    filter_view,
+    load_view,
+)
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.task import TaskId
+from todoist_tui.tui.screens.filters import FilterScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _COLUMNS = ("", "Time", "Task", "Project")  # priority dot needs no header
@@ -37,6 +46,7 @@ class TodoistApp(App[None]):
         ("z", "undo", "Undo"),
         ("t", "view_today", "Today"),
         ("i", "view_inbox", "Inbox"),
+        ("f", "view_filters", "Filters"),
         ("r", "refresh", "Refresh"),
     ]
     SYNC_INTERVAL: ClassVar[float] = _SYNC_INTERVAL_SECONDS
@@ -48,6 +58,7 @@ class TodoistApp(App[None]):
         self._syncing = False
         self._status_base = ""
         self._last_undo: tuple[TaskId, list[object]] | None = None
+        self._picking_filter = False  # guards against stacking filter pickers
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
@@ -81,6 +92,27 @@ class TodoistApp(App[None]):
 
     def action_view_inbox(self) -> None:
         self._switch_to(INBOX)
+
+    async def action_view_filters(self) -> None:
+        if self._picking_filter:  # already loading or picker already open
+            return
+        self._picking_filter = True
+        try:
+            filters = await self._repo.filters()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load filters: {error}")
+            self._picking_filter = False
+            return
+        if not filters:
+            self._set_status("No saved filters")
+            self._picking_filter = False
+            return
+        self.push_screen(FilterScreen(filters), self._on_filter_chosen)
+
+    def _on_filter_chosen(self, chosen: Filter | None) -> None:
+        self._picking_filter = False
+        if chosen is not None:  # None means the picker was cancelled
+            self._switch_to(filter_view(chosen))
 
     def _switch_to(self, view: View) -> None:
         if view is self._view:

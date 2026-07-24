@@ -45,9 +45,11 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   filters in `self._filters` (Textual App owns that name → render crash); used
   `self._choices`. **F8: TodoistApp must avoid `self._filters` too.** Done: 4
   Pilot tests (hammered 30×), reviewer clean (kept `str(option.id)` for pyright).
-- [ ] **F8 — wire into app.** `f` → `action_view_filters`: `repo.filters()` →
-  `push_screen` → `_switch_to(filter_view(f))`. Footer entry. Empty-list → status
-  message. Pilot end-to-end (mocked repo).
+- [x] **F8 — wire into app.** `f` → async `action_view_filters`: `repo.filters()`
+  → `push_screen(FilterScreen, _on_filter_chosen)` → `_switch_to(filter_view(f))`;
+  cancel keeps view. Footer `f`. Empty → "No saved filters"; load-error → status;
+  `_picking_filter` flag stops stacking pickers (reviewer race fix). Done: 6 pilot
+  tests (hammered), all gates green, reviewer addressed. **UAT below.**
 - [ ] **F9 — live smoke parity (opt-in).** `tests/smoke/test_filters_parity_live.py`
   (`smoke`): representative saved/doc filters, assert fetch matches Todoist.
 - [ ] **F10 — finalize.** README/help note; final UAT; delete this file.
