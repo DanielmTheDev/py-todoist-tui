@@ -50,8 +50,10 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   cancel keeps view. Footer `f`. Empty → "No saved filters"; load-error → status;
   `_picking_filter` flag stops stacking pickers (reviewer race fix). Done: 6 pilot
   tests (hammered), all gates green, reviewer addressed. **UAT below.**
-- [ ] **F9 — live smoke parity (opt-in).** `tests/smoke/test_filters_parity_live.py`
-  (`smoke`): representative saved/doc filters, assert fetch matches Todoist.
+- [x] **F9 — live smoke parity (opt-in).** `tests/smoke/test_filters_parity_live.py`
+  (`smoke`, read-only): saved filters sync+parse; each filter's query accepted by
+  Todoist and our `filtered()` mapping == raw endpoint ids. Written; **run it:**
+  `uv run pytest -m smoke`.
 - [ ] **F10 — finalize.** README/help note; final UAT; delete this file.
 
 ## Notes / decisions log
