@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -14,6 +15,10 @@ from todoist_tui.store.sqlite import SqliteSnapshotCache
 
 def _snapshot(sync_token: str = "tok-1") -> Snapshot:
     return Snapshot(
+        filters=[
+            Filter(id="f1", name="Priority 1", query="p1 & overdue", order=1),
+            Filter(id="f2", name="Work today", query="#Work & today", order=2),
+        ],
         projects=[
             Project(id="220", name="Eingang", is_inbox=True),
             Project(id="9", name="Work"),
@@ -65,6 +70,25 @@ async def test_load_returns_none_when_meta_is_empty(tmp_path: Path) -> None:
     conn = sqlite3.connect(path)  # simulate a crash mid-write: rows lost
     try:
         conn.execute("DELETE FROM meta")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await SqliteSnapshotCache(path).load() is None
+
+
+@pytest.mark.anyio
+async def test_load_returns_none_when_filters_table_missing(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # legacy cache written before F3
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "CREATE TABLE meta (sync_token TEXT NOT NULL);"
+            "CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);"
+            "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
+            " due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT);"
+            "INSERT INTO meta (sync_token) VALUES ('tok');"
+        )
         conn.commit()
     finally:
         conn.close()

@@ -21,9 +21,11 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   New fields defaulted (empty) so unrelated call sites untouched; real values
   wired in F3/F4. `default_factory=list[Filter]` for pyright-strict. Done:
   2 merge tests, all green, reviewer clean.
-- [ ] **F3 — SQLite caches filters.** `filters` table in `_SCHEMA`; `_save`
-  inserts, `_load` selects. Old cache file (no table) → `_load` None → re-sync.
-  Round-trip + old-schema tests.
+- [x] **F3 — SQLite caches filters.** `filters(id,name,query,item_order)` table
+  (`order` is reserved → `item_order`); `_save` delete+insert, `_load` selects.
+  `_load` try/except broadened over all reads → legacy file w/o filters table
+  returns None → re-sync. Done: round-trip (via `_snapshot` helper) + legacy-
+  schema test, all green, reviewer clean.
 - [ ] **F4 — /sync fetches filters.** `client.sync` resource_types += `filters`;
   `ApiSnapshotSource.delta` reads `body.get("filters", [])` → `_to_filter` (drop
   `is_deleted`). respx tests (full + incremental).

@@ -5,6 +5,7 @@ from contextlib import closing
 from pathlib import Path
 
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -16,6 +17,9 @@ CREATE TABLE IF NOT EXISTS projects (id TEXT, name TEXT, is_inbox INTEGER);
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT
+);
+CREATE TABLE IF NOT EXISTS filters (
+    id TEXT, name TEXT, query TEXT, item_order INTEGER
 );
 """
 
@@ -41,18 +45,28 @@ class SqliteSnapshotCache:
         with closing(sqlite3.connect(self._path)) as conn:
             try:
                 token_row = conn.execute("SELECT sync_token FROM meta").fetchone()
-            except sqlite3.OperationalError:  # file exists but no schema yet
+                if token_row is None:  # schema present but never fully written
+                    return None
+                projects = [
+                    Project(id=pid, name=name, is_inbox=bool(is_inbox))
+                    for pid, name, is_inbox in conn.execute(
+                        "SELECT id, name, is_inbox FROM projects"
+                    )
+                ]
+                tasks = [
+                    _row_to_task(row) for row in conn.execute("SELECT * FROM tasks")
+                ]
+                filters = [
+                    Filter(id=fid, name=name, query=query, order=order)
+                    for fid, name, query, order in conn.execute(
+                        "SELECT id, name, query, item_order FROM filters"
+                    )
+                ]
+            except sqlite3.OperationalError:  # missing/legacy schema: treat as cold
                 return None
-            if token_row is None:  # schema present but never fully written
-                return None
-            projects = [
-                Project(id=pid, name=name, is_inbox=bool(is_inbox))
-                for pid, name, is_inbox in conn.execute(
-                    "SELECT id, name, is_inbox FROM projects"
-                )
-            ]
-            tasks = [_row_to_task(row) for row in conn.execute("SELECT * FROM tasks")]
-        return Snapshot(projects=projects, tasks=tasks, sync_token=token_row[0])
+        return Snapshot(
+            projects=projects, tasks=tasks, sync_token=token_row[0], filters=filters
+        )
 
     def _save(self, snapshot: Snapshot) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +75,7 @@ class SqliteSnapshotCache:
             conn.execute("DELETE FROM meta")
             conn.execute("DELETE FROM projects")
             conn.execute("DELETE FROM tasks")
+            conn.execute("DELETE FROM filters")
             conn.execute(
                 "INSERT INTO meta (sync_token) VALUES (?)", (snapshot.sync_token,)
             )
@@ -71,6 +86,10 @@ class SqliteSnapshotCache:
             conn.executemany(
                 "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
+            )
+            conn.executemany(
+                "INSERT INTO filters (id, name, query, item_order) VALUES (?, ?, ?, ?)",
+                [(f.id, f.name, f.query, f.order) for f in snapshot.filters],
             )
             conn.commit()
 
