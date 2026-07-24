@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 
@@ -26,11 +27,12 @@ class TaskRepository(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
-    """One /sync trip's worth of state: all projects, tasks and the sync token."""
+    """One /sync trip's worth of state: projects, tasks, saved filters, token."""
 
     projects: list[Project]
     tasks: list[Task]
     sync_token: str
+    filters: list[Filter] = field(default_factory=list[Filter])
 
 
 class SnapshotSource(Protocol):

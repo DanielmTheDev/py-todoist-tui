@@ -1,8 +1,13 @@
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.sync_delta import SyncDelta, merge
 from todoist_tui.domain.task import Task, TaskId
+
+
+def _filter(fid: str, name: str | None = None) -> Filter:
+    return Filter(id=fid, name=name or fid, query="today", order=0)
 
 
 def _task(task_id: str, project_id: str = "9", content: str | None = None) -> Task:
@@ -81,6 +86,44 @@ def test_incremental_upserts_and_deletes_in_place() -> None:
         ("c", "c"),
     ]
     assert merged.sync_token == "new"
+
+
+def test_full_sync_replaces_filters() -> None:
+    prior = Snapshot(projects=[], tasks=[], sync_token="old", filters=[_filter("x")])
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=True,
+        filters=[_filter("y")],
+    )
+
+    assert [f.id for f in merge(prior, delta).filters] == ["y"]
+
+
+def test_incremental_upserts_and_deletes_filters() -> None:
+    prior = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="old",
+        filters=[_filter("a", "A"), _filter("b", "B")],
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        filters=[_filter("b", "B renamed")],
+        deleted_filter_ids=frozenset({"a"}),
+    )
+
+    merged = merge(prior, delta)
+
+    assert [(f.id, f.name) for f in merged.filters] == [("b", "B renamed")]
 
 
 def test_incremental_removes_deleted_project() -> None:

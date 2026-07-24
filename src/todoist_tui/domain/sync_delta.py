@@ -1,6 +1,7 @@
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.task import Task
@@ -20,13 +21,18 @@ class SyncDelta:
     deleted_task_ids: frozenset[str]
     sync_token: str
     full_sync: bool
+    filters: list[Filter] = field(default_factory=list[Filter])
+    deleted_filter_ids: frozenset[str] = frozenset()
 
 
 def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
     """Fold a delta onto the prior snapshot, yielding the new full state."""
     if prior is None or delta.full_sync:
         return Snapshot(
-            projects=delta.projects, tasks=delta.tasks, sync_token=delta.sync_token
+            projects=delta.projects,
+            tasks=delta.tasks,
+            sync_token=delta.sync_token,
+            filters=delta.filters,
         )
     return Snapshot(
         projects=_apply(
@@ -36,6 +42,9 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
             prior.tasks, delta.tasks, delta.deleted_task_ids, lambda t: str(t.id)
         ),
         sync_token=delta.sync_token,
+        filters=_apply(
+            prior.filters, delta.filters, delta.deleted_filter_ids, lambda f: f.id
+        ),
     )
 
 

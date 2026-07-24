@@ -16,10 +16,11 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
 - [x] **F1 — `Filter` entity.** `domain/filter.py`: frozen dataclass
   `id, name, query, order`. Test construction + stable order sort. Done:
   4 tests, ruff/pyright/lint-imports clean, reviewer clean (added empty-list test).
-- [ ] **F2 — Snapshot carries filters.** `filters: list[Filter]` on `Snapshot`
-  (`domain/repository.py`); filters in `SyncDelta` + `merge`
-  (`domain/sync_delta.py`), mirroring projects (add/update/delete-by-id, drop
-  `is_deleted`). Update every `Snapshot(...)` call site. Merge tests.
+- [x] **F2 — Snapshot carries filters.** `filters` on `Snapshot` + `SyncDelta`
+  (`filters` + `deleted_filter_ids`); `merge` mirrors projects/tasks via `_apply`.
+  New fields defaulted (empty) so unrelated call sites untouched; real values
+  wired in F3/F4. `default_factory=list[Filter]` for pyright-strict. Done:
+  2 merge tests, all green, reviewer clean.
 - [ ] **F3 — SQLite caches filters.** `filters` table in `_SCHEMA`; `_save`
   inserts, `_load` selects. Old cache file (no table) → `_load` None → re-sync.
   Round-trip + old-schema tests.
