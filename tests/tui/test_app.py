@@ -8,7 +8,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.tui.app import TodoistApp
+from todoist_tui.tui.app import TaskTable, TodoistApp
 
 
 class FakeRepository:
@@ -358,6 +358,24 @@ def _row(content: str, project_id: str = "220") -> Task:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id=project_id,
     )
+
+
+@pytest.mark.anyio
+async def test_j_and_k_move_row_cursor() -> None:
+    repo = FakeRepository([_row("First"), _row("Second")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert table.cursor_row == 0
+        await pilot.press("j")
+        assert table.cursor_row == 1
+        await pilot.press("k")
+        assert table.cursor_row == 0
+        for key in ("h", "l"):  # no horizontal move in row mode; must not error
+            await pilot.press(key)
+            assert table.cursor_row == 0
 
 
 @pytest.mark.anyio

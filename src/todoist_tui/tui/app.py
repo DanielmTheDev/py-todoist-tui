@@ -3,7 +3,7 @@ from typing import ClassVar
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task
@@ -15,6 +15,17 @@ from todoist_tui.domain.task import TaskId
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _COLUMNS = ("", "Time", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
+
+
+class TaskTable(DataTable[object]):
+    """DataTable with vim h/j/k/l aliases for the built-in cursor moves."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("h", "cursor_left", "Left", show=False),
+        Binding("l", "cursor_right", "Right", show=False),
+    ]
 
 
 class TodoistApp(App[None]):
@@ -37,11 +48,11 @@ class TodoistApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
-        yield DataTable[object]()
+        yield TaskTable()
         yield Footer()
 
     async def on_mount(self) -> None:
-        table = self.query_one(DataTable[object])
+        table = self.query_one(TaskTable)
         table.cursor_type = "row"
         table.add_columns(*_COLUMNS)
         await self._reload(self._view)  # instant: served from cache when present
@@ -75,7 +86,7 @@ class TodoistApp(App[None]):
         self.run_worker(self._reload(view), exclusive=True, group="reload")
 
     def action_complete(self) -> None:
-        table = self.query_one(DataTable[object])
+        table = self.query_one(TaskTable)
         if table.row_count == 0:
             return
         row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
@@ -103,7 +114,7 @@ class TodoistApp(App[None]):
         self._render(rows, view)  # rows and title stay from the same view
 
     def _render(self, rows: list[TaskRow], view: View) -> None:
-        table = self.query_one(DataTable[object])
+        table = self.query_one(TaskTable)
         table.clear()
         for row in rows:
             table.add_row(
