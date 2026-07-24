@@ -3,7 +3,7 @@ import datetime
 
 import pytest
 
-from todoist_tui.application.views import INBOX, TODAY, TaskRow, load_view
+from todoist_tui.application.views import INBOX, TODAY, TaskRow, filter_view, load_view
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -107,6 +107,29 @@ async def test_load_view_empty() -> None:
 def test_view_titles() -> None:
     assert TODAY.title == "Today"
     assert INBOX.title == "Inbox"
+
+
+class RecordingRepository(FakeRepository):
+    def __init__(self, result: list[Task]) -> None:
+        super().__init__([], [], [])
+        self.queries: list[str] = []
+        self._result = result
+
+    async def filtered(self, query: str) -> list[Task]:
+        self.queries.append(query)
+        return self._result
+
+
+@pytest.mark.anyio
+async def test_filter_view_titled_by_name_fetches_via_query() -> None:
+    repo = RecordingRepository([_task("hit", "220")])
+    view = filter_view(Filter(id="f1", name="Work P1", query="@work & p1", order=1))
+
+    tasks = await view.fetch(repo)
+
+    assert view.title == "Work P1"
+    assert repo.queries == ["@work & p1"]
+    assert [str(t.id) for t in tasks] == ["hit"]
 
 
 class BarrierRepository:

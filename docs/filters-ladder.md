@@ -36,8 +36,9 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   documented); `SnapshotTaskRepository.filtered` → inner (server-side, live),
   `.filters()` → snapshot (cached). All test fakes updated for port. Done:
   5 new tests, all green, reviewer addressed (design comment).
-- [ ] **F6 — filter View factory.** `application/views.py`: `filter_view(f)`.
-  Test.
+- [x] **F6 — filter View factory.** `filter_view(f)` → `View(f.name,
+  lambda repo: repo.filtered(f.query))`, mirroring TODAY/INBOX. Done: 1 test
+  (title + query forwarded + result), all green.
 - [ ] **F7 — Filters screen.** `tui/screens/filters.py`
   `FilterScreen(ModalScreen)`: list by order (name + dim query), `j/k` nav,
   `Enter` → `dismiss(filter)`, `Esc` → cancel. Pilot tests.

@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.task import Task, TaskId
@@ -29,6 +30,11 @@ class View:
 
 TODAY = View("Today", lambda repo: repo.today())
 INBOX = View("Inbox", lambda repo: repo.inbox())
+
+
+def filter_view(f: Filter) -> View:
+    """A view backed by a saved filter, evaluated server-side by its query."""
+    return View(f.name, lambda repo: repo.filtered(f.query))
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
