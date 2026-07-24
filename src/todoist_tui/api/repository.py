@@ -32,6 +32,9 @@ class ApiTaskRepository:
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
 
+    async def uncomplete(self, task_id: TaskId) -> None:
+        await self._client.reopen_item(str(task_id))
+
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""
 

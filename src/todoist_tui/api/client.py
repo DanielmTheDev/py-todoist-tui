@@ -66,8 +66,14 @@ class TodoistClient:
         return cast("dict[str, Any]", response.json())
 
     async def close_item(self, task_id: str) -> None:
+        await self._command("item_close", {"id": task_id})
+
+    async def reopen_item(self, task_id: str) -> None:
+        await self._command("item_uncomplete", {"id": task_id})
+
+    async def _command(self, kind: str, args: dict[str, Any]) -> None:
         command_uuid = self._uuid()
-        command = {"type": "item_close", "uuid": command_uuid, "args": {"id": task_id}}
+        command = {"type": kind, "uuid": command_uuid, "args": args}
         response = await self._http.post(
             "/sync", data={"commands": json.dumps([command])}
         )

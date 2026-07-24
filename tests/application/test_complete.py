@@ -1,6 +1,6 @@
 import pytest
 
-from todoist_tui.application.complete import complete_task
+from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 
@@ -8,6 +8,7 @@ from todoist_tui.domain.task import Task, TaskId
 class FakeRepository:
     def __init__(self) -> None:
         self.completed: list[TaskId] = []
+        self.uncompleted: list[TaskId] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -21,6 +22,9 @@ class FakeRepository:
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
 
+    async def uncomplete(self, task_id: TaskId) -> None:
+        self.uncompleted.append(task_id)
+
     async def refresh(self) -> None: ...
 
 
@@ -31,3 +35,12 @@ async def test_complete_task_delegates_to_repo() -> None:
     await complete_task(repo, TaskId("6X4"))
 
     assert repo.completed == [TaskId("6X4")]
+
+
+@pytest.mark.anyio
+async def test_uncomplete_task_delegates_to_repo() -> None:
+    repo = FakeRepository()
+
+    await uncomplete_task(repo, TaskId("6X4"))
+
+    assert repo.uncompleted == [TaskId("6X4")]

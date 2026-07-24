@@ -261,6 +261,23 @@ async def test_complete_closes_the_task() -> None:
 
 
 @pytest.mark.anyio
+@respx.mock
+async def test_uncomplete_reopens_the_task() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.uncomplete(TaskId("6X4"))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_uncomplete"
+    assert commands[0]["args"] == {"id": "6X4"}
+
+
+@pytest.mark.anyio
 async def test_refresh_is_a_noop() -> None:
     repo = ApiTaskRepository(TodoistClient.create("tok"))
 

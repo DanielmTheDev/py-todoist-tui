@@ -22,6 +22,8 @@ class FakeRepository:
         self._projects = projects
         self._inbox = inbox or []
         self.completed: list[TaskId] = []
+        self.uncompleted: list[TaskId] = []
+        self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
 
@@ -37,7 +39,14 @@ class FakeRepository:
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
+        self._removed.update({t.id: t for t in self._tasks if t.id == task_id})
         self._tasks = [t for t in self._tasks if t.id != task_id]
+
+    async def uncomplete(self, task_id: TaskId) -> None:
+        self.uncompleted.append(task_id)
+        restored = self._removed.pop(task_id, None)
+        if restored is not None:
+            self._tasks = [*self._tasks, restored]
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -50,7 +59,7 @@ async def test_footer_lists_shortcuts() -> None:
         await pilot.pause()
         footer = app.query_one(Footer)
         shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "t", "i", "r"} <= shown
+        assert {"e", "z", "t", "i", "r"} <= shown
 
 
 @pytest.mark.anyio
@@ -236,6 +245,79 @@ async def test_pressing_e_on_empty_table_does_nothing() -> None:
         assert repo.completed == []
 
 
+@pytest.mark.anyio
+async def test_pressing_u_undoes_last_complete() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        await pilot.press("z")
+        # optimistic: the row is back before the reopen command resolves
+        assert app.query_one(DataTable[object]).row_count == 1
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.uncompleted == [TaskId("6X4")]
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert table.get_row_at(0)[2] == "Buy milk"
+        assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_undo_is_single_shot() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")  # nothing left to undo
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.uncompleted == [TaskId("6X4")]  # only the first z acted
+
+
+@pytest.mark.anyio
+async def test_undo_with_nothing_to_undo_is_noop() -> None:
+    repo = FakeRepository([_row("Solo")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("z")
+        await pilot.pause()
+
+        assert repo.uncompleted == []
+        assert app.query_one(DataTable[object]).row_count == 1
+
+
 class FailingCompleteRepository(FakeRepository):
     async def complete(self, task_id: TaskId) -> None:
         raise RuntimeError("boom")
@@ -262,6 +344,37 @@ async def test_complete_failure_is_surfaced() -> None:
             app.query_one("#status", Static).render()
         )
         assert app.query_one(DataTable[object]).row_count == 1
+
+
+class FailingUncompleteRepository(FakeRepository):
+    async def uncomplete(self, task_id: TaskId) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_undo_failure_is_surfaced() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FailingUncompleteRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to undo: boom" in str(app.query_one("#status", Static).render())
+        # failed reopen resyncs to server truth: the task stays completed (gone)
+        assert app.query_one(DataTable[object]).row_count == 0
 
 
 class RefreshingRepository(FakeRepository):
@@ -376,6 +489,40 @@ async def test_j_and_k_move_row_cursor() -> None:
         for key in ("h", "l"):  # no horizontal move in row mode; must not error
             await pilot.press(key)
             assert table.cursor_row == 0
+
+
+@pytest.mark.anyio
+async def test_refresh_keeps_cursor_on_the_same_task() -> None:
+    repo = FakeRepository([_row("First"), _row("Second")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("j")  # move off the top row
+        table = app.query_one(TaskTable)
+        assert table.cursor_row == 1
+
+        await pilot.press("r")  # background resync re-renders the table
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert table.cursor_row == 1  # cursor stayed on "Second", not reset to top
+        assert table.get_row_at(table.cursor_row)[2] == "Second"
+
+
+@pytest.mark.anyio
+async def test_switch_view_resets_cursor_to_top() -> None:
+    repo = FakeRepository([_row("T1"), _row("T2")], [], inbox=[_row("I1"), _row("I2")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("j")  # cursor on second Today row
+        await pilot.press("i")  # switch view: the prior task is absent here
+        await pilot.pause()
+
+        assert app.query_one(TaskTable).cursor_row == 0
 
 
 @pytest.mark.anyio

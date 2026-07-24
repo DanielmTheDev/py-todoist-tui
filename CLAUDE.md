@@ -33,6 +33,10 @@ never calls httpx or the DB directly. Enforced by `import-linter`
 ## Coding guideline
 - **TDD, no exceptions.** Failing test first → minimal code to pass → refactor.
   No production code without a test that drove it.
+- **No flaky tests.** A test must pass deterministically. If one is flaky, fix
+  the root cause (usually a real race in the code, not just the test) — never
+  retry-loop, sleep-tune, or `xfail` around it. New/suspect async or timing
+  tests: hammer them (e.g. run ~30×) before calling done.
 - **Testable by design.** All I/O (http, db, clock, filesystem) behind an
   injected interface. Pure domain logic has zero I/O.
 - **Concise & self-documenting.** Names carry intent. Comments explain *why* /

@@ -82,6 +82,13 @@ class SnapshotTaskRepository:
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
+        await self._invalidate()
+
+    async def uncomplete(self, task_id: TaskId) -> None:
+        await self._inner.uncomplete(task_id)
+        await self._invalidate()
+
+    async def _invalidate(self) -> None:
         async with self._lock:  # a concurrent reader must not re-cache stale state
             self._snapshot = None
             self._dirty = True

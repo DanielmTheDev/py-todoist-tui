@@ -51,6 +51,7 @@ class FakeInner:
     def __init__(self) -> None:
         self.today_calls = 0
         self.completed: list[TaskId] = []
+        self.uncompleted: list[TaskId] = []
 
     async def today(self) -> list[Task]:
         self.today_calls += 1
@@ -64,6 +65,9 @@ class FakeInner:
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
+
+    async def uncomplete(self, task_id: TaskId) -> None:
+        self.uncompleted.append(task_id)
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -224,6 +228,22 @@ async def test_complete_then_read_syncs_incrementally_and_drops_the_task() -> No
     assert inner.completed == [TaskId("a")]
     assert source.since == ["cached"]
     assert [str(t.id) for t in inbox] == ["c"]
+
+
+@pytest.mark.anyio
+async def test_uncomplete_then_read_syncs_incrementally_and_restores_the_task() -> None:
+    inner = FakeInner()
+    source = FakeSource(_full_delta(_snapshot("after")))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
+
+    await repo.projects()  # served from cache
+    await repo.uncomplete(TaskId("a"))
+    inbox = await repo.inbox()  # dirty -> resync from the cached token
+
+    assert inner.uncompleted == [TaskId("a")]
+    assert source.since == ["cached"]
+    assert [str(t.id) for t in inbox] == ["a", "c"]
 
 
 @pytest.mark.anyio

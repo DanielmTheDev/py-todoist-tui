@@ -115,6 +115,45 @@ async def test_close_item_posts_item_close_command() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_reopen_item_posts_item_uncomplete_command() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.reopen_item("6X4")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "item_uncomplete", "uuid": "u-1", "args": {"id": "6X4"}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_reopen_item_raises_on_command_error() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sync_status": {
+                    "u-1": {"error_tag": "ITEM_NOT_FOUND", "error": "not found"}
+                }
+            },
+        )
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    with pytest.raises(SyncCommandError, match="not found"):
+        await client.reopen_item("nope")
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_sync_posts_full_sync_and_returns_body() -> None:
     body = {
         "items": [{"id": "1"}],
