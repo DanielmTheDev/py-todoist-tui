@@ -10,6 +10,7 @@ from todoist_tui.config import (
     default_config_path,
     load_token,
 )
+from todoist_tui.domain.clock import SystemClock
 from todoist_tui.store.repository import SnapshotTaskRepository
 from todoist_tui.store.sqlite import SqliteSnapshotCache
 from todoist_tui.tui.app import TodoistApp
@@ -32,6 +33,7 @@ async def _run(token: str) -> None:
             ApiTaskRepository(client),
             ApiSnapshotSource(client),
             SqliteSnapshotCache(default_cache_path()),
+            SystemClock(),
         )
         app = TodoistApp(repo)
         await app.run_async()

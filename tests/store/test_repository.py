@@ -1,13 +1,27 @@
 import asyncio
+from datetime import date
 
 import pytest
 
+from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.store.repository import SnapshotTaskRepository
+
+
+class FakeClock:
+    def __init__(self, today: date) -> None:
+        self._today = today
+
+    def today(self) -> date:
+        return self._today
+
+
+_TODAY = date(2026, 7, 23)
+_CLOCK = FakeClock(_TODAY)
 
 
 def _full_delta(snapshot: Snapshot) -> SyncDelta:
@@ -21,12 +35,12 @@ def _full_delta(snapshot: Snapshot) -> SyncDelta:
     )
 
 
-def _task(task_id: str, project_id: str) -> Task:
+def _task(task_id: str, project_id: str, due: Due | None = None) -> Task:
     return Task(
         id=TaskId(task_id),
         content=task_id,
         priority=Priority.P2,
-        due=None,
+        due=due,
         project_id=project_id,
     )
 
@@ -34,14 +48,13 @@ def _task(task_id: str, project_id: str) -> Task:
 class FakeInner:
     """Backs today()/complete(); the snapshot repo must never call the rest."""
 
-    def __init__(self, today: list[Task] | None = None) -> None:
-        self._today = today or []
+    def __init__(self) -> None:
         self.today_calls = 0
         self.completed: list[TaskId] = []
 
     async def today(self) -> list[Task]:
         self.today_calls += 1
-        return self._today
+        return []
 
     async def inbox(self) -> list[Task]:  # pragma: no cover - must not be called
         raise AssertionError("inbox() must be served from the snapshot")
@@ -100,7 +113,7 @@ def _snapshot(sync_token: str = "tok") -> Snapshot:
 @pytest.mark.anyio
 async def test_projects_and_inbox_share_one_sync() -> None:
     source = FakeSource(_full_delta(_snapshot()))
-    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache())
+    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache(), _CLOCK)
 
     projects = await repo.projects()
     inbox = await repo.inbox()
@@ -116,7 +129,7 @@ async def test_inbox_raises_when_no_inbox_project() -> None:
         projects=[Project(id="9", name="Work")], tasks=[], sync_token="tok"
     )
     repo = SnapshotTaskRepository(
-        FakeInner(), FakeSource(_full_delta(snapshot)), FakeCache()
+        FakeInner(), FakeSource(_full_delta(snapshot)), FakeCache(), _CLOCK
     )
 
     with pytest.raises(LookupError, match="inbox"):
@@ -124,21 +137,32 @@ async def test_inbox_raises_when_no_inbox_project() -> None:
 
 
 @pytest.mark.anyio
-async def test_today_delegates_to_inner_without_syncing() -> None:
-    inner = FakeInner(today=[_task("t", "9")])
-    source = FakeSource(_full_delta(_snapshot()))
-    repo = SnapshotTaskRepository(inner, source, FakeCache())
+async def test_today_served_from_snapshot() -> None:
+    snapshot = Snapshot(
+        projects=[Project(id="9", name="Work")],
+        tasks=[
+            _task("due-today", "9", due=Due(date=_TODAY)),
+            _task("due-tomorrow", "9", due=Due(date=date(2026, 7, 24))),
+            _task("no-due", "9"),
+        ],
+        sync_token="tok",
+    )
+    inner = FakeInner()
+    source = FakeSource(_full_delta(snapshot))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
 
-    assert [t.id for t in await repo.today()] == [TaskId("t")]
-    assert inner.today_calls == 1
-    assert source.snapshot_calls == 0
+    result = await repo.today()
+
+    assert [str(t.id) for t in result] == ["due-today"]
+    assert inner.today_calls == 0  # today comes from the snapshot, not the server
+    assert source.snapshot_calls == 1
 
 
 @pytest.mark.anyio
 async def test_cold_start_serves_from_cache_without_network() -> None:
     source = FakeSource(_full_delta(_snapshot("net")))
     cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(FakeInner(), source, cache)
+    repo = SnapshotTaskRepository(FakeInner(), source, cache, _CLOCK)
 
     projects = await repo.projects()
 
@@ -152,7 +176,7 @@ async def test_cache_miss_syncs_and_writes_through() -> None:
     snapshot = _snapshot("net")
     source = FakeSource(_full_delta(snapshot))
     cache = FakeCache()
-    repo = SnapshotTaskRepository(FakeInner(), source, cache)
+    repo = SnapshotTaskRepository(FakeInner(), source, cache, _CLOCK)
 
     await repo.projects()
 
@@ -175,7 +199,7 @@ def _incremental(sync_token: str, deleted_task: str) -> SyncDelta:
 async def test_refresh_syncs_incrementally_from_stored_token_and_merges() -> None:
     source = FakeSource(_incremental("fresh", deleted_task="a"))
     cache = FakeCache(stored=_snapshot("stale"))
-    repo = SnapshotTaskRepository(FakeInner(), source, cache)
+    repo = SnapshotTaskRepository(FakeInner(), source, cache, _CLOCK)
 
     await repo.refresh()
 
@@ -191,7 +215,7 @@ async def test_complete_then_read_syncs_incrementally_and_drops_the_task() -> No
     inner = FakeInner()
     source = FakeSource(_incremental("after", deleted_task="a"))
     cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(inner, source, cache)
+    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
 
     await repo.projects()  # served from cache
     await repo.complete(TaskId("a"))
@@ -205,7 +229,7 @@ async def test_complete_then_read_syncs_incrementally_and_drops_the_task() -> No
 @pytest.mark.anyio
 async def test_concurrent_first_fetch_shares_single_sync() -> None:
     source = FakeSource(_full_delta(_snapshot()))
-    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache())
+    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache(), _CLOCK)
 
     await asyncio.gather(repo.projects(), repo.inbox())
 

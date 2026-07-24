@@ -1,5 +1,7 @@
 import asyncio
 
+from todoist_tui.domain.clock import Clock
+from todoist_tui.domain.filter_query import FilterQuery
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import (
     Snapshot,
@@ -16,17 +18,22 @@ class SnapshotTaskRepository:
 
     First read prefers the persisted cache (instant, offline cold start);
     on a miss it syncs from `source` and writes through to the cache.
-    `refresh()` force-resyncs from the network. today() stays on the server
-    filter via `inner`. complete() marks the snapshot dirty so the next read
-    bypasses the now-stale cache and re-syncs.
+    `refresh()` force-resyncs from the network. today() is evaluated client-side
+    over the snapshot via a `FilterQuery`. complete() marks the snapshot dirty so
+    the next read bypasses the now-stale cache and re-syncs.
     """
 
     def __init__(
-        self, inner: TaskRepository, source: SnapshotSource, cache: SnapshotCache
+        self,
+        inner: TaskRepository,
+        source: SnapshotSource,
+        cache: SnapshotCache,
+        clock: Clock,
     ) -> None:
         self._inner = inner
         self._source = source
         self._cache = cache
+        self._clock = clock
         self._snapshot: Snapshot | None = None
         self._dirty = False
         self._lock = asyncio.Lock()
@@ -68,7 +75,10 @@ class SnapshotTaskRepository:
         return [task for task in snapshot.tasks if task.project_id == inbox.id]
 
     async def today(self) -> list[Task]:
-        return await self._inner.today()
+        snapshot = await self._snapshot_now()
+        today = self._clock.today()
+        query = FilterQuery("today")
+        return [task for task in snapshot.tasks if query.matches(task, today)]
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
