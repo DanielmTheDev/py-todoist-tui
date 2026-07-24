@@ -4,6 +4,7 @@ from datetime import date
 import pytest
 
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -32,6 +33,7 @@ def _full_delta(snapshot: Snapshot) -> SyncDelta:
         deleted_task_ids=frozenset(),
         sync_token=snapshot.sync_token,
         full_sync=True,
+        filters=snapshot.filters,
     )
 
 
@@ -46,22 +48,31 @@ def _task(task_id: str, project_id: str, due: Due | None = None) -> Task:
 
 
 class FakeInner:
-    """Backs today()/complete(); the snapshot repo must never call the rest."""
+    """Backs today()/complete()/filtered(); the snapshot repo serves the rest."""
 
-    def __init__(self) -> None:
+    def __init__(self, filtered_result: list[Task] | None = None) -> None:
         self.today_calls = 0
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
+        self.filtered_queries: list[str] = []
+        self._filtered_result = filtered_result or []
 
     async def today(self) -> list[Task]:
         self.today_calls += 1
         return []
+
+    async def filtered(self, query: str) -> list[Task]:
+        self.filtered_queries.append(query)
+        return self._filtered_result
 
     async def inbox(self) -> list[Task]:  # pragma: no cover - must not be called
         raise AssertionError("inbox() must be served from the snapshot")
 
     async def projects(self) -> list[Project]:  # pragma: no cover
         raise AssertionError("projects() must be served from the snapshot")
+
+    async def filters(self) -> list[Filter]:  # pragma: no cover
+        raise AssertionError("filters() must be served from the snapshot")
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -160,6 +171,36 @@ async def test_today_served_from_snapshot() -> None:
     assert [str(t.id) for t in result] == ["due-today"]
     assert inner.today_calls == 0  # today comes from the snapshot, not the server
     assert source.snapshot_calls == 1
+
+
+@pytest.mark.anyio
+async def test_filtered_delegates_to_inner_server_side() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
+
+    result = await repo.filtered("@work & p1")
+
+    assert [str(t.id) for t in result] == ["hit"]
+    assert inner.filtered_queries == ["@work & p1"]
+    assert source.snapshot_calls == 0  # results are live, not from the snapshot
+
+
+@pytest.mark.anyio
+async def test_filters_served_from_snapshot() -> None:
+    snapshot = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="tok",
+        filters=[Filter(id="f1", name="P1", query="p1", order=1)],
+    )
+    repo = SnapshotTaskRepository(
+        FakeInner(), FakeSource(_full_delta(snapshot)), FakeCache(), _CLOCK
+    )
+
+    (f,) = await repo.filters()
+
+    assert (f.id, f.name) == ("f1", "P1")
 
 
 @pytest.mark.anyio

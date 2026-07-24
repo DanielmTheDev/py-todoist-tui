@@ -46,6 +46,23 @@ async def test_today_tasks_follows_cursor_pagination() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_filter_tasks_sends_given_query() -> None:
+    route = respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"id": "1"}], "next_cursor": None}
+        )
+    )
+    client = TodoistClient.create("tok")
+
+    tasks = await client.filter_tasks("@work & p1")
+
+    assert tasks == [{"id": "1"}]
+    assert route.calls.last.request.url.params["query"] == "@work & p1"
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_tasks_in_project_sends_project_id() -> None:
     route = respx.get(f"{BASE_URL}/tasks").mock(
         return_value=httpx.Response(

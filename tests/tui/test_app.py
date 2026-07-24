@@ -5,6 +5,7 @@ import pytest
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
@@ -34,8 +35,14 @@ class FakeRepository:
     async def inbox(self) -> list[Task]:
         return list(self._inbox)
 
+    async def filtered(self, query: str) -> list[Task]:
+        return list(self._tasks)
+
     async def projects(self) -> list[Project]:
         return self._projects
+
+    async def filters(self) -> list[Filter]:
+        return []
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)

@@ -1,6 +1,7 @@
 import pytest
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 
@@ -16,7 +17,13 @@ class FakeRepository:
     async def inbox(self) -> list[Task]:
         return []
 
+    async def filtered(self, query: str) -> list[Task]:
+        return []
+
     async def projects(self) -> list[Project]:
+        return []
+
+    async def filters(self) -> list[Filter]:
         return []
 
     async def complete(self, task_id: TaskId) -> None:

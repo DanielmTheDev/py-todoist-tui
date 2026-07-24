@@ -1,6 +1,7 @@
 import asyncio
 
 from todoist_tui.domain.clock import Clock
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.filter_query import FilterQuery
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import (
@@ -79,6 +80,12 @@ class SnapshotTaskRepository:
         today = self._clock.today()
         query = FilterQuery("today")
         return [task for task in snapshot.tasks if query.matches(task, today)]
+
+    async def filtered(self, query: str) -> list[Task]:
+        return await self._inner.filtered(query)  # server-side eval, live
+
+    async def filters(self) -> list[Filter]:
+        return (await self._snapshot_now()).filters
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)

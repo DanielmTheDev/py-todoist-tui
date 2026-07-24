@@ -73,6 +73,65 @@ async def test_today_maps_task_without_due() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_filtered_maps_json_and_sends_query() -> None:
+    route = respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Do it",
+                        "priority": 1,
+                        "project_id": "9",
+                        "due": None,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.filtered("overdue & p1")
+
+    assert task.id == TaskId("6X4")
+    assert route.calls.last.request.url.params["query"] == "overdue & p1"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_filters_reads_saved_filters_via_sync() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "filters": [
+                    {"id": "f1", "name": "P1", "query": "p1", "item_order": 1},
+                    {
+                        "id": "f2",
+                        "name": "Gone",
+                        "query": "today",
+                        "item_order": 2,
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (f,) = await repo.filters()
+
+    assert (f.id, f.name, f.query, f.order) == ("f1", "P1", "p1", 1)
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_inbox_fetches_tasks_of_inbox_project() -> None:
     respx.get(f"{BASE_URL}/projects").mock(
         return_value=httpx.Response(

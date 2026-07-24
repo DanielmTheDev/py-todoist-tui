@@ -19,6 +19,17 @@ class ApiTaskRepository:
     async def today(self) -> list[Task]:
         return [_to_task(record) for record in await self._client.today_tasks()]
 
+    async def filtered(self, query: str) -> list[Task]:
+        records = await self._client.filter_tasks(query)
+        return [_to_task(record) for record in records]
+
+    async def filters(self) -> list[Filter]:
+        # No REST list endpoint for filters; a full /sync is the only source.
+        # Network-direct like projects(); the caching wrapper overrides it.
+        body = await self._client.sync("*")
+        live, _deleted = _split(body.get("filters", []), _to_filter)
+        return live
+
     async def inbox(self) -> list[Task]:
         projects = await self._client.projects()
         inbox = next((p for p in projects if p.get("inbox_project")), None)

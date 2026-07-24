@@ -30,10 +30,12 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   `delta` maps `body.get("filters", [])` via `_split`/`_to_filter`
   (`item_order`→`order`, drops `is_deleted`). Tolerates missing key on
   incremental sync. Done: 3 respx tests, all green, reviewer clean.
-- [ ] **F5 — client + repo query.** `client.filter_tasks(query)` (generalize
-  `today_tasks`); `filtered(query)` + `filters()` on `TaskRepository` port;
-  `ApiTaskRepository.filtered`; `SnapshotTaskRepository.filtered` → inner,
-  `.filters()` → snapshot. respx + repo tests.
+- [x] **F5 — client + repo query.** `client.filter_tasks(query)` (today_tasks
+  now delegates); port gains `filtered(query)` + `filters()`;
+  `ApiTaskRepository.filtered` (live /tasks/filter), `.filters()` (via /sync,
+  documented); `SnapshotTaskRepository.filtered` → inner (server-side, live),
+  `.filters()` → snapshot (cached). All test fakes updated for port. Done:
+  5 new tests, all green, reviewer addressed (design comment).
 - [ ] **F6 — filter View factory.** `application/views.py`: `filter_view(f)`.
   Test.
 - [ ] **F7 — Filters screen.** `tui/screens/filters.py`
