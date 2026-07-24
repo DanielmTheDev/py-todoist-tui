@@ -173,7 +173,7 @@ async def test_sync_posts_full_sync_and_returns_body() -> None:
     assert "application/x-www-form-urlencoded" in request.headers["content-type"]
     form = parse_qs(request.content.decode())
     assert form["sync_token"] == ["*"]
-    assert json.loads(form["resource_types"][0]) == ["items", "projects"]
+    assert json.loads(form["resource_types"][0]) == ["items", "projects", "filters"]
     await client.aclose()
 
 

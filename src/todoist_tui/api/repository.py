@@ -3,6 +3,7 @@ from typing import Any
 
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.sync_delta import SyncDelta
@@ -49,6 +50,7 @@ class ApiSnapshotSource:
         body = await self._client.sync(since if since is not None else "*")
         projects, deleted_projects = _split(body["projects"], _to_project)
         tasks, deleted_tasks = _split(body["items"], _to_task, _is_gone)
+        filters, deleted_filters = _split(body.get("filters", []), _to_filter)
         return SyncDelta(
             projects=projects,
             tasks=tasks,
@@ -56,6 +58,8 @@ class ApiSnapshotSource:
             deleted_task_ids=deleted_tasks,
             sync_token=str(body["sync_token"]),
             full_sync=bool(body["full_sync"]),
+            filters=filters,
+            deleted_filter_ids=deleted_filters,
         )
 
 
@@ -78,6 +82,15 @@ def _to_project(record: dict[str, Any]) -> Project:
         id=str(record["id"]),
         name=str(record["name"]),
         is_inbox=bool(record.get("inbox_project")),
+    )
+
+
+def _to_filter(record: dict[str, Any]) -> Filter:
+    return Filter(
+        id=str(record["id"]),
+        name=str(record["name"]),
+        query=str(record["query"]),
+        order=int(record["item_order"]),
     )
 
 

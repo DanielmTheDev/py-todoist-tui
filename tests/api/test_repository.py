@@ -245,6 +245,62 @@ async def test_delta_incremental_splits_deletions_and_completions() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_delta_parses_and_splits_filters() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "filters": [
+                    {"id": "f1", "name": "P1", "query": "p1", "item_order": 1},
+                    {
+                        "id": "f2",
+                        "name": "Old",
+                        "query": "today",
+                        "item_order": 2,
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert [(f.id, f.name, f.query, f.order) for f in delta.filters] == [
+        ("f1", "P1", "p1", 1)
+    ]
+    assert delta.deleted_filter_ids == frozenset({"f2"})
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_tolerates_missing_filters_key() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert delta.filters == []
+    assert delta.deleted_filter_ids == frozenset()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_complete_closes_the_task() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

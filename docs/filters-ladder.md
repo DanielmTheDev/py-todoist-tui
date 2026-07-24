@@ -26,9 +26,10 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   `_load` try/except broadened over all reads → legacy file w/o filters table
   returns None → re-sync. Done: round-trip (via `_snapshot` helper) + legacy-
   schema test, all green, reviewer clean.
-- [ ] **F4 — /sync fetches filters.** `client.sync` resource_types += `filters`;
-  `ApiSnapshotSource.delta` reads `body.get("filters", [])` → `_to_filter` (drop
-  `is_deleted`). respx tests (full + incremental).
+- [x] **F4 — /sync fetches filters.** `resource_types += "filters"`;
+  `delta` maps `body.get("filters", [])` via `_split`/`_to_filter`
+  (`item_order`→`order`, drops `is_deleted`). Tolerates missing key on
+  incremental sync. Done: 3 respx tests, all green, reviewer clean.
 - [ ] **F5 — client + repo query.** `client.filter_tasks(query)` (generalize
   `today_tasks`); `filtered(query)` + `filters()` on `TaskRepository` port;
   `ApiTaskRepository.filtered`; `SnapshotTaskRepository.filtered` → inner,

@@ -59,7 +59,7 @@ class TodoistClient:
             "/sync",
             data={
                 "sync_token": sync_token,
-                "resource_types": json.dumps(["items", "projects"]),
+                "resource_types": json.dumps(["items", "projects", "filters"]),
             },
         )
         response.raise_for_status()
