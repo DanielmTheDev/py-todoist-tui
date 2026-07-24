@@ -39,9 +39,12 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
 - [x] **F6 — filter View factory.** `filter_view(f)` → `View(f.name,
   lambda repo: repo.filtered(f.query))`, mirroring TODAY/INBOX. Done: 1 test
   (title + query forwarded + result), all green.
-- [ ] **F7 — Filters screen.** `tui/screens/filters.py`
-  `FilterScreen(ModalScreen)`: list by order (name + dim query), `j/k` nav,
-  `Enter` → `dismiss(filter)`, `Esc` → cancel. Pilot tests.
+- [x] **F7 — Filters screen.** `tui/screens/filters.py` `FilterScreen(ModalScreen
+  [Filter|None])` + `FilterList(OptionList)` (vim j/k); name + dim query, sorted
+  by order, `Enter`→dismiss(filter), `Esc`→dismiss(None). Gotcha: don't store
+  filters in `self._filters` (Textual App owns that name → render crash); used
+  `self._choices`. **F8: TodoistApp must avoid `self._filters` too.** Done: 4
+  Pilot tests (hammered 30×), reviewer clean (kept `str(option.id)` for pyright).
 - [ ] **F8 — wire into app.** `f` → `action_view_filters`: `repo.filters()` →
   `push_screen` → `_switch_to(filter_view(f))`. Footer entry. Empty-list → status
   message. Pilot end-to-end (mocked repo).
