@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 
 import pytest
@@ -49,7 +50,21 @@ async def test_footer_lists_shortcuts() -> None:
         await pilot.pause()
         footer = app.query_one(Footer)
         shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "t", "i"} <= shown
+        assert {"e", "t", "i", "r"} <= shown
+
+
+@pytest.mark.anyio
+async def test_pressing_r_forces_resync() -> None:
+    repo = FakeRepository([], [])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        before = repo.refresh_calls  # 1 from the startup sync
+        await pilot.press("r")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert repo.refresh_calls == before + 1
 
 
 @pytest.mark.anyio
@@ -148,6 +163,7 @@ async def test_pressing_e_completes_optimistically() -> None:
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 1
         reloads = repo.today_calls
+        syncs = repo.refresh_calls
         await pilot.press("e")
         # optimistic: row is gone before the network command resolves
         assert app.query_one(DataTable[object]).row_count == 0
@@ -157,7 +173,54 @@ async def test_pressing_e_completes_optimistically() -> None:
         assert repo.completed == [TaskId("6X4")]
         assert app.query_one(DataTable[object]).row_count == 0
         assert "Today · no tasks" in str(app.query_one("#status", Static).render())
-        assert repo.today_calls == reloads  # snappy: no reload round-trip on success
+        assert repo.refresh_calls > syncs  # success pulls server delta
+        assert repo.today_calls > reloads  # and re-renders the current view
+
+
+class GatedRefreshRepository(FakeRepository):
+    """refresh() blocks until released, so the syncing state is observable."""
+
+    def __init__(self, tasks: list[Task], projects: list[Project]) -> None:
+        super().__init__(tasks, projects)
+        self.release = asyncio.Event()
+
+    async def refresh(self) -> None:
+        await self.release.wait()
+        await super().refresh()
+
+
+@pytest.mark.anyio
+async def test_sync_indicator_shows_while_syncing_then_clears() -> None:
+    repo = GatedRefreshRepository([], [])
+    app = TodoistApp(repo)
+
+    def status() -> str:
+        return str(app.query_one("#status", Static).render())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()  # startup sync started, blocked in refresh()
+        assert "⟳" in status()
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert "⟳" not in status()
+
+
+@pytest.mark.anyio
+async def test_periodic_poll_resyncs() -> None:
+    repo = FakeRepository([], [])
+
+    class FastPollApp(TodoistApp):
+        SYNC_INTERVAL = 0.05
+
+    app = FastPollApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        before = repo.refresh_calls  # 1 from the startup sync
+        await pilot.pause(0.2)  # let a few poll ticks fire
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.refresh_calls > before
 
 
 @pytest.mark.anyio

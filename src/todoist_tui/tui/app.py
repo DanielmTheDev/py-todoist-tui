@@ -12,6 +12,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.task import TaskId
 
+_SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _COLUMNS = ("", "Time", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 
@@ -23,12 +24,16 @@ class TodoistApp(App[None]):
         ("e", "complete", "Complete"),
         ("t", "view_today", "Today"),
         ("i", "view_inbox", "Inbox"),
+        ("r", "refresh", "Refresh"),
     ]
+    SYNC_INTERVAL: ClassVar[float] = _SYNC_INTERVAL_SECONDS
 
     def __init__(self, repo: TaskRepository) -> None:
         super().__init__()
         self._repo = repo
         self._view = TODAY
+        self._syncing = False
+        self._status_base = ""
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
@@ -40,15 +45,22 @@ class TodoistApp(App[None]):
         table.cursor_type = "row"
         table.add_columns(*_COLUMNS)
         await self._reload(self._view)  # instant: served from cache when present
-        self._refresh_on_start()
+        self._sync_now()
+        self.set_interval(self.SYNC_INTERVAL, self._sync_now)
 
     @work(exclusive=True, group="reload")
-    async def _refresh_on_start(self) -> None:
+    async def _sync_now(self) -> None:
+        self._set_syncing(True)
         try:
             await self._repo.refresh()
         except Exception:  # offline or sync failed: keep the cached view
+            self._set_syncing(False)
             return
         await self._reload(self._view)
+        self._set_syncing(False)
+
+    def action_refresh(self) -> None:
+        self._sync_now()
 
     def action_view_today(self) -> None:
         self._switch_to(TODAY)
@@ -79,6 +91,8 @@ class TodoistApp(App[None]):
         except Exception as error:  # command rejected: resync, then report
             await self._reload(self._view)
             self._set_status(f"Failed to complete task: {error}")
+            return
+        self._sync_now()  # pull server delta so the view reflects the close
 
     async def _reload(self, view: View) -> None:
         try:
@@ -102,7 +116,16 @@ class TodoistApp(App[None]):
         self._set_status(_count_status(view.title, len(rows)))
 
     def _set_status(self, message: str) -> None:
-        self.query_one("#status", Static).update(message)
+        self._status_base = message
+        self._render_status()
+
+    def _set_syncing(self, syncing: bool) -> None:
+        self._syncing = syncing
+        self._render_status()
+
+    def _render_status(self) -> None:
+        marker = "  ⟳" if self._syncing else ""
+        self.query_one("#status", Static).update(f"{self._status_base}{marker}")
 
 
 def _count_status(title: str, count: int) -> str:
