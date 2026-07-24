@@ -26,6 +26,19 @@ uv sync
 uv run todoist-tui
 ```
 
+## Keys
+| Key | Action |
+|-----|--------|
+| `t` / `i` | Today / Inbox view |
+| `f` | Pick a saved filter (server-side, cached; ↑/↓ or `j`/`k`, `Enter` select, `Esc` cancel) |
+| `e` | Complete the highlighted task |
+| `z` | Undo the last complete |
+| `r` | Force a resync |
+| `j` `k` `h` `l` | Move the cursor (vim-style) |
+
+Saved filters sync from your Todoist account; selecting one runs its query on
+Todoist (full fidelity) and caches the result, refreshing in the background.
+
 ## Development
 ```sh
 uv run pytest          # unit tests (live-API tests excluded)
