@@ -54,7 +54,25 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   (`smoke`, read-only): saved filters sync+parse; each filter's query accepted by
   Todoist and our `filtered()` mapping == raw endpoint ids. Written; **run it:**
   `uv run pytest -m smoke`.
+- [x] **F8.1 — picker shows names only.** Dropped the dim query subtitle (user
+  request). Screen tests still green.
+- [ ] **FA1 — filter result cache (store).** `SnapshotTaskRepository` caches
+  `filtered(query)` results in memory (`dict[query→list[Task]]`); add
+  `refresh_filtered(query)` to the port (force-fetch + update cache); clear the
+  cache in `_invalidate` (complete/undo). Unit tests: cache hit, refresh bypass,
+  invalidation. Update all test fakes for the new port method.
+- [ ] **FA2 — stale-while-revalidate (app).** Track active filter query; on
+  switch show cached instantly then background-refresh + re-render (reuse
+  `_sync_now`, which also `refresh_filtered`s the active filter each tick);
+  clear active query on Today/Inbox. App pilot tests.
 - [ ] **F10 — finalize.** README/help note; final UAT; delete this file.
 
+## Deferred follow-ups (own tasks, not blocking F10)
+- **Type-to-filter the picker.** Live-filter the FilterScreen list as you type
+  (needs an Input + filtering over OptionList). Separate task.
+
 ## Notes / decisions log
+- Filter caching = Option A (session in-memory, stale-while-revalidate). Chosen
+  over disk-persist / prefetch-all for lowest cost + reuses startup pattern.
+  Iterate to persistence later only if the restart/cold delay annoys.
 - (append surprises, API field names, deviations here as rungs land)

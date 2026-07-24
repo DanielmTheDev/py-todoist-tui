@@ -1,6 +1,5 @@
 from typing import ClassVar
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.screen import ModalScreen
@@ -59,5 +58,4 @@ class FilterScreen(ModalScreen["Filter | None"]):
 
 
 def _option(f: Filter) -> Option:
-    label = Text.assemble(f.name, "\n", (f.query, "dim"))
-    return Option(label, id=f.id)
+    return Option(f.name, id=f.id)
