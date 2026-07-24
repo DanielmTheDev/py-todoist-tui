@@ -20,6 +20,9 @@ class FakeRepository:
     async def filtered(self, query: str) -> list[Task]:
         return []
 
+    async def refresh_filtered(self, query: str) -> list[Task]:
+        return []
+
     async def projects(self) -> list[Project]:
         return []
 

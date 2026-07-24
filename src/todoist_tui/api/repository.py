@@ -23,6 +23,9 @@ class ApiTaskRepository:
         records = await self._client.filter_tasks(query)
         return [_to_task(record) for record in records]
 
+    async def refresh_filtered(self, query: str) -> list[Task]:
+        return await self.filtered(query)  # no cache here; every read is live
+
     async def filters(self) -> list[Filter]:
         # No REST list endpoint for filters; a full /sync is the only source.
         # Network-direct like projects(); the caching wrapper overrides it.

@@ -59,6 +59,7 @@ class TodoistApp(App[None]):
         self._status_base = ""
         self._last_undo: tuple[TaskId, list[object]] | None = None
         self._picking_filter = False  # guards against stacking filter pickers
+        self._active_filter_query: str | None = None  # set while a filter view shows
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
@@ -78,19 +79,23 @@ class TodoistApp(App[None]):
         self._set_syncing(True)
         try:
             await self._repo.refresh()
+            if self._active_filter_query is not None:  # keep the open filter live
+                await self._repo.refresh_filtered(self._active_filter_query)
+            await self._reload(self._view)
         except Exception:  # offline or sync failed: keep the cached view
+            pass
+        finally:  # also runs on worker cancellation, so ⟳ never sticks
             self._set_syncing(False)
-            return
-        await self._reload(self._view)
-        self._set_syncing(False)
 
     def action_refresh(self) -> None:
         self._sync_now()
 
     def action_view_today(self) -> None:
+        self._active_filter_query = None
         self._switch_to(TODAY)
 
     def action_view_inbox(self) -> None:
+        self._active_filter_query = None
         self._switch_to(INBOX)
 
     async def action_view_filters(self) -> None:
@@ -111,8 +116,24 @@ class TodoistApp(App[None]):
 
     def _on_filter_chosen(self, chosen: Filter | None) -> None:
         self._picking_filter = False
-        if chosen is not None:  # None means the picker was cancelled
-            self._switch_to(filter_view(chosen))
+        if chosen is None:  # picker was cancelled
+            return
+        self._active_filter_query = chosen.query
+        self._view = filter_view(chosen)
+        self._open_filter(self._view, chosen.query)
+
+    @work(exclusive=True, group="reload")
+    async def _open_filter(self, view: View, query: str) -> None:
+        await self._reload(view)  # instant when the query is cached
+        self._set_syncing(True)
+        try:
+            await self._repo.refresh_filtered(query)  # revalidate live
+            if self._view is view:  # user may have switched away meanwhile
+                await self._reload(view)  # cache now fresh
+        except Exception:  # offline: keep the cached view
+            pass
+        finally:  # also runs on worker cancellation, so ⟳ never sticks
+            self._set_syncing(False)
 
     def _switch_to(self, view: View) -> None:
         if view is self._view:

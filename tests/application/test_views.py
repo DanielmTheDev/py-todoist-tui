@@ -31,6 +31,9 @@ class FakeRepository:
     async def filtered(self, query: str) -> list[Task]:
         return []
 
+    async def refresh_filtered(self, query: str) -> list[Task]:
+        return []
+
     async def projects(self) -> list[Project]:
         return self._projects
 
@@ -153,6 +156,9 @@ class BarrierRepository:
         return [Project(id="220", name="Errands")]
 
     async def filtered(self, query: str) -> list[Task]:
+        return []
+
+    async def refresh_filtered(self, query: str) -> list[Task]:
         return []
 
     async def filters(self) -> list[Filter]:

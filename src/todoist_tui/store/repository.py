@@ -37,6 +37,7 @@ class SnapshotTaskRepository:
         self._clock = clock
         self._snapshot: Snapshot | None = None
         self._dirty = False
+        self._filter_cache: dict[str, list[Task]] = {}
         self._lock = asyncio.Lock()
 
     async def _snapshot_now(self) -> Snapshot:
@@ -82,7 +83,14 @@ class SnapshotTaskRepository:
         return [task for task in snapshot.tasks if query.matches(task, today)]
 
     async def filtered(self, query: str) -> list[Task]:
-        return await self._inner.filtered(query)  # server-side eval, live
+        if query not in self._filter_cache:  # cache-first; refresh happens in bg
+            self._filter_cache[query] = await self._inner.filtered(query)
+        return self._filter_cache[query]
+
+    async def refresh_filtered(self, query: str) -> list[Task]:
+        result = await self._inner.filtered(query)  # server-side eval, live
+        self._filter_cache[query] = result
+        return result
 
     async def filters(self) -> list[Filter]:
         return (await self._snapshot_now()).filters
@@ -99,3 +107,4 @@ class SnapshotTaskRepository:
         async with self._lock:  # a concurrent reader must not re-cache stale state
             self._snapshot = None
             self._dirty = True
+            self._filter_cache = {}  # a mutation changes what filters match

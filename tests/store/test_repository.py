@@ -65,6 +65,11 @@ class FakeInner:
         self.filtered_queries.append(query)
         return self._filtered_result
 
+    async def refresh_filtered(  # pragma: no cover - wrapper uses filtered()
+        self, query: str
+    ) -> list[Task]:
+        raise AssertionError("refresh_filtered() is served by the snapshot repo")
+
     async def inbox(self) -> list[Task]:  # pragma: no cover - must not be called
         raise AssertionError("inbox() must be served from the snapshot")
 
@@ -184,6 +189,49 @@ async def test_filtered_delegates_to_inner_server_side() -> None:
     assert [str(t.id) for t in result] == ["hit"]
     assert inner.filtered_queries == ["@work & p1"]
     assert source.snapshot_calls == 0  # results are live, not from the snapshot
+
+
+@pytest.mark.anyio
+async def test_filtered_caches_result_per_query() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_full_delta(_snapshot())), FakeCache(), _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.filtered("a")  # served from cache
+    await repo.filtered("b")
+
+    assert inner.filtered_queries == ["a", "b"]
+
+
+@pytest.mark.anyio
+async def test_refresh_filtered_bypasses_then_updates_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_full_delta(_snapshot())), FakeCache(), _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.refresh_filtered("a")  # forces a fresh fetch
+    await repo.filtered("a")  # now served from the refreshed cache
+
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_complete_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.complete(TaskId("x"))  # a mutation invalidates cached results
+    await repo.filtered("a")
+
+    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio

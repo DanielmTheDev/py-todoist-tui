@@ -56,15 +56,17 @@ Each rung: failing test → minimal green → refactor → `ruff` + `pyright` +
   `uv run pytest -m smoke`.
 - [x] **F8.1 — picker shows names only.** Dropped the dim query subtitle (user
   request). Screen tests still green.
-- [ ] **FA1 — filter result cache (store).** `SnapshotTaskRepository` caches
-  `filtered(query)` results in memory (`dict[query→list[Task]]`); add
-  `refresh_filtered(query)` to the port (force-fetch + update cache); clear the
-  cache in `_invalidate` (complete/undo). Unit tests: cache hit, refresh bypass,
-  invalidation. Update all test fakes for the new port method.
-- [ ] **FA2 — stale-while-revalidate (app).** Track active filter query; on
-  switch show cached instantly then background-refresh + re-render (reuse
-  `_sync_now`, which also `refresh_filtered`s the active filter each tick);
-  clear active query on Today/Inbox. App pilot tests.
+- [x] **FA1 — filter result cache (store).** `SnapshotTaskRepository._filter_cache`
+  (`dict[query→list[Task]]`); `filtered` is cache-first; `refresh_filtered` (new
+  port method) force-fetches + updates; `_invalidate` clears it on complete/undo.
+  `ApiTaskRepository.refresh_filtered` = live (no cache). Done: 3 store tests +
+  fakes updated.
+- [x] **FA2 — stale-while-revalidate (app).** `_active_filter_query`; selecting a
+  filter runs `_open_filter` worker (cached render → `refresh_filtered` → fresh
+  render); `_sync_now` also revalidates the active filter each tick; Today/Inbox
+  clear it. Fixed a worker-cancellation race (single `_open_filter` worker, not
+  switch+sync) and made `_sync_now`/`_open_filter` clear the ⟳ indicator via
+  `finally`. Done: app pilot tests (hammered 20×), reviewer addressed.
 - [ ] **F10 — finalize.** README/help note; final UAT; delete this file.
 
 ## Deferred follow-ups (own tasks, not blocking F10)

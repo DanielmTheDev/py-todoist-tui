@@ -30,6 +30,7 @@ class FakeRepository:
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
+        self.refresh_filtered_queries: list[str] = []
 
     async def today(self) -> list[Task]:
         self.today_calls += 1
@@ -39,6 +40,10 @@ class FakeRepository:
         return list(self._inbox)
 
     async def filtered(self, query: str) -> list[Task]:
+        return list(self._tasks)
+
+    async def refresh_filtered(self, query: str) -> list[Task]:
+        self.refresh_filtered_queries.append(query)
         return list(self._tasks)
 
     async def projects(self) -> list[Project]:
@@ -133,6 +138,50 @@ async def test_f_reports_when_filters_fail_to_load() -> None:
         assert not isinstance(app.screen, FilterScreen)
         status = str(app.query_one("#status", Static).render())
         assert "Failed to load filters: offline" in status
+
+
+@pytest.mark.anyio
+async def test_selecting_filter_revalidates_in_background() -> None:
+    repo = FakeRepository(
+        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert "p1" in repo.refresh_filtered_queries
+        status = str(app.query_one("#status", Static).render())
+        assert "⟳" not in status  # sync indicator cleared after revalidation
+
+
+@pytest.mark.anyio
+async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
+    repo = FakeRepository(
+        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("t")  # back to Today clears the active filter
+        await pilot.pause()
+        repo.refresh_filtered_queries.clear()
+
+        await pilot.press("r")  # force a sync
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert repo.refresh_filtered_queries == []
 
 
 @pytest.mark.anyio
