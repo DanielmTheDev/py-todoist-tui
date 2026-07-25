@@ -112,6 +112,15 @@ def test_view_titles() -> None:
     assert INBOX.title == "Inbox"
 
 
+def test_view_keys_are_stable_identities() -> None:
+    assert TODAY.key == "today"
+    assert INBOX.key == "inbox"
+    assert (
+        filter_view(Filter(id="f1", name="Work", query="@work", order=1)).key
+        == "filter:f1"
+    )
+
+
 class RecordingRepository(FakeRepository):
     def __init__(self, result: list[Task]) -> None:
         super().__init__([], [], [])

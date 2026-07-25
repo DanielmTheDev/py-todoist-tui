@@ -25,14 +25,18 @@ One rung per context; check off as landed. Full design:
       list[GroupHeader | TaskLine]` with multi-label expansion, sort chain,
       stable ties, nested headers. Operates on the `ArrangeRow` Protocol
       (application `TaskRow` satisfies it structurally). 15 unit tests.
-- [ ] **A3 — persistence.** SQLite `arrangement(view_key, spec)` table +
-      `get/save_arrangement` + JSON serde + view-key helper. Tests: round-trip,
-      default-when-absent, per-view isolation.
+- [x] **A3 — persistence.** `store.SqliteArrangementStore` (own `arrangement`
+      table in the cache DB, upsert, JSON serde) behind new domain port
+      `ArrangementStore`. `View.key` is the stable per-view identity
+      (`today` / `inbox` / `filter:<id>`). Tests: round-trip, default-when-absent,
+      per-view isolation, overwrite, parent-dir creation, view keys.
 - [ ] **A4 — render nested groups.** Wire `arrange()` into the render path
       (`app.py:_render`, `views.py`); header rows, composite keys `path|id`,
       indent, completion by extracted id, status indicator. Seed a fixed
-      arrangement to demo. UAT: grouped+sorted view, complete inside a group,
-      cursor sane across rebuild.
+      arrangement to demo. **Also:** add `labels` to `TaskRow` (`load_view`) and
+      persist `Task.labels` in the snapshot-cache `tasks` table (`sqlite.py`
+      `_task_to_row`/`_row_to_task`) so grouping-by-labels survives a cold start.
+      UAT: grouped+sorted view, complete inside a group, cursor sane across rebuild.
 - [ ] **A5 — leader transients.** `g`/`s` transient screens (mirror
       `FilterScreen`), apply + persist, live indicator. UAT: `g p r enter` →
       group Project › Priority; `s d` → sort Due; view switch restores per-view;

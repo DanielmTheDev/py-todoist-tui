@@ -22,19 +22,23 @@ class TaskRow:
 
 @dataclass(frozen=True, slots=True)
 class View:
-    """A named list of tasks and how to fetch it from the repository."""
+    """A named list of tasks and how to fetch it from the repository.
+
+    `key` is a stable identity used to persist this view's arrangement.
+    """
 
     title: str
+    key: str
     fetch: Callable[[TaskRepository], Awaitable[list[Task]]]
 
 
-TODAY = View("Today", lambda repo: repo.today())
-INBOX = View("Inbox", lambda repo: repo.inbox())
+TODAY = View("Today", "today", lambda repo: repo.today())
+INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
 
 
 def filter_view(f: Filter) -> View:
     """A view backed by a saved filter, evaluated server-side by its query."""
-    return View(f.name, lambda repo: repo.filtered(f.query))
+    return View(f.name, f"filter:{f.id}", lambda repo: repo.filtered(f.query))
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:

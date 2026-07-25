@@ -1,9 +1,11 @@
 import asyncio
 import datetime
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -90,6 +92,54 @@ class SqliteSnapshotCache:
             conn.executemany(
                 "INSERT INTO filters (id, name, query, item_order) VALUES (?, ?, ?, ?)",
                 [(f.id, f.name, f.query, f.order) for f in snapshot.filters],
+            )
+            conn.commit()
+
+
+_ARRANGEMENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS arrangement (
+    view_key TEXT PRIMARY KEY, spec TEXT NOT NULL
+);
+"""
+
+
+class SqliteArrangementStore:
+    """Persists each view's group/sort arrangement in SQLite (its own table)."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def get(self, view_key: str) -> Arrangement:
+        return await asyncio.to_thread(self._get, view_key)
+
+    async def save(self, view_key: str, arrangement: Arrangement) -> None:
+        await asyncio.to_thread(self._save, view_key, arrangement)
+
+    def _get(self, view_key: str) -> Arrangement:
+        if not self._path.is_file():
+            return Arrangement()
+        with closing(sqlite3.connect(self._path)) as conn:
+            try:
+                row = conn.execute(
+                    "SELECT spec FROM arrangement WHERE view_key = ?", (view_key,)
+                ).fetchone()
+            except sqlite3.OperationalError:  # table not created yet
+                return Arrangement()
+        if row is None:
+            return Arrangement()
+        try:  # a corrupt or legacy spec falls back to the empty default
+            return Arrangement.from_dict(json.loads(row[0]))
+        except (ValueError, KeyError, TypeError):
+            return Arrangement()
+
+    def _save(self, view_key: str, arrangement: Arrangement) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.executescript(_ARRANGEMENT_SCHEMA)
+            conn.execute(
+                "INSERT INTO arrangement (view_key, spec) VALUES (?, ?)"
+                " ON CONFLICT(view_key) DO UPDATE SET spec = excluded.spec",
+                (view_key, json.dumps(arrangement.to_dict())),
             )
             conn.commit()
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
+from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
@@ -57,3 +58,11 @@ class SnapshotCache(Protocol):
     async def load(self) -> Snapshot | None: ...
 
     async def save(self, snapshot: Snapshot) -> None: ...
+
+
+class ArrangementStore(Protocol):
+    """Persists each view's group/sort arrangement. `get` is empty when unset."""
+
+    async def get(self, view_key: str) -> Arrangement: ...
+
+    async def save(self, view_key: str, arrangement: Arrangement) -> None: ...
