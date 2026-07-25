@@ -14,3 +14,4 @@ class Task:
     priority: Priority
     due: Due | None
     project_id: str
+    labels: tuple[str, ...] = ()

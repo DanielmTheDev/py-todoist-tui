@@ -116,4 +116,5 @@ def _to_task(record: dict[str, Any]) -> Task:
         priority=Priority.from_api(int(record["priority"])),
         due=Due.from_api(due) if due else None,
         project_id=str(record["project_id"]),
+        labels=tuple(str(label) for label in record.get("labels") or ()),
     )

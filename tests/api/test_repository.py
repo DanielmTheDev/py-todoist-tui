@@ -42,6 +42,35 @@ async def test_today_maps_json_to_domain_task() -> None:
     assert task.due is not None
     assert task.due.time == datetime.time(9, 30)
     assert task.project_id == "220"
+    assert task.labels == ()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_maps_labels() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Tagged",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                        "labels": ["home", "urgent"],
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.labels == ("home", "urgent")
 
 
 @pytest.mark.anyio

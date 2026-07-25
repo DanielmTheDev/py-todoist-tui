@@ -35,6 +35,31 @@ def test_task_due_optional() -> None:
     assert task.due is None
 
 
+def test_task_labels_default_empty() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="No labels",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+
+    assert task.labels == ()
+
+
+def test_task_holds_labels() -> None:
+    task = Task(
+        id=TaskId("2"),
+        content="Tagged",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        labels=("home", "urgent"),
+    )
+
+    assert task.labels == ("home", "urgent")
+
+
 def test_project_holds_id_and_name() -> None:
     project = Project(id="220", name="Inbox")
 
