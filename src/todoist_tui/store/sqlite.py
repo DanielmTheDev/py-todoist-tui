@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS meta (sync_token TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (id TEXT, name TEXT, is_inbox INTEGER);
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT, content TEXT, priority INTEGER,
-    due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT
+    due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT,
+    labels TEXT
 );
 CREATE TABLE IF NOT EXISTS filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -56,7 +57,11 @@ class SqliteSnapshotCache:
                     )
                 ]
                 tasks = [
-                    _row_to_task(row) for row in conn.execute("SELECT * FROM tasks")
+                    _row_to_task(row)
+                    for row in conn.execute(
+                        "SELECT id, content, priority, due_date, due_time,"
+                        " due_recurring, project_id, labels FROM tasks"
+                    )
                 ]
                 filters = [
                     Filter(id=fid, name=name, query=query, order=order)
@@ -86,7 +91,7 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox)) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -146,7 +151,7 @@ class SqliteArrangementStore:
 
 def _task_to_row(
     task: Task,
-) -> tuple[str, str, int, str | None, str | None, int | None, str]:
+) -> tuple[str, str, int, str | None, str | None, int | None, str, str]:
     due = task.due
     return (
         task.id,
@@ -156,13 +161,14 @@ def _task_to_row(
         due.time.isoformat() if due and due.time else None,
         int(due.is_recurring) if due else None,
         task.project_id,
+        json.dumps(list(task.labels)),
     )
 
 
 def _row_to_task(
-    row: tuple[str, str, int, str | None, str | None, int | None, str],
+    row: tuple[str, str, int, str | None, str | None, int | None, str, str | None],
 ) -> Task:
-    tid, content, priority, due_date, due_time, due_recurring, project_id = row
+    tid, content, priority, due_date, due_time, due_recurring, project_id, labels = row
     due = None
     if due_date is not None:
         due = Due(
@@ -176,4 +182,5 @@ def _row_to_task(
         priority=Priority(priority),
         due=due,
         project_id=project_id,
+        labels=tuple(json.loads(labels)) if labels else (),
     )

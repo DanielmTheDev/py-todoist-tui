@@ -34,6 +34,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                     is_recurring=True,
                 ),
                 project_id="220",
+                labels=("home", "urgent"),
             ),
             Task(
                 id=TaskId("b"),
@@ -105,6 +106,28 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     loaded = await cache.load()
 
     assert loaded == original
+    assert loaded is not None
+    assert loaded.tasks[0].labels == ("home", "urgent")
+
+
+@pytest.mark.anyio
+async def test_load_returns_none_when_tasks_lack_labels_column(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # legacy cache written before labels existed
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "CREATE TABLE meta (sync_token TEXT NOT NULL);"
+            "CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);"
+            "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
+            " due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT);"
+            "CREATE TABLE filters (id TEXT, name TEXT, query TEXT, item_order INTEGER);"
+            "INSERT INTO meta (sync_token) VALUES ('tok');"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await SqliteSnapshotCache(path).load() is None
 
 
 @pytest.mark.anyio

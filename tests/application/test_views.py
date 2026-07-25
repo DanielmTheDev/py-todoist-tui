@@ -90,6 +90,23 @@ async def test_load_inbox_view_uses_inbox_tasks() -> None:
 
 
 @pytest.mark.anyio
+async def test_load_view_carries_labels() -> None:
+    tagged = Task(
+        id=TaskId("x"),
+        content="Tagged",
+        priority=Priority.P2,
+        due=None,
+        project_id="220",
+        labels=("home", "urgent"),
+    )
+    repo = FakeRepository([tagged], [], [Project(id="220", name="Errands")])
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].labels == ("home", "urgent")
+
+
+@pytest.mark.anyio
 async def test_load_view_missing_project_yields_none_name() -> None:
     repo = FakeRepository(
         [_task("Orphan", "999")], [], [Project(id="220", name="Errands")]

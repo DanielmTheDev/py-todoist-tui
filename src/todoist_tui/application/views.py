@@ -18,6 +18,7 @@ class TaskRow:
     priority: Priority
     due: Due | None
     project_name: str | None
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             priority=task.priority,
             due=task.due,
             project_name=names.get(task.project_id),
+            labels=task.labels,
         )
         for task in tasks
     ]
