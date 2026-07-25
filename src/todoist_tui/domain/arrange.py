@@ -1,0 +1,225 @@
+"""Multi-level grouping and sorting for the task list.
+
+Pure domain logic: `arrange` turns a flat list of rows into an ordered list of
+group headers interleaved with task lines, given an `Arrangement` (a group-by
+chain and a sort-by chain, each capped at three levels). No I/O.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Protocol
+
+from todoist_tui.domain.due import Due
+from todoist_tui.domain.priority import Priority
+
+MAX_LEVELS = 3
+
+_NO_PROJECT = "No project"
+_NO_LABELS = "(no labels)"
+_NO_DUE_DATE = "No due date"
+_NO_DUE_TIME = "No time"
+
+
+class ArrangeRow(Protocol):
+    """The fields `arrange` needs; the application's task view row supplies them."""
+
+    id: Any
+    content: str
+    priority: Priority
+    due: Due | None
+    project_name: str | None
+    labels: tuple[str, ...]
+
+
+# A group bucket's sort position. `present` (0) always orders before "missing"
+# (1), so no-value buckets land last under ascending order.
+_OrderKey = tuple[int, Any]
+
+
+class Field(Enum):
+    """A task attribute that can be grouped or sorted by."""
+
+    PROJECT = "project"
+    PRIORITY = "priority"
+    DUE_DATE = "due_date"
+    DUE_TIME = "due_time"
+    RECURRING = "recurring"
+    CONTENT = "content"
+    LABELS = "labels"
+
+    @property
+    def label(self) -> str:
+        return _FIELD_LABELS[self]
+
+
+_FIELD_LABELS = {
+    Field.PROJECT: "Project",
+    Field.PRIORITY: "Priority",
+    Field.DUE_DATE: "Due date",
+    Field.DUE_TIME: "Due time",
+    Field.RECURRING: "Recurring",
+    Field.CONTENT: "Content",
+    Field.LABELS: "Labels",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _Bucket:
+    order: _OrderKey
+    label: str
+
+
+def _buckets(field: Field, row: ArrangeRow) -> list[_Bucket]:
+    """Group buckets a row belongs to under `field` (usually one; many for labels)."""
+    match field:
+        case Field.PROJECT:
+            name = row.project_name
+            if name is None:
+                return [_Bucket((1, ""), _NO_PROJECT)]
+            return [_Bucket((0, name.lower()), name)]
+        case Field.PRIORITY:
+            return [_Bucket((0, -row.priority.value), row.priority.label)]
+        case Field.RECURRING:
+            recurring = row.due.is_recurring if row.due else False
+            return [
+                _Bucket(
+                    (0 if recurring else 1, ""),
+                    "Recurring" if recurring else "Not recurring",
+                )
+            ]
+        case Field.DUE_DATE:
+            if row.due is None:
+                return [_Bucket((1, 0), _NO_DUE_DATE)]
+            return [_Bucket((0, row.due.date.toordinal()), row.due.date.isoformat())]
+        case Field.DUE_TIME:
+            if row.due is None or row.due.time is None:
+                return [_Bucket((1, 0), _NO_DUE_TIME)]
+            t = row.due.time
+            return [_Bucket((0, t.hour * 60 + t.minute), t.strftime("%H:%M"))]
+        case Field.CONTENT:
+            return [_Bucket((0, row.content.lower()), row.content)]
+        case Field.LABELS:
+            if not row.labels:
+                return [_Bucket((1, ""), _NO_LABELS)]
+            return [_Bucket((0, name.lower()), name) for name in row.labels]
+
+
+def _sort_order(field: Field, row: ArrangeRow) -> _OrderKey:
+    """Leaf sort key for `field` (the first bucket's order; first label for labels)."""
+    return _buckets(field, row)[0].order
+
+
+class _Rev:
+    """Inverts a value's order so a single ascending sort yields descending.
+
+    Wrapping only the *value* (not the presence flag) keeps missing-value rows
+    last in both directions.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __lt__(self, other: _Rev) -> bool:
+        return other.value < self.value
+
+
+@dataclass(frozen=True)
+class SortKey:
+    field: Field
+    ascending: bool = True
+
+
+@dataclass(frozen=True)
+class Arrangement:
+    """A group-by chain and a sort-by chain, each capped at `MAX_LEVELS`."""
+
+    group_by: tuple[Field, ...] = ()
+    sort_by: tuple[SortKey, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.group_by) > MAX_LEVELS:
+            raise ValueError(f"group-by chain exceeds {MAX_LEVELS} levels")
+        if len(self.sort_by) > MAX_LEVELS:
+            raise ValueError(f"sort-by chain exceeds {MAX_LEVELS} levels")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "group_by": [f.value for f in self.group_by],
+            "sort_by": [
+                {"field": s.field.value, "ascending": s.ascending} for s in self.sort_by
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Arrangement:
+        return cls(
+            group_by=tuple(Field(v) for v in data.get("group_by", ())),
+            sort_by=tuple(
+                SortKey(Field(s["field"]), bool(s["ascending"]))
+                for s in data.get("sort_by", ())
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class GroupHeader:
+    level: int
+    label: str
+    field: Field
+
+
+@dataclass(frozen=True)
+class TaskLine[T: ArrangeRow]:
+    level: int
+    row: T
+
+
+type RenderRow[T: ArrangeRow] = GroupHeader | TaskLine[T]
+
+
+def arrange[T: ArrangeRow](
+    rows: list[T], arrangement: Arrangement
+) -> list[RenderRow[T]]:
+    out: list[RenderRow[T]] = []
+    _emit(list(rows), arrangement.group_by, arrangement.sort_by, 0, out)
+    return out
+
+
+def _emit[T: ArrangeRow](
+    rows: list[T],
+    group_by: tuple[Field, ...],
+    sort_by: tuple[SortKey, ...],
+    level: int,
+    out: list[RenderRow[T]],
+) -> None:
+    if not group_by:
+        out.extend(TaskLine(level, row) for row in _sorted(rows, sort_by))
+        return
+    field, rest = group_by[0], group_by[1:]
+    members: dict[str, list[T]] = {}
+    order: dict[str, _OrderKey] = {}
+    for row in rows:
+        for bucket in _buckets(field, row):
+            members.setdefault(bucket.label, []).append(row)
+            order[bucket.label] = bucket.order
+    for label in sorted(members, key=lambda lbl: (order[lbl], lbl)):
+        out.append(GroupHeader(level, label, field))
+        _emit(members[label], rest, sort_by, level + 1, out)
+
+
+def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[T]:
+    def key(row: T) -> tuple[tuple[int, Any], ...]:
+        parts: list[tuple[int, Any]] = []
+        for sort_key in sort_by:
+            present, value = _sort_order(sort_key.field, row)
+            parts.append((present, value if sort_key.ascending else _Rev(value)))
+        # Deterministic tie-break so equal keys never order flakily.
+        parts.append((0, row.content.lower()))
+        parts.append((0, str(row.id)))
+        return tuple(parts)
+
+    return sorted(rows, key=key)

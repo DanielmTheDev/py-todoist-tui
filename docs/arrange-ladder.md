@@ -20,10 +20,11 @@ One rung per context; check off as landed. Full design:
 - [x] **A1 — labels in domain.** `Task.labels: tuple[str, ...]` (+parser).
       Tests: domain default-empty + holds-labels; api maps labels + empty when
       absent. Non-behavioral (no UAT).
-- [ ] **A2 — `arrange()` core.** `domain/arrange.py`: `Field`, `SortKey`,
+- [x] **A2 — `arrange()` core.** `domain/arrange.py`: `Field`, `SortKey`,
       `Arrangement` (3-cap + dict serde), pure `arrange(rows, arrangement) ->
-      list[RenderRow]` with multi-label expansion, sort chain, stable ties,
-      nested headers. Heavy unit tests. No UI.
+      list[GroupHeader | TaskLine]` with multi-label expansion, sort chain,
+      stable ties, nested headers. Operates on the `ArrangeRow` Protocol
+      (application `TaskRow` satisfies it structurally). 15 unit tests.
 - [ ] **A3 — persistence.** SQLite `arrangement(view_key, spec)` table +
       `get/save_arrangement` + JSON serde + view-key helper. Tests: round-trip,
       default-when-absent, per-view isolation.
