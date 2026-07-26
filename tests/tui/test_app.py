@@ -4,13 +4,14 @@ import datetime
 import pytest
 from textual.widgets import DataTable, Footer, Static
 
-from todoist_tui.domain.arrange import Arrangement, Field
+from todoist_tui.domain.arrange import Arrangement, Field, SortKey
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
+from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 
 
@@ -805,3 +806,201 @@ async def test_pressing_t_switches_back_to_today() -> None:
         table = app.query_one(DataTable[object])
         assert table.get_row_at(0)[2] == "Today thing"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
+
+
+def _two_project_repo() -> FakeRepository:
+    return FakeRepository(
+        [_row("w1", "220"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+
+
+@pytest.mark.anyio
+async def test_g_opens_the_group_transient() -> None:
+    app = TodoistApp(_two_project_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+        assert isinstance(app.screen, ArrangeScreen)
+
+
+@pytest.mark.anyio
+async def test_g_then_field_keys_group_the_list_and_persist() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")  # group by Project
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        col2 = _col2(app.query_one(DataTable[object]))
+        assert any("▾" in c and "Home" in c for c in col2)
+        assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
+
+
+@pytest.mark.anyio
+async def test_s_appends_then_toggles_sort_direction() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press("d")  # sort by Due date (ascending)
+        await pilot.press("d")  # tapping again flips to descending
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement(
+            sort_by=(SortKey(Field.DUE_DATE, ascending=False),)
+        )
+
+
+@pytest.mark.anyio
+async def test_escape_cancels_without_changing_arrangement() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ArrangeScreen)
+        assert await store.get("today") == Arrangement()
+
+
+@pytest.mark.anyio
+async def test_group_chain_capped_at_three_levels() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        for key in ("p", "r", "d", "t"):  # four fields; the fourth is ignored
+            await pilot.press(key)
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert len((await store.get("today")).group_by) == 3
+
+
+@pytest.mark.anyio
+async def test_backspace_removes_last_group_field() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")  # Project
+        await pilot.press("r")  # Priority
+        await pilot.press("backspace")  # drop Priority
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
+
+
+@pytest.mark.anyio
+async def test_capital_g_clears_the_group_chain() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.press("r")
+        await pilot.press("G")  # clear
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement()
+
+
+@pytest.mark.anyio
+async def test_group_ignores_a_duplicate_field() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.press("p")  # duplicate: ignored
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
+
+
+@pytest.mark.anyio
+async def test_arrange_saves_to_the_view_it_was_opened_for() -> None:
+    store = InMemoryArrangements()
+    repo = FakeRepository(
+        [_row("w1", "220")], [Project(id="220", name="Work")], inbox=[_row("i1", "220")]
+    )
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.press("enter")  # schedules the apply worker for Today
+        await pilot.press("i")  # switch to Inbox before it runs
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
+        assert await store.get("inbox") == Arrangement()  # untouched
+
+
+@pytest.mark.anyio
+async def test_arrangement_is_restored_per_view() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220")],
+        [Project(id="220", name="Work")],
+        inbox=[_row("i1", "220")],
+    )
+    app = TodoistApp(repo, arrangements=InMemoryArrangements())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")  # group Today by project
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        await pilot.press("i")  # Inbox has no arrangement → flat
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert not any("▾" in c for c in _col2(app.query_one(DataTable[object])))
+
+        await pilot.press("t")  # back to Today → its grouping returns
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert any("▾" in c for c in _col2(app.query_one(DataTable[object])))

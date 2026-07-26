@@ -21,6 +21,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.task import TaskId
+from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.filters import FilterScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
@@ -62,6 +63,8 @@ class TodoistApp(App[None]):
         ("t", "view_today", "Today"),
         ("i", "view_inbox", "Inbox"),
         ("f", "view_filters", "Filters"),
+        ("g", "arrange_group", "Group"),
+        ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
     ]
     SYNC_INTERVAL: ClassVar[float] = _SYNC_INTERVAL_SECONDS
@@ -108,6 +111,25 @@ class TodoistApp(App[None]):
 
     def action_refresh(self) -> None:
         self._sync_now()
+
+    def action_arrange_group(self) -> None:
+        self._open_arrange("group")
+
+    def action_arrange_sort(self) -> None:
+        self._open_arrange("sort")
+
+    def _open_arrange(self, mode: Mode) -> None:
+        self.push_screen(ArrangeScreen(self._arrangement, mode), self._on_arranged)
+
+    def _on_arranged(self, arrangement: Arrangement | None) -> None:
+        if arrangement is None:  # transient cancelled
+            return
+        self.run_worker(self._apply_arrangement(self._view, arrangement))
+
+    async def _apply_arrangement(self, view: View, arrangement: Arrangement) -> None:
+        await self._arrangements.save(view.key, arrangement)
+        if self._view is view:  # user may have switched away before this ran
+            await self._reload(view)  # picks the saved arrangement back up
 
     def action_view_today(self) -> None:
         self._active_filter_query = None

@@ -39,10 +39,12 @@ One rung per context; check off as landed. Full design:
       headers inert; status line shows `Group: … Sort: …`. Arrangement injected
       via `ArrangementStore` (in-memory default; `__main__` wires the SQLite
       store). Multi-label tasks render under each label.
-- [ ] **A5 — leader transients.** `g`/`s` transient screens (mirror
-      `FilterScreen`), apply + persist, live indicator. UAT: `g p r enter` →
-      group Project › Priority; `s d` → sort Due; view switch restores per-view;
-      restart persists.
+- [x] **A5 — leader transients.** `ArrangeScreen` (mirrors `FilterScreen`):
+      `g` builds the group chain, `s` the sort chain; field keys
+      p/r/d/t/u/c/l, `⌫` pops, `G`/`S` clears, enter applies, esc cancels;
+      sort re-tap toggles ↑/↓; capped at 3. Apply persists via
+      `ArrangementStore.save(view.key)` then reloads. Per-view restore on
+      switch; SQLite store makes it survive restart.
 
 ## Out of scope (future)
 - Group fold/collapse.
