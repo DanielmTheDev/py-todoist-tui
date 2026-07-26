@@ -30,13 +30,15 @@ One rung per context; check off as landed. Full design:
       `ArrangementStore`. `View.key` is the stable per-view identity
       (`today` / `inbox` / `filter:<id>`). Tests: round-trip, default-when-absent,
       per-view isolation, overwrite, parent-dir creation, view keys.
-- [ ] **A4 — render nested groups.** Wire `arrange()` into the render path
-      (`app.py:_render`, `views.py`); header rows, composite keys `path|id`,
-      indent, completion by extracted id, status indicator. Seed a fixed
-      arrangement to demo. **Also:** add `labels` to `TaskRow` (`load_view`) and
-      persist `Task.labels` in the snapshot-cache `tasks` table (`sqlite.py`
-      `_task_to_row`/`_row_to_task`) so grouping-by-labels survives a cold start.
-      UAT: grouped+sorted view, complete inside a group, cursor sane across rebuild.
+- [x] **A4a — labels through data path.** `TaskRow.labels` (populated in
+      `load_view`) + `labels` column in the snapshot-cache `tasks` table
+      (JSON); explicit-column read so a pre-labels cache is treated as cold.
+- [x] **A4b — render nested groups.** `arrange()` wired into `_reload`/`_render`;
+      group-header rows (`▾ label`, indented) + task lines with typed row keys
+      (`h:i` / `t:i:id`); completion & cursor resolve the task id from the key,
+      headers inert; status line shows `Group: … Sort: …`. Arrangement injected
+      via `ArrangementStore` (in-memory default; `__main__` wires the SQLite
+      store). Multi-label tasks render under each label.
 - [ ] **A5 — leader transients.** `g`/`s` transient screens (mirror
       `FilterScreen`), apply + persist, live indicator. UAT: `g p r enter` →
       group Project › Priority; `s d` → sort Due; view switch restores per-view;

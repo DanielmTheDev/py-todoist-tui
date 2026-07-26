@@ -4,12 +4,13 @@ import datetime
 import pytest
 from textual.widgets import DataTable, Footer, Static
 
+from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.tui.app import TaskTable, TodoistApp
+from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.filters import FilterScreen
 
 
@@ -627,6 +628,99 @@ def _row(content: str, project_id: str = "220") -> Task:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id=project_id,
     )
+
+
+async def _grouped_by_project() -> InMemoryArrangements:
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.PROJECT,)))
+    return store
+
+
+def _col2(table: DataTable[object]) -> list[str]:
+    return [str(table.get_row_at(i)[2]) for i in range(table.row_count)]
+
+
+@pytest.mark.anyio
+async def test_grouping_renders_headers_and_tasks() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        col2 = _col2(app.query_one(DataTable[object]))
+
+        assert any("▾" in c and "Home" in c for c in col2)
+        assert any("▾" in c and "Work" in c for c in col2)
+        assert any(c.strip() == "h1" for c in col2)
+        assert any(c.strip() == "w1" for c in col2)
+        # Home group sorts before Work; its header leads
+        assert col2[0].endswith("Home")
+
+
+@pytest.mark.anyio
+async def test_status_shows_arrangement_summary() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "Group: Project" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_e_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "▾" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        await pilot.press("e")
+        await pilot.pause()
+        assert repo.completed == []  # header rows are inert
+
+
+@pytest.mark.anyio
+async def test_e_on_a_task_under_a_header_completes_it() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("j")  # move off the header onto the task
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("w1")]
+
+
+@pytest.mark.anyio
+async def test_label_grouping_lists_task_under_each_label() -> None:
+    tagged = Task(
+        id=TaskId("rent"),
+        content="Pay rent",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+        labels=("home", "urgent"),
+    )
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.LABELS,)))
+    repo = FakeRepository([tagged], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        col2 = _col2(app.query_one(DataTable[object]))
+
+        assert sum(1 for c in col2 if c.strip() == "Pay rent") == 2  # once per label
+        assert any("home" in c and "▾" in c for c in col2)
+        assert any("urgent" in c and "▾" in c for c in col2)
 
 
 @pytest.mark.anyio

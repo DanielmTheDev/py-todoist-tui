@@ -23,14 +23,23 @@ _NO_DUE_TIME = "No time"
 
 
 class ArrangeRow(Protocol):
-    """The fields `arrange` needs; the application's task view row supplies them."""
+    """The fields `arrange` needs; the application's task view row supplies them.
 
-    id: Any
-    content: str
-    priority: Priority
-    due: Due | None
-    project_name: str | None
-    labels: tuple[str, ...]
+    Read-only members so a frozen dataclass (e.g. `TaskRow`) satisfies it.
+    """
+
+    @property
+    def id(self) -> Any: ...
+    @property
+    def content(self) -> str: ...
+    @property
+    def priority(self) -> Priority: ...
+    @property
+    def due(self) -> Due | None: ...
+    @property
+    def project_name(self) -> str | None: ...
+    @property
+    def labels(self) -> tuple[str, ...]: ...
 
 
 # A group bucket's sort position. `present` (0) always orders before "missing"

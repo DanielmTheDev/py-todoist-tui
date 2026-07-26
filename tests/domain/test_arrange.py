@@ -7,6 +7,7 @@ from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
     GroupHeader,
+    RenderRow,
     SortKey,
     TaskLine,
     arrange,
@@ -29,14 +30,13 @@ def _date(y: int, m: int, d: int) -> Due:
     return Due(date=datetime.date(y, m, d))
 
 
-def _shape(rows: object) -> list[tuple[str, int, str]]:
+def _shape(rows: list[RenderRow[Row]]) -> list[tuple[str, int, str]]:
     """Flatten arrange() output to (kind, level, label) for easy assertions."""
     out: list[tuple[str, int, str]] = []
-    assert isinstance(rows, list)
     for r in rows:
         if isinstance(r, GroupHeader):
             out.append(("H", r.level, r.label))
-        elif isinstance(r, TaskLine):
+        else:
             out.append(("T", r.level, r.row.content))
     return out
 

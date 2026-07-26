@@ -16,15 +16,30 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
 )
+from todoist_tui.domain.arrange import Arrangement, GroupHeader, RenderRow, arrange
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
-from todoist_tui.domain.repository import TaskRepository
+from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.filters import FilterScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _COLUMNS = ("", "Time", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
+_INDENT = "  "  # per nesting level, for group headers and their tasks
+
+
+class InMemoryArrangements:
+    """Session-only arrangement store (the default when none is injected)."""
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, Arrangement] = {}
+
+    async def get(self, view_key: str) -> Arrangement:
+        return self._by_key.get(view_key, Arrangement())
+
+    async def save(self, view_key: str, arrangement: Arrangement) -> None:
+        self._by_key[view_key] = arrangement
 
 
 class TaskTable(DataTable[object]):
@@ -51,9 +66,13 @@ class TodoistApp(App[None]):
     ]
     SYNC_INTERVAL: ClassVar[float] = _SYNC_INTERVAL_SECONDS
 
-    def __init__(self, repo: TaskRepository) -> None:
+    def __init__(
+        self, repo: TaskRepository, arrangements: ArrangementStore | None = None
+    ) -> None:
         super().__init__()
         self._repo = repo
+        self._arrangements = arrangements or InMemoryArrangements()
+        self._arrangement = Arrangement()  # current view's group/sort
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
@@ -146,11 +165,13 @@ class TodoistApp(App[None]):
         if table.row_count == 0:
             return
         row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        task_id = TaskId(str(row_key.value))
+        task_id = _task_id_of(str(row_key.value))
+        if task_id is None:  # cursor is on a group header: nothing to complete
+            return
         cells = table.get_row(row_key)  # kept to restore the row on undo
         table.remove_row(row_key)  # optimistic: drop it now, sync in the background
-        self._set_status(_count_status(self._view.title, table.row_count))
-        self._complete(task_id, cells)
+        self._set_status(_count_status(self._view.title, _visible_task_count(table)))
+        self._complete(TaskId(task_id), cells)
 
     @work
     async def _complete(self, task_id: TaskId, cells: list[object]) -> None:
@@ -169,8 +190,8 @@ class TodoistApp(App[None]):
         task_id, cells = self._last_undo
         self._last_undo = None  # single-level: each undo reverses one close
         table = self.query_one(TaskTable)
-        table.add_row(*cells, key=str(task_id))  # optimistic; lands at the end
-        self._set_status(_count_status(self._view.title, table.row_count))
+        table.add_row(*cells, key=_task_key(table.row_count, task_id))  # lands at end
+        self._set_status(_count_status(self._view.title, _visible_task_count(table)))
         self._uncomplete(task_id)
 
     @work
@@ -189,32 +210,41 @@ class TodoistApp(App[None]):
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
             return
-        self._render(rows, view)  # rows and title stay from the same view
+        self._arrangement = await self._arrangements.get(view.key)
+        self._render(arrange(rows, self._arrangement), view)
 
-    def _render(self, rows: list[TaskRow], view: View) -> None:
+    def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:
         try:
             table = self.query_one(TaskTable)
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
-        prior = self._cursor_row_key(table)  # survive the clear+rebuild below
+        prior = self._cursor_task_id(table)  # survive the clear+rebuild below
         table.clear()
-        ids = [str(row.id) for row in rows]
-        for row in rows:
+        first_row_of: dict[str, int] = {}
+        task_ids: set[str] = set()
+        for index, item in enumerate(render_rows):
+            if isinstance(item, GroupHeader):
+                table.add_row("", "", _header_text(item), "", key=_header_key(index))
+                continue
+            row = item.row
             table.add_row(
                 _priority_dot(row.priority),
                 _format_time(row),
-                row.content,
+                _indent(item.level) + row.content,
                 Text(row.project_name, style="dim") if row.project_name else "",
-                key=str(row.id),
+                key=_task_key(index, row.id),
             )
-        if prior in ids:  # keep the highlight on the same task across a resync
-            table.move_cursor(row=ids.index(prior))
-        self._set_status(_count_status(view.title, len(rows)))
+            first_row_of.setdefault(str(row.id), index)
+            task_ids.add(str(row.id))
+        if prior is not None and prior in first_row_of:
+            table.move_cursor(row=first_row_of[prior])  # keep highlight on the task
+        self._set_status(_count_status(view.title, len(task_ids)))
 
-    def _cursor_row_key(self, table: TaskTable) -> str | None:
+    def _cursor_task_id(self, table: TaskTable) -> str | None:
         if table.row_count == 0:
             return None
-        return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        key = str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        return _task_id_of(key)
 
     def _set_status(self, message: str) -> None:
         self._status_base = message
@@ -229,12 +259,56 @@ class TodoistApp(App[None]):
             status = self.query_one("#status", Static)
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
+        summary = _arrangement_summary(self._arrangement)
         marker = "  ⟳" if self._syncing else ""
-        status.update(f"{self._status_base}{marker}")
+        status.update(f"{self._status_base}{summary}{marker}")
 
 
 def _count_status(title: str, count: int) -> str:
     return f"{title} · no tasks" if count == 0 else f"{title} · {count} task(s)"
+
+
+def _header_text(header: GroupHeader) -> str:
+    return f"{_indent(header.level)}▾ {header.label}"
+
+
+def _indent(level: int) -> str:
+    return _INDENT * level
+
+
+def _header_key(index: int) -> str:
+    return f"h:{index}"
+
+
+def _task_key(index: int, task_id: str) -> str:
+    return f"t:{index}:{task_id}"
+
+
+def _task_id_of(row_key: str) -> str | None:
+    """The task id encoded in a row key, or None for a group-header row."""
+    if row_key.startswith("t:"):
+        return row_key.split(":", 2)[2]
+    return None
+
+
+def _visible_task_count(table: TaskTable) -> int:
+    ids = {_task_id_of(str(key.value)) for key in table.rows}
+    ids.discard(None)
+    return len(ids)
+
+
+def _arrangement_summary(arrangement: Arrangement) -> str:
+    parts: list[str] = []
+    if arrangement.group_by:
+        fields = " › ".join(f.label for f in arrangement.group_by)
+        parts.append(f"Group: {fields}")
+    if arrangement.sort_by:
+        keys = " › ".join(
+            f"{s.field.label} {'↑' if s.ascending else '↓'}"
+            for s in arrangement.sort_by
+        )
+        parts.append(f"Sort: {keys}")
+    return "   ·   " + "    ".join(parts) if parts else ""
 
 
 def _priority_dot(priority: Priority) -> str:
