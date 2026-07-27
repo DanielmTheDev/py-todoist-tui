@@ -56,14 +56,15 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
 
     def on_key(self, event: events.Key) -> None:
         key = event.key
+        clear_char = "G" if self._mode == "group" else "S"
         if key == "enter":
             self.dismiss(self._result())
         elif key == "escape":
             self.dismiss(None)
         elif key == "backspace":
             self._pop()
-        elif key == ("G" if self._mode == "group" else "S"):
-            self._clear()
+        elif key == "ctrl+u" or event.character == clear_char:
+            self._clear()  # match the char, not a key name, so shift+G is reliable
         elif key in _FIELD_KEYS:
             self._add(_FIELD_KEYS[key])
         event.stop()  # consume every key so app bindings never fire under the modal
@@ -113,7 +114,7 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
         clear = "shift+G" if self._mode == "group" else "shift+S"
         return (
             f"{title}:  {chain}\n\n{_HINT}\n\n"
-            f"enter=apply  esc=cancel  ⌫=remove last  {clear}=clear"
+            f"enter=apply  esc=cancel  ⌫=remove last  {clear}/ctrl+u=clear"
         )
 
 
