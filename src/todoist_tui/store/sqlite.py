@@ -13,15 +13,21 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.task import Task, TaskId
 
+# Dropped and recreated on every save: the snapshot is disposable and fully
+# rewritten each time, so this also migrates any older column layout in place.
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS meta (sync_token TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS projects (id TEXT, name TEXT, is_inbox INTEGER);
-CREATE TABLE IF NOT EXISTS tasks (
+DROP TABLE IF EXISTS meta;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS filters;
+CREATE TABLE meta (sync_token TEXT NOT NULL);
+CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);
+CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT,
     labels TEXT
 );
-CREATE TABLE IF NOT EXISTS filters (
+CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
 );
 """
@@ -78,11 +84,7 @@ class SqliteSnapshotCache:
     def _save(self, snapshot: Snapshot) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self._path)) as conn:
-            conn.executescript(_SCHEMA)
-            conn.execute("DELETE FROM meta")
-            conn.execute("DELETE FROM projects")
-            conn.execute("DELETE FROM tasks")
-            conn.execute("DELETE FROM filters")
+            conn.executescript(_SCHEMA)  # drops + recreates the four tables
             conn.execute(
                 "INSERT INTO meta (sync_token) VALUES (?)", (snapshot.sync_token,)
             )

@@ -111,6 +111,28 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_save_migrates_a_legacy_tasks_schema(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # pre-labels cache: tasks has only 7 columns
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "CREATE TABLE meta (sync_token TEXT NOT NULL);"
+            "CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);"
+            "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
+            " due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT);"
+            "CREATE TABLE filters (id TEXT, name TEXT, query TEXT, item_order INTEGER);"
+            "INSERT INTO meta (sync_token) VALUES ('old');"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    await SqliteSnapshotCache(path).save(_snapshot())  # must not raise on 8 values
+
+    assert await SqliteSnapshotCache(path).load() == _snapshot()
+
+
+@pytest.mark.anyio
 async def test_load_returns_none_when_tasks_lack_labels_column(tmp_path: Path) -> None:
     path = tmp_path / "cache.sqlite3"  # legacy cache written before labels existed
     conn = sqlite3.connect(path)
