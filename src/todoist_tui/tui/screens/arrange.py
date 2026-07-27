@@ -63,7 +63,7 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
             self.dismiss(None)
         elif key == "backspace":
             self._pop()
-        elif key == "ctrl+u" or event.character == clear_char:
+        elif event.character == clear_char:
             self._clear()  # match the char, not a key name, so shift+G is reliable
         elif key in _FIELD_KEYS:
             self._add(_FIELD_KEYS[key])
@@ -114,7 +114,7 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
         clear = "shift+G" if self._mode == "group" else "shift+S"
         return (
             f"{title}:  {chain}\n\n{_HINT}\n\n"
-            f"enter=apply  esc=cancel  ⌫=remove last  {clear}/ctrl+u=clear"
+            f"enter=apply  esc=cancel  ⌫=remove last  {clear}=clear"
         )
 
 

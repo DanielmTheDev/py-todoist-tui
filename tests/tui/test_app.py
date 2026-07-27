@@ -944,8 +944,7 @@ async def test_backspace_removes_last_group_field() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("clear_key", ["G", "ctrl+u"])
-async def test_clearing_empties_the_group_chain(clear_key: str) -> None:
+async def test_shift_g_clears_the_group_chain() -> None:
     store = InMemoryArrangements()
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
@@ -955,7 +954,7 @@ async def test_clearing_empties_the_group_chain(clear_key: str) -> None:
         await pilot.pause()
         await pilot.press("p")
         await pilot.press("r")
-        await pilot.press(clear_key)  # shift+G or ctrl+u
+        await pilot.press("G")  # shift+G clears
         await pilot.press("enter")
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
