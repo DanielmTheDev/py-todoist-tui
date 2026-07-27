@@ -900,6 +900,31 @@ async def test_group_chain_capped_at_three_levels() -> None:
 
 
 @pytest.mark.anyio
+async def test_transient_hint_shows_field_keys_as_literal_text() -> None:
+    app = TodoistApp(_two_project_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+        hint = str(app.screen.query_one("#arrange", Static).render())
+        assert "[p] Project" in hint  # not swallowed as Rich markup
+
+
+@pytest.mark.anyio
+async def test_keys_do_not_leak_to_app_bindings_under_the_transient() -> None:
+    app = TodoistApp(_two_project_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("g")  # must not stack a second transient
+        await pilot.press("f")  # must not open the filter picker underneath
+        await pilot.pause()
+        assert len([s for s in app.screen_stack if isinstance(s, ArrangeScreen)]) == 1
+        assert not any(isinstance(s, FilterScreen) for s in app.screen_stack)
+
+
+@pytest.mark.anyio
 async def test_backspace_removes_last_group_field() -> None:
     store = InMemoryArrangements()
     app = TodoistApp(_two_project_repo(), arrangements=store)

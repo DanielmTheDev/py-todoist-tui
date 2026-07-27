@@ -51,21 +51,22 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
         self._sort: list[SortKey] = list(arrangement.sort_by)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._text(), id="arrange")
+        # markup=False: field-key hints like "[p]" are literal text, not Rich tags.
+        yield Static(self._text(), id="arrange", markup=False)
 
     def on_key(self, event: events.Key) -> None:
         key = event.key
         if key == "enter":
             self.dismiss(self._result())
+        elif key == "escape":
+            self.dismiss(None)
         elif key == "backspace":
             self._pop()
         elif key == ("G" if self._mode == "group" else "S"):
             self._clear()
         elif key in _FIELD_KEYS:
             self._add(_FIELD_KEYS[key])
-        else:
-            return  # let escape (and anything else) fall through to bindings
-        event.stop()
+        event.stop()  # consume every key so app bindings never fire under the modal
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -109,7 +110,7 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
     def _text(self) -> str:
         title = "Group by" if self._mode == "group" else "Sort by"
         chain = _chain_text(self._group if self._mode == "group" else self._sort)
-        clear = "G" if self._mode == "group" else "S"
+        clear = "shift+G" if self._mode == "group" else "shift+S"
         return (
             f"{title}:  {chain}\n\n{_HINT}\n\n"
             f"enter=apply  esc=cancel  ⌫=remove last  {clear}=clear"
