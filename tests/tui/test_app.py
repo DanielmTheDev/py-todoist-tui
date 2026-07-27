@@ -963,7 +963,7 @@ async def test_shift_g_clears_the_group_chain() -> None:
 
 
 @pytest.mark.anyio
-async def test_group_ignores_a_duplicate_field() -> None:
+async def test_re_tapping_a_group_field_flips_its_direction() -> None:
     store = InMemoryArrangements()
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
@@ -971,8 +971,29 @@ async def test_group_ignores_a_duplicate_field() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.press("g")
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.press("p")  # duplicate: ignored
+        await pilot.press("p")  # Project ascending
+        await pilot.press("p")  # re-tap → descending
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert await store.get("today") == Arrangement(
+            group_by=(Field.PROJECT,), group_desc=frozenset({Field.PROJECT})
+        )
+
+
+@pytest.mark.anyio
+async def test_re_tapping_a_group_field_twice_returns_to_ascending() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("p")  # asc
+        await pilot.press("p")  # desc
+        await pilot.press("p")  # asc again
         await pilot.press("enter")
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]

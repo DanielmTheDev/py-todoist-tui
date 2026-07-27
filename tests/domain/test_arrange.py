@@ -187,6 +187,22 @@ def test_group_by_project_none_bucket_last() -> None:
     assert labels == ["Work", "No project"]
 
 
+def test_group_by_project_descending_reverses_order_but_keeps_missing_last() -> None:
+    rows = [
+        Row("1", "w", project_name="Work"),
+        Row("2", "h", project_name="Home"),
+        Row("3", "orphan", project_name=None),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PROJECT,), group_desc=frozenset({Field.PROJECT})),
+    )
+
+    headers = [lbl for kind, _, lbl in _shape(result) if kind == "H"]
+    assert headers == ["Work", "Home", "No project"]  # Z→A, missing still last
+
+
 def test_group_by_priority_orders_p1_first() -> None:
     rows = [Row("1", "low", Priority.P4), Row("2", "top", Priority.P1)]
 
@@ -277,6 +293,7 @@ def test_sort_by_rejects_more_than_three_levels() -> None:
 def test_arrangement_dict_round_trip() -> None:
     arrangement = Arrangement(
         group_by=(Field.PROJECT, Field.LABELS),
+        group_desc=frozenset({Field.LABELS}),
         sort_by=(SortKey(Field.DUE_DATE), SortKey(Field.PRIORITY, ascending=False)),
     )
 

@@ -47,8 +47,13 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
         super().__init__()
         self._base = arrangement
         self._mode: Mode = mode
-        self._group: list[Field] = list(arrangement.group_by)
-        self._sort: list[SortKey] = list(arrangement.sort_by)
+        # Both modes are the same shape: an ordered field+direction chain.
+        if mode == "group":
+            self._chain = [
+                SortKey(f, arrangement.group_ascending(f)) for f in arrangement.group_by
+            ]
+        else:
+            self._chain = list(arrangement.sort_by)
 
     def compose(self) -> ComposeResult:
         # markup=False: field-key hints like "[p]" are literal text, not Rich tags.
@@ -73,59 +78,53 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
         self.dismiss(None)
 
     def _add(self, field: Field) -> None:
-        if self._mode == "group":
-            if field not in self._group and len(self._group) < MAX_LEVELS:
-                self._group.append(field)
-        else:
-            existing = next((s for s in self._sort if s.field is field), None)
-            if existing is not None:  # tapping a chosen field flips its direction
-                self._sort = [
-                    SortKey(field, not s.ascending) if s is existing else s
-                    for s in self._sort
-                ]
-            elif len(self._sort) < MAX_LEVELS:
-                self._sort.append(SortKey(field))
+        existing = next((s for s in self._chain if s.field is field), None)
+        if existing is not None:  # tapping a chosen field flips its direction
+            self._chain = [
+                SortKey(field, not s.ascending) if s is existing else s
+                for s in self._chain
+            ]
+        elif len(self._chain) < MAX_LEVELS:
+            self._chain.append(SortKey(field))
         self._refresh()
 
     def _pop(self) -> None:
-        chain = self._group if self._mode == "group" else self._sort
-        if chain:
-            chain.pop()
+        if self._chain:
+            self._chain.pop()
         self._refresh()
 
     def _clear(self) -> None:
-        if self._mode == "group":
-            self._group.clear()
-        else:
-            self._sort.clear()
+        self._chain.clear()
         self._refresh()
 
     def _result(self) -> Arrangement:
         if self._mode == "group":
-            return Arrangement(group_by=tuple(self._group), sort_by=self._base.sort_by)
-        return Arrangement(group_by=self._base.group_by, sort_by=tuple(self._sort))
+            return Arrangement(
+                group_by=tuple(s.field for s in self._chain),
+                group_desc=frozenset(s.field for s in self._chain if not s.ascending),
+                sort_by=self._base.sort_by,
+            )
+        return Arrangement(
+            group_by=self._base.group_by,
+            group_desc=self._base.group_desc,
+            sort_by=tuple(self._chain),
+        )
 
     def _refresh(self) -> None:
         self.query_one("#arrange", Static).update(self._text())
 
     def _text(self) -> str:
         title = "Group by" if self._mode == "group" else "Sort by"
-        chain = _chain_text(self._group if self._mode == "group" else self._sort)
+        chain = _chain_text(self._chain)
         clear = "shift+G" if self._mode == "group" else "shift+S"
         return (
             f"{title}:  {chain}\n\n{_HINT}\n\n"
-            f"enter=apply  esc=cancel  ⌫=remove last  {clear}=clear"
+            f"enter=apply  tap a chosen field again = flip ↑/↓\n"
+            f"esc=cancel  ⌫=remove last  {clear}=clear"
         )
 
 
-def _chain_text(chain: list[Field] | list[SortKey]) -> str:
+def _chain_text(chain: list[SortKey]) -> str:
     if not chain:
         return "(none)"
-    return " › ".join(_step_label(step) for step in chain)
-
-
-def _step_label(step: Field | SortKey) -> str:
-    if isinstance(step, Field):
-        return step.label
-    arrow = "↑" if step.ascending else "↓"
-    return f"{step.field.label} {arrow}"
+    return " › ".join(f"{s.field.label} {'↑' if s.ascending else '↓'}" for s in chain)

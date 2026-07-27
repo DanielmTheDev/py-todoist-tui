@@ -329,7 +329,10 @@ def _visible_task_count(table: TaskTable) -> int:
 def _arrangement_summary(arrangement: Arrangement) -> str:
     parts: list[str] = []
     if arrangement.group_by:
-        fields = " › ".join(f.label for f in arrangement.group_by)
+        fields = " › ".join(
+            f"{f.label} {'↑' if arrangement.group_ascending(f) else '↓'}"
+            for f in arrangement.group_by
+        )
         parts.append(f"Group: {fields}")
     if arrangement.sort_by:
         keys = " › ".join(

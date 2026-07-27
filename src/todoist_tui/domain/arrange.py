@@ -136,6 +136,15 @@ class _Rev:
         return other.value < self.value
 
 
+def _bucket_order(
+    order: _OrderKey, label: str, ascending: bool
+) -> tuple[int, Any, str]:
+    # Presence flag stays ascending (missing buckets last in both directions);
+    # only the value flips for descending. Label is a stable final tie-break.
+    present, value = order
+    return (present, value if ascending else _Rev(value), label)
+
+
 @dataclass(frozen=True)
 class SortKey:
     field: Field
@@ -148,6 +157,7 @@ class Arrangement:
 
     group_by: tuple[Field, ...] = ()
     sort_by: tuple[SortKey, ...] = ()
+    group_desc: frozenset[Field] = frozenset()  # group fields ordered descending
 
     def __post_init__(self) -> None:
         if len(self.group_by) > MAX_LEVELS:
@@ -155,9 +165,13 @@ class Arrangement:
         if len(self.sort_by) > MAX_LEVELS:
             raise ValueError(f"sort-by chain exceeds {MAX_LEVELS} levels")
 
+    def group_ascending(self, field: Field) -> bool:
+        return field not in self.group_desc
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "group_by": [f.value for f in self.group_by],
+            "group_desc": [f.value for f in self.group_by if f in self.group_desc],
             "sort_by": [
                 {"field": s.field.value, "ascending": s.ascending} for s in self.sort_by
             ],
@@ -167,6 +181,7 @@ class Arrangement:
     def from_dict(cls, data: dict[str, Any]) -> Arrangement:
         return cls(
             group_by=tuple(Field(v) for v in data.get("group_by", ())),
+            group_desc=frozenset(Field(v) for v in data.get("group_desc", ())),
             sort_by=tuple(
                 SortKey(Field(s["field"]), bool(s["ascending"]))
                 for s in data.get("sort_by", ())
@@ -195,23 +210,24 @@ def arrange[T: ArrangeRow](
     rows: list[T], arrangement: Arrangement
 ) -> list[RenderRow[T]]:
     out: list[RenderRow[T]] = []
-    _emit(list(rows), arrangement.group_by, arrangement.sort_by, 0, out)
+    _emit(list(rows), arrangement, 0, out)
     return out
 
 
 def _emit[T: ArrangeRow](
     rows: list[T],
-    group_by: tuple[Field, ...],
-    sort_by: tuple[SortKey, ...],
+    arrangement: Arrangement,
     level: int,
     out: list[RenderRow[T]],
 ) -> int:
     """Append this level's rows to `out`; return the task-line count emitted."""
+    group_by = arrangement.group_by[level:]
     if not group_by:
-        lines = [TaskLine(level, row) for row in _sorted(rows, sort_by)]
+        lines = [TaskLine(level, row) for row in _sorted(rows, arrangement.sort_by)]
         out.extend(lines)
         return len(lines)
-    field, rest = group_by[0], group_by[1:]
+    field = group_by[0]
+    ascending = arrangement.group_ascending(field)
     members: dict[str, list[T]] = {}
     order: dict[str, _OrderKey] = {}
     for row in rows:
@@ -219,9 +235,11 @@ def _emit[T: ArrangeRow](
             members.setdefault(bucket.label, []).append(row)
             order[bucket.label] = bucket.order
     total = 0
-    for label in sorted(members, key=lambda lbl: (order[lbl], lbl)):
+    for label in sorted(
+        members, key=lambda lbl: _bucket_order(order[lbl], lbl, ascending)
+    ):
         subtree: list[RenderRow[T]] = []  # emit children first to know the count
-        count = _emit(members[label], rest, sort_by, level + 1, subtree)
+        count = _emit(members[label], arrangement, level + 1, subtree)
         out.append(GroupHeader(level, label, field, count))
         out.extend(subtree)
         total += count
