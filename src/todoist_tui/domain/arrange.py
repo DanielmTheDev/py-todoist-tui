@@ -179,6 +179,7 @@ class GroupHeader:
     level: int
     label: str
     field: Field
+    count: int  # task lines in this group's subtree (duplicates counted per membership)
 
 
 @dataclass(frozen=True)
@@ -204,10 +205,12 @@ def _emit[T: ArrangeRow](
     sort_by: tuple[SortKey, ...],
     level: int,
     out: list[RenderRow[T]],
-) -> None:
+) -> int:
+    """Append this level's rows to `out`; return the task-line count emitted."""
     if not group_by:
-        out.extend(TaskLine(level, row) for row in _sorted(rows, sort_by))
-        return
+        lines = [TaskLine(level, row) for row in _sorted(rows, sort_by)]
+        out.extend(lines)
+        return len(lines)
     field, rest = group_by[0], group_by[1:]
     members: dict[str, list[T]] = {}
     order: dict[str, _OrderKey] = {}
@@ -215,9 +218,14 @@ def _emit[T: ArrangeRow](
         for bucket in _buckets(field, row):
             members.setdefault(bucket.label, []).append(row)
             order[bucket.label] = bucket.order
+    total = 0
     for label in sorted(members, key=lambda lbl: (order[lbl], lbl)):
-        out.append(GroupHeader(level, label, field))
-        _emit(members[label], rest, sort_by, level + 1, out)
+        subtree: list[RenderRow[T]] = []  # emit children first to know the count
+        count = _emit(members[label], rest, sort_by, level + 1, subtree)
+        out.append(GroupHeader(level, label, field, count))
+        out.extend(subtree)
+        total += count
+    return total
 
 
 def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[T]:

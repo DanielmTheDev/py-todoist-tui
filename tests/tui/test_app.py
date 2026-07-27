@@ -653,12 +653,12 @@ async def test_grouping_renders_headers_and_tasks() -> None:
         await pilot.pause()
         col2 = _col2(app.query_one(DataTable[object]))
 
-        assert any("▾" in c and "Home" in c for c in col2)
-        assert any("▾" in c and "Work" in c for c in col2)
+        assert any("──" in c and "Home" in c for c in col2)
+        assert any("──" in c and "Work" in c for c in col2)
         assert any(c.strip() == "h1" for c in col2)
         assert any(c.strip() == "w1" for c in col2)
-        # Home group sorts before Work; its header leads
-        assert col2[0].endswith("Home")
+        # Home group sorts before Work; its header leads, with a task count
+        assert col2[0].lstrip().startswith("──") and "Home (1)" in col2[0]
 
 
 @pytest.mark.anyio
@@ -678,7 +678,7 @@ async def test_e_on_a_group_header_does_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "▾" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
         await pilot.press("e")
         await pilot.pause()
         assert repo.completed == []  # header rows are inert
@@ -720,8 +720,8 @@ async def test_label_grouping_lists_task_under_each_label() -> None:
         col2 = _col2(app.query_one(DataTable[object]))
 
         assert sum(1 for c in col2 if c.strip() == "Pay rent") == 2  # once per label
-        assert any("home" in c and "▾" in c for c in col2)
-        assert any("urgent" in c and "▾" in c for c in col2)
+        assert any("home" in c and "──" in c for c in col2)
+        assert any("urgent" in c and "──" in c for c in col2)
 
 
 @pytest.mark.anyio
@@ -841,7 +841,7 @@ async def test_g_then_field_keys_group_the_list_and_persist() -> None:
         await pilot.pause()
 
         col2 = _col2(app.query_one(DataTable[object]))
-        assert any("▾" in c and "Home" in c for c in col2)
+        assert any("──" in c and "Home" in c for c in col2)
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
 
 
@@ -1024,9 +1024,9 @@ async def test_arrangement_is_restored_per_view() -> None:
         await pilot.press("i")  # Inbox has no arrangement → flat
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert not any("▾" in c for c in _col2(app.query_one(DataTable[object])))
+        assert not any("──" in c for c in _col2(app.query_one(DataTable[object])))
 
         await pilot.press("t")  # back to Today → its grouping returns
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert any("▾" in c for c in _col2(app.query_one(DataTable[object])))
+        assert any("──" in c for c in _col2(app.query_one(DataTable[object])))

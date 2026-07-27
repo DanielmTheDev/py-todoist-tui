@@ -28,6 +28,7 @@ _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _COLUMNS = ("", "Time", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _INDENT = "  "  # per nesting level, for group headers and their tasks
+_HEADER_WIDTH = 56  # target width of a group divider rule
 
 
 class InMemoryArrangements:
@@ -290,8 +291,14 @@ def _count_status(title: str, count: int) -> str:
     return f"{title} · no tasks" if count == 0 else f"{title} · {count} task(s)"
 
 
-def _header_text(header: GroupHeader) -> str:
-    return f"{_indent(header.level)}▾ {header.label}"
+def _header_text(header: GroupHeader) -> Text:
+    indent = _indent(header.level)
+    label = f"{header.label} ({header.count})"
+    lead = f"{indent}── {label} "
+    fill = "─" * max(3, _HEADER_WIDTH - len(lead))
+    # deeper levels recede a little; top level is the boldest divider
+    style = "bold cyan" if header.level == 0 else "bold blue"
+    return Text(f"{lead}{fill}", style=style)
 
 
 def _indent(level: int) -> str:

@@ -46,6 +46,14 @@ One rung per context; check off as landed. Full design:
       `ArrangementStore.save(view.key)` then reloads. Per-view restore on
       switch; SQLite store makes it survive restart.
 
+## Polish (post-A5)
+- Group headers render as a divider rule with a task count —
+  `── <label> (N) ───────`, bold accent (deeper levels dimmer). `GroupHeader`
+  carries the subtree task count from `arrange()`.
+- Arrange transient: key hints render literal (markup off); all keys consumed
+  (no leak to app bindings); clear = shift+G/S (matched by character) or ctrl+u.
+- Snapshot cache rebuilds its tables on save → migrates a pre-labels cache.
+
 ## Out of scope (future)
 - Group fold/collapse.
 - Group/sort by **section** (needs `Task.section_id` + parser + name resolve).

@@ -152,6 +152,32 @@ def test_group_by_project() -> None:
     ]
 
 
+def test_group_header_carries_subtree_task_count() -> None:
+    rows = [
+        Row("1", "w1", project_name="Work"),
+        Row("2", "w2", project_name="Work"),
+        Row("3", "h1", project_name="Home"),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.PROJECT,)))
+
+    counts = {r.label: r.count for r in result if isinstance(r, GroupHeader)}
+    assert counts == {"Home": 1, "Work": 2}
+
+
+def test_nested_group_header_counts_whole_subtree() -> None:
+    rows = [
+        Row("1", "w-a", Priority.P1, project_name="Work"),
+        Row("2", "w-b", Priority.P4, project_name="Work"),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)))
+
+    headers = [r for r in result if isinstance(r, GroupHeader)]
+    work = next(h for h in headers if h.label == "Work")
+    assert work.count == 2  # both leaves under the two priority subgroups
+
+
 def test_group_by_project_none_bucket_last() -> None:
     rows = [Row("1", "orphan", project_name=None), Row("2", "w", project_name="Work")]
 
