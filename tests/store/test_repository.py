@@ -54,6 +54,7 @@ class FakeInner:
         self.today_calls = 0
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
+        self.priorities: list[tuple[TaskId, Priority]] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -84,6 +85,9 @@ class FakeInner:
 
     async def uncomplete(self, task_id: TaskId) -> None:
         self.uncompleted.append(task_id)
+
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
+        self.priorities.append((task_id, priority))
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -231,6 +235,22 @@ async def test_complete_invalidates_filter_cache() -> None:
     await repo.complete(TaskId("x"))  # a mutation invalidates cached results
     await repo.filtered("a")
 
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_set_priority_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.set_priority(TaskId("x"), Priority.P1)  # mutation invalidates cache
+    await repo.filtered("a")
+
+    assert inner.priorities == [(TaskId("x"), Priority.P1)]
     assert inner.filtered_queries == ["a", "a"]
 
 

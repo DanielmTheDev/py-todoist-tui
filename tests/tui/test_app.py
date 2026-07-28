@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from dataclasses import replace
 
 import pytest
 from textual.widgets import DataTable, Footer, Static
@@ -29,6 +30,7 @@ class FakeRepository:
         self._filters = filters or []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
+        self.priorities: list[tuple[TaskId, Priority]] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -64,6 +66,12 @@ class FakeRepository:
         restored = self._removed.pop(task_id, None)
         if restored is not None:
             self._tasks = [*self._tasks, restored]
+
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
+        self.priorities.append((task_id, priority))
+        self._tasks = [
+            replace(t, priority=priority) if t.id == task_id else t for t in self._tasks
+        ]
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -401,6 +409,156 @@ async def test_pressing_e_on_empty_table_does_nothing() -> None:
         await pilot.pause()
 
         assert repo.completed == []
+
+
+@pytest.mark.anyio
+async def test_pressing_digit_sets_priority_optimistically() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""  # P4: no dot
+        syncs = repo.refresh_calls
+
+        await pilot.press("1")
+        # optimistic: the dot repaints before the network command resolves
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
+        assert repo.refresh_calls > syncs  # success pulls server delta
+
+
+@pytest.mark.anyio
+async def test_pressing_4_clears_the_priority_dot() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+
+        await pilot.press("4")
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""  # P4: no dot
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("6X4"), Priority.P4)]
+
+
+@pytest.mark.anyio
+async def test_setting_priority_regroups_task_immediately_when_grouped() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.PRIORITY,)))
+    # gate refresh so the background sync cannot re-group for us: the jump must
+    # be the local optimistic re-arrange, not the server round-trip.
+    repo = GatedRefreshRepository([task], [Project(id="220", name="Errands")])
+    repo.release.set()  # let the startup sync through
+    app = TodoistApp(repo, arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        table = app.query_one(TaskTable)
+        assert "P4" in _col2(table)[0]  # starts under the P4 header
+        await pilot.press("j")  # move cursor onto the task
+        repo.release.clear()  # block the post-change sync
+
+        await pilot.press("1")
+        # optimistic, before the network resolves: it jumped to a fresh P1 group
+        col2 = _col2(table)
+        assert "P1" in col2[0]
+        assert col2[1].strip() == "Buy milk"
+        assert not any("P4" in c for c in col2)
+        assert str(table.get_row_at(table.cursor_row)[2]).strip() == "Buy milk"  # <-
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
+
+
+@pytest.mark.anyio
+async def test_pressing_digit_on_empty_table_does_nothing() -> None:
+    repo = FakeRepository([], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("1")
+        await pilot.pause()
+
+        assert repo.priorities == []
+
+
+@pytest.mark.anyio
+async def test_digit_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        await pilot.press("1")
+        await pilot.pause()
+
+        assert repo.priorities == []  # header rows are inert
+
+
+class FailingSetPriorityRepository(FakeRepository):
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_set_priority_failure_is_surfaced_and_resyncs() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(
+        FailingSetPriorityRepository([task], [Project(id="220", name="X")])
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("1")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to set priority: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        # failed command resyncs to server truth: the dot reverts to P4 (blank)
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""
 
 
 @pytest.mark.anyio

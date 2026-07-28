@@ -2,6 +2,7 @@ import pytest
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 
@@ -34,6 +35,8 @@ class FakeRepository:
 
     async def uncomplete(self, task_id: TaskId) -> None:
         self.uncompleted.append(task_id)
+
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
     async def refresh(self) -> None: ...
 

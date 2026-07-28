@@ -17,5 +17,9 @@ class Priority(Enum):
             raise ValueError(f"unknown Todoist priority: {value}") from None
 
     @property
+    def to_api(self) -> int:
+        return self.value
+
+    @property
     def label(self) -> str:
         return self.name

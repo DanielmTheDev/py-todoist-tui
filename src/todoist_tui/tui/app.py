@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import ClassVar
 
 from rich.text import Text
@@ -8,6 +9,7 @@ from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.views import (
     INBOX,
     TODAY,
@@ -67,6 +69,10 @@ class TodoistApp(App[None]):
         ("g", "arrange_group", "Group"),
         ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
+        Binding("1", "set_priority('P1')", "P1", show=False),
+        Binding("2", "set_priority('P2')", "P2", show=False),
+        Binding("3", "set_priority('P3')", "P3", show=False),
+        Binding("4", "set_priority('P4')", "P4", show=False),
     ]
     SYNC_INTERVAL: ClassVar[float] = _SYNC_INTERVAL_SECONDS
 
@@ -77,6 +83,7 @@ class TodoistApp(App[None]):
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
         self._arrangement = Arrangement()  # current view's group/sort
+        self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
@@ -227,6 +234,34 @@ class TodoistApp(App[None]):
             return
         self._sync_now()  # pull server delta so the view reflects the reopen
 
+    def action_set_priority(self, name: str) -> None:
+        table = self.query_one(TaskTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        task_id = _task_id_of(str(row_key.value))
+        if task_id is None:  # cursor is on a group header: nothing to set
+            return
+        priority = Priority[name]
+        # optimistic: re-arrange now so the task jumps to its new priority group
+        # (and its dot repaints), then sync in the background
+        self._rows = [
+            replace(row, priority=priority) if str(row.id) == task_id else row
+            for row in self._rows
+        ]
+        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._set_priority(TaskId(task_id), priority)
+
+    @work
+    async def _set_priority(self, task_id: TaskId, priority: Priority) -> None:
+        try:
+            await set_priority(self._repo, task_id, priority)
+        except Exception as error:  # command rejected: resync, then report
+            await self._reload(self._view)
+            self._set_status(f"Failed to set priority: {error}")
+            return
+        self._sync_now()  # pull server delta; re-arranges if grouped/sorted by priority
+
     async def _reload(self, view: View) -> None:
         try:
             rows = await load_view(self._repo, view)
@@ -234,6 +269,7 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to load tasks: {error}")
             return
         self._arrangement = await self._arrangements.get(view.key)
+        self._rows = rows  # retained so a priority keypress can re-arrange locally
         self._render(arrange(rows, self._arrangement), view)
 
     def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:

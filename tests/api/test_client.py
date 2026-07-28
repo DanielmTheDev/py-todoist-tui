@@ -151,6 +151,25 @@ async def test_reopen_item_posts_item_uncomplete_command() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_update_item_posts_item_update_command_with_priority() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_item("6X4", 4)
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "item_update", "uuid": "u-1", "args": {"id": "6X4", "priority": 4}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reopen_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(

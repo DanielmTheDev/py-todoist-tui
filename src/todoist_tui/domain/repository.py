@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 
@@ -28,6 +29,8 @@ class TaskRepository(Protocol):
     async def complete(self, task_id: TaskId) -> None: ...
 
     async def uncomplete(self, task_id: TaskId) -> None: ...
+
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
     async def refresh(self) -> None: ...
 
