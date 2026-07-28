@@ -286,8 +286,9 @@ class TodoistApp(App[None]):
             # rescheduling would drop the recurrence rule, which we don't model
             self._set_status("Can't reschedule a recurring task")
             return
+        current = row.due.date if row.due is not None else None
         self.push_screen(
-            ScheduleScreen(self._clock.today()),
+            ScheduleScreen(self._clock.today(), current),
             lambda result: self._on_scheduled(TaskId(task_id), result),
         )
 
@@ -302,6 +303,10 @@ class TodoistApp(App[None]):
         if self._view.keeps is not None:  # drop it now if it left the view
             today = self._clock.today()
             self._rows = [row for row in self._rows if self._view.keeps(row, today)]
+        elif self._active_filter_query is not None:
+            # a filter's membership needs the server; assume the reschedule drops
+            # it and let the background refresh restore it if it still matches
+            self._rows = [row for row in self._rows if str(row.id) != str(task_id)]
         self._render(arrange(self._rows, self._arrangement), self._view)
         self._set_due(task_id, result.due)
 

@@ -3,7 +3,7 @@ import datetime
 import pytest
 
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.schedule import quick_due
+from todoist_tui.domain.schedule import month_weeks, quick_due, shift_month
 
 _TUESDAY = datetime.date(2026, 7, 28)
 
@@ -53,3 +53,47 @@ def test_quick_due_produces_all_day_dues() -> None:
 def test_unknown_kind_rejected() -> None:
     with pytest.raises(ValueError, match="quick due"):
         quick_due("someday", _TUESDAY)  # type: ignore[arg-type]
+
+
+def test_shift_month_forward() -> None:
+    assert shift_month(_TUESDAY, 1) == datetime.date(2026, 8, 28)
+
+
+def test_shift_month_back() -> None:
+    assert shift_month(_TUESDAY, -1) == datetime.date(2026, 6, 28)
+
+
+def test_shift_month_crosses_year_boundary() -> None:
+    assert shift_month(datetime.date(2026, 12, 15), 1) == datetime.date(2027, 1, 15)
+
+
+def test_shift_month_clamps_to_shorter_month() -> None:
+    assert shift_month(datetime.date(2026, 1, 31), 1) == datetime.date(2026, 2, 28)
+
+
+def test_shift_month_clamps_to_leap_february() -> None:
+    assert shift_month(datetime.date(2028, 1, 31), 1) == datetime.date(2028, 2, 29)
+
+
+def test_shift_month_clamps_within_dates_year_range() -> None:
+    assert shift_month(_TUESDAY, 10**6).year == 9999
+    assert shift_month(_TUESDAY, -(10**6)).year == 1
+
+
+def test_month_weeks_are_seven_cells_wide() -> None:
+    weeks = month_weeks(2026, 7)
+    assert all(len(week) == 7 for week in weeks)
+
+
+def test_month_weeks_cover_every_day_once_with_none_padding() -> None:
+    weeks = month_weeks(2026, 2)  # 28 days
+    days = [cell for week in weeks for cell in week if cell is not None]
+    assert [d.day for d in days] == list(range(1, 29))
+    assert all(d.month == 2 for d in days)
+
+
+def test_month_weeks_start_on_monday() -> None:
+    # 1 July 2026 is a Wednesday: the first row pads Mon/Tue with None
+    first_week = month_weeks(2026, 7)[0]
+    assert first_week[0] is None and first_week[1] is None
+    assert first_week[2] == datetime.date(2026, 7, 1)

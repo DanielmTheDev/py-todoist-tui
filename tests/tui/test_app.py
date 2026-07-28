@@ -390,8 +390,14 @@ async def test_pressing_e_completes_optimistically() -> None:
 class GatedRefreshRepository(FakeRepository):
     """refresh() blocks until released, so the syncing state is observable."""
 
-    def __init__(self, tasks: list[Task], projects: list[Project]) -> None:
-        super().__init__(tasks, projects)
+    def __init__(
+        self,
+        tasks: list[Task],
+        projects: list[Project],
+        inbox: list[Task] | None = None,
+        filters: list[Filter] | None = None,
+    ) -> None:
+        super().__init__(tasks, projects, inbox=inbox, filters=filters)
         self.release = asyncio.Event()
 
     async def refresh(self) -> None:
@@ -909,6 +915,105 @@ async def test_d_then_clear_removes_due() -> None:
         repo.release.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert repo.dues == [(TaskId("6X4"), None)]
+
+
+@pytest.mark.anyio
+async def test_calendar_pick_applies_optimistically() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    repo = GatedRefreshRepository([task], [Project(id="220", name="Errands")])
+    repo.release.set()  # let the startup sync through
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("l")  # calendar: move cursor to tomorrow
+        await pilot.press("enter")  # pick it: task leaves Today
+        # optimistic: the row is gone before the network command resolves
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
+
+
+@pytest.mark.anyio
+async def test_reschedule_on_filter_view_drops_task_immediately() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Overdue thing",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    # a filter's membership can't be evaluated locally, so a reschedule drops the
+    # edited task at once and the background refresh restores it if it still fits
+    repo = GatedRefreshRepository(
+        [task],
+        [Project(id="220", name="Errands")],
+        filters=[Filter(id="f1", name="Overdue", query="overdue", order=1)],
+    )
+    repo.release.set()  # let the startup sync through
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("enter")  # enter the Overdue filter view
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert app.query_one(DataTable[object]).row_count == 1
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("m")  # reschedule: it leaves the filter immediately
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
+
+
+@pytest.mark.anyio
+async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Sort me",
+        priority=Priority.P2,
+        due=None,
+        project_id="220",
+    )
+    repo = GatedRefreshRepository([], [Project(id="220", name="Errands")], inbox=[task])
+    repo.release.set()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("i")  # Inbox: membership is by project, not due
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        repo.release.clear()  # block the sync so we observe the optimistic state
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("m")  # a due change must not remove it from Inbox
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert table.get_row_at(0)[1] == "2026-07-29"
 
 
 @pytest.mark.anyio
