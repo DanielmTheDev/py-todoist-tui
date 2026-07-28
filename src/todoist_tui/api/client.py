@@ -77,6 +77,10 @@ class TodoistClient:
     async def update_item(self, task_id: str, priority: int) -> None:
         await self._command("item_update", {"id": task_id, "priority": priority})
 
+    async def update_item_due(self, task_id: str, due: dict[str, str] | None) -> None:
+        # `due=None` clears the date; otherwise a Sync `due` object (date/datetime).
+        await self._command("item_update", {"id": task_id, "due": due})
+
     async def _command(self, kind: str, args: dict[str, Any]) -> None:
         command_uuid = self._uuid()
         command = {"type": kind, "uuid": command_uuid, "args": args}

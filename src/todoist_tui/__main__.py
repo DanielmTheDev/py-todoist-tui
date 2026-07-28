@@ -29,14 +29,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 async def _run(token: str) -> None:
     cache_path = default_cache_path()
+    clock = SystemClock()
     async with TodoistClient.create(token) as client:
         repo = SnapshotTaskRepository(
             ApiTaskRepository(client),
             ApiSnapshotSource(client),
             SqliteSnapshotCache(cache_path),
-            SystemClock(),
+            clock,
         )
-        app = TodoistApp(repo, SqliteArrangementStore(cache_path))
+        app = TodoistApp(repo, SqliteArrangementStore(cache_path), clock)
         await app.run_async()
 
 

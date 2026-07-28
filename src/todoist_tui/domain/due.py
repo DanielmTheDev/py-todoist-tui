@@ -23,3 +23,10 @@ class Due:
             time=parsed.time() if has_time else None,
             is_recurring=bool(data.get("is_recurring", False)),
         )
+
+    @property
+    def to_api(self) -> dict[str, str]:
+        """Todoist Sync `due` object: date-only when all-day, else a datetime."""
+        if self.time is None:
+            return {"date": self.date.isoformat()}
+        return {"datetime": datetime.datetime.combine(self.date, self.time).isoformat()}

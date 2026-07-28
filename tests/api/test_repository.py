@@ -8,6 +8,7 @@ import respx
 
 from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
+from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import TaskId
 
@@ -436,6 +437,39 @@ async def test_set_priority_updates_the_task() -> None:
     )
     assert commands[0]["type"] == "item_update"
     assert commands[0]["args"] == {"id": "6X4", "priority": 4}  # P1 -> Todoist 4
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_due_updates_the_task() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_due(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_update"
+    assert commands[0]["args"] == {"id": "6X4", "due": {"date": "2026-07-29"}}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_due_none_clears_the_task_due() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_due(TaskId("6X4"), None)
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {"id": "6X4", "due": None}
 
 
 @pytest.mark.anyio

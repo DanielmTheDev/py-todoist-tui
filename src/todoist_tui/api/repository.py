@@ -53,6 +53,9 @@ class ApiTaskRepository:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._client.update_item(str(task_id), priority.to_api)
 
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+        await self._client.update_item_due(str(task_id), due.to_api if due else None)
+
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""
 

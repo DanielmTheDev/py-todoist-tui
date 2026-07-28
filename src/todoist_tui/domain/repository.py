@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from todoist_tui.domain.arrange import Arrangement
+from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
@@ -31,6 +32,8 @@ class TaskRepository(Protocol):
     async def uncomplete(self, task_id: TaskId) -> None: ...
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
+
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
     async def refresh(self) -> None: ...
 

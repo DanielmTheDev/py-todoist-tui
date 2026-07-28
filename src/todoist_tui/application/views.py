@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -26,14 +27,23 @@ class View:
     """A named list of tasks and how to fetch it from the repository.
 
     `key` is a stable identity used to persist this view's arrangement.
+    `keeps` client-side tests whether a (possibly just-edited) row still belongs
+    in this view, so an edit can drop the row without waiting for a resync. None
+    when membership is fixed (Inbox) or only the server can decide (saved filters).
     """
 
     title: str
     key: str
     fetch: Callable[[TaskRepository], Awaitable[list[Task]]]
+    keeps: Callable[[TaskRow, datetime.date], bool] | None = None
 
 
-TODAY = View("Today", "today", lambda repo: repo.today())
+def _due_today(row: TaskRow, today: datetime.date) -> bool:
+    # mirrors FilterQuery("today"): a task belongs to Today iff due on `today`
+    return row.due is not None and row.due.date == today
+
+
+TODAY = View("Today", "today", lambda repo: repo.today(), keeps=_due_today)
 INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
 
 

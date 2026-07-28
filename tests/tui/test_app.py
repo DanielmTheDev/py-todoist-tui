@@ -14,6 +14,7 @@ from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.schedule import ScheduleScreen
 
 
 class FakeRepository:
@@ -31,6 +32,7 @@ class FakeRepository:
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
+        self.dues: list[tuple[TaskId, Due | None]] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -73,8 +75,25 @@ class FakeRepository:
             replace(t, priority=priority) if t.id == task_id else t for t in self._tasks
         ]
 
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+        self.dues.append((task_id, due))
+        self._tasks = [
+            replace(t, due=due) if t.id == task_id else t for t in self._tasks
+        ]
+
     async def refresh(self) -> None:
         self.refresh_calls += 1
+
+
+class FakeClock:
+    def __init__(self, today: datetime.date) -> None:
+        self._today = today
+
+    def today(self) -> datetime.date:
+        return self._today
+
+
+_TODAY = datetime.date(2026, 7, 28)  # a Tuesday
 
 
 @pytest.mark.anyio
@@ -267,7 +286,7 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         assert table.row_count == 1
         row = table.get_row_at(0)
         assert row[0] == "🔴"
-        assert row[1] == "09:30"
+        assert row[1] == "2026-07-21 09:30"
         assert row[2] == "Buy milk"
         assert str(row[3]) == "Errands"
 
@@ -289,12 +308,28 @@ async def test_p4_has_no_dot() -> None:
 
 
 @pytest.mark.anyio
-async def test_all_day_task_has_blank_time() -> None:
+async def test_all_day_task_shows_date_without_time() -> None:
     task = Task(
         id=TaskId("1"),
         content="Someday",
         priority=Priority.P4,
         due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-21"
+
+
+@pytest.mark.anyio
+async def test_task_without_due_has_blank_due_cell() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Someday",
+        priority=Priority.P4,
+        due=None,
         project_id="220",
     )
     app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
@@ -777,6 +812,216 @@ async def test_empty_shows_status_message() -> None:
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
         assert "Today · no tasks" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_pressing_d_opens_schedule_screen() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+
+
+@pytest.mark.anyio
+async def test_d_then_tomorrow_drops_task_from_today_immediately() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    # gate the post-change sync so the observed drop is the optimistic re-filter,
+    # not the server round-trip
+    repo = GatedRefreshRepository([task], [Project(id="220", name="Errands")])
+    repo.release.set()  # let the startup sync through
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow: it no longer belongs in Today
+        # optimistic: the row leaves Today before the network command resolves
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
+
+
+@pytest.mark.anyio
+async def test_d_then_today_keeps_task_in_today_with_date() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=None,  # a due-less task shown in Today (fake) gains today's date
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("t")  # today: it stays, now dated
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert table.get_row_at(0)[1] == "2026-07-28"
+
+
+@pytest.mark.anyio
+async def test_d_then_clear_removes_due() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 28)),
+        project_id="220",
+    )
+    repo = GatedRefreshRepository([task], [Project(id="220", name="Errands")])
+    repo.release.set()  # let the startup sync through
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-28"
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("x")  # clear: an undated task no longer belongs in Today
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert repo.dues == [(TaskId("6X4"), None)]
+
+
+@pytest.mark.anyio
+async def test_d_on_recurring_task_is_blocked() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Water plants",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 28), is_recurring=True),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ScheduleScreen)  # no modal opened
+        assert repo.dues == []
+        assert "Can't reschedule a recurring task" in str(
+            app.query_one("#status", Static).render()
+        )
+
+
+@pytest.mark.anyio
+async def test_d_then_escape_changes_nothing() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 28)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ScheduleScreen)
+        assert repo.dues == []
+        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-28"
+
+
+@pytest.mark.anyio
+async def test_d_on_empty_table_does_nothing() -> None:
+    repo = FakeRepository([], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ScheduleScreen)
+        assert repo.dues == []
+
+
+@pytest.mark.anyio
+async def test_d_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(
+        repo, arrangements=await _grouped_by_project(), clock=FakeClock(_TODAY)
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ScheduleScreen)
+        assert repo.dues == []  # header rows are inert
+
+
+class FailingSetDueRepository(FakeRepository):
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_set_due_failure_is_surfaced_and_resyncs() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=None,
+        project_id="220",
+    )
+    app = TodoistApp(
+        FailingSetDueRepository([task], [Project(id="220", name="X")]),
+        clock=FakeClock(_TODAY),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("m")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to set due: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        # failed command resyncs to server truth: the due cell reverts to blank
+        assert app.query_one(DataTable[object]).get_row_at(0)[1] == ""
 
 
 def _row(content: str, project_id: str = "220") -> Task:

@@ -1,6 +1,8 @@
+import datetime
+
 import pytest
 
-from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.set_due import set_due
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -10,8 +12,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.completed: list[TaskId] = []
-        self.uncompleted: list[TaskId] = []
+        self.dues: list[tuple[TaskId, Due | None]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -31,32 +32,32 @@ class FakeRepository:
     async def filters(self) -> list[Filter]:
         return []
 
-    async def complete(self, task_id: TaskId) -> None:
-        self.completed.append(task_id)
+    async def complete(self, task_id: TaskId) -> None: ...
 
-    async def uncomplete(self, task_id: TaskId) -> None:
-        self.uncompleted.append(task_id)
+    async def uncomplete(self, task_id: TaskId) -> None: ...
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+        self.dues.append((task_id, due))
 
     async def refresh(self) -> None: ...
 
 
 @pytest.mark.anyio
-async def test_complete_task_delegates_to_repo() -> None:
+async def test_set_due_delegates_to_repo() -> None:
     repo = FakeRepository()
+    due = Due(date=datetime.date(2026, 7, 29))
 
-    await complete_task(repo, TaskId("6X4"))
+    await set_due(repo, TaskId("6X4"), due)
 
-    assert repo.completed == [TaskId("6X4")]
+    assert repo.dues == [(TaskId("6X4"), due)]
 
 
 @pytest.mark.anyio
-async def test_uncomplete_task_delegates_to_repo() -> None:
+async def test_set_due_clear_passes_none() -> None:
     repo = FakeRepository()
 
-    await uncomplete_task(repo, TaskId("6X4"))
+    await set_due(repo, TaskId("6X4"), None)
 
-    assert repo.uncompleted == [TaskId("6X4")]
+    assert repo.dues == [(TaskId("6X4"), None)]

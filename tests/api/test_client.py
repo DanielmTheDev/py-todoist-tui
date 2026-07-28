@@ -170,6 +170,48 @@ async def test_update_item_posts_item_update_command_with_priority() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_update_item_due_posts_item_update_command_with_due() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_item_due("6X4", {"date": "2026-07-29"})
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "item_update",
+            "uuid": "u-1",
+            "args": {"id": "6X4", "due": {"date": "2026-07-29"}},
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_update_item_due_none_clears_due() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_item_due("6X4", None)
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "item_update", "uuid": "u-1", "args": {"id": "6X4", "due": None}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reopen_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(
