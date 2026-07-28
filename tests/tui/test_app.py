@@ -1019,12 +1019,12 @@ async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
 
 
 @pytest.mark.anyio
-async def test_d_on_recurring_task_is_blocked() -> None:
+async def test_d_on_recurring_task_reschedules_keeping_the_rule() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Water plants",
         priority=Priority.P2,
-        due=Due(date=datetime.date(2026, 7, 28), is_recurring=True),
+        due=Due(date=datetime.date(2026, 7, 28), is_recurring=True, string="every day"),
         project_id="220",
     )
     repo = FakeRepository([task], [Project(id="220", name="Errands")])
@@ -1034,12 +1034,17 @@ async def test_d_on_recurring_task_is_blocked() -> None:
         await pilot.pause()
         await pilot.press("d")
         await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)  # picker opens for recurring
+        await pilot.press("m")  # tomorrow
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
 
-        assert not isinstance(app.screen, ScheduleScreen)  # no modal opened
-        assert repo.dues == []
-        assert "Can't reschedule a recurring task" in str(
-            app.query_one("#status", Static).render()
-        )
+        (task_id, due) = repo.dues[-1]
+        assert task_id == TaskId("6X4")
+        assert due is not None
+        assert due.date == datetime.date(2026, 7, 29)  # next occurrence moved
+        assert due.is_recurring is True  # rule kept
+        assert due.string == "every day"
 
 
 @pytest.mark.anyio

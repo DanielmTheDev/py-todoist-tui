@@ -32,6 +32,8 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                     date=datetime.date(2026, 7, 22),
                     time=datetime.time(9, 30),
                     is_recurring=True,
+                    string="every day at 9:30",
+                    lang="en",
                 ),
                 project_id="220",
                 labels=("home", "urgent"),

@@ -24,7 +24,8 @@ CREATE TABLE meta (sync_token TEXT NOT NULL);
 CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);
 CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
-    due_date TEXT, due_time TEXT, due_recurring INTEGER, project_id TEXT,
+    due_date TEXT, due_time TEXT, due_recurring INTEGER,
+    due_string TEXT, due_lang TEXT, project_id TEXT,
     labels TEXT
 );
 CREATE TABLE filters (
@@ -66,7 +67,8 @@ class SqliteSnapshotCache:
                     _row_to_task(row)
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
-                        " due_recurring, project_id, labels FROM tasks"
+                        " due_recurring, due_string, due_lang, project_id, labels"
+                        " FROM tasks"
                     )
                 ]
                 filters = [
@@ -93,7 +95,7 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox)) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -153,7 +155,9 @@ class SqliteArrangementStore:
 
 def _task_to_row(
     task: Task,
-) -> tuple[str, str, int, str | None, str | None, int | None, str, str]:
+) -> tuple[
+    str, str, int, str | None, str | None, int | None, str | None, str | None, str, str
+]:
     due = task.due
     return (
         task.id,
@@ -162,21 +166,47 @@ def _task_to_row(
         due.date.isoformat() if due else None,
         due.time.isoformat() if due and due.time else None,
         int(due.is_recurring) if due else None,
+        due.string if due else None,
+        due.lang if due else None,
         task.project_id,
         json.dumps(list(task.labels)),
     )
 
 
 def _row_to_task(
-    row: tuple[str, str, int, str | None, str | None, int | None, str, str | None],
+    row: tuple[
+        str,
+        str,
+        int,
+        str | None,
+        str | None,
+        int | None,
+        str | None,
+        str | None,
+        str,
+        str | None,
+    ],
 ) -> Task:
-    tid, content, priority, due_date, due_time, due_recurring, project_id, labels = row
+    (
+        tid,
+        content,
+        priority,
+        due_date,
+        due_time,
+        due_recurring,
+        due_string,
+        due_lang,
+        project_id,
+        labels,
+    ) = row
     due = None
     if due_date is not None:
         due = Due(
             date=datetime.date.fromisoformat(due_date),
             time=datetime.time.fromisoformat(due_time) if due_time else None,
             is_recurring=bool(due_recurring),
+            string=due_string,
+            lang=due_lang,
         )
     return Task(
         id=TaskId(tid),

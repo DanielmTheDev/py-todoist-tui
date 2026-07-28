@@ -44,3 +44,42 @@ def test_to_api_timed_emits_datetime() -> None:
     due = Due(date=datetime.date(2026, 7, 21), time=datetime.time(9, 30))
 
     assert due.to_api == {"datetime": "2026-07-21T09:30:00"}
+
+
+def test_from_api_captures_recurrence_string_and_lang() -> None:
+    due = Due.from_api(
+        {
+            "date": "2026-07-21",
+            "is_recurring": True,
+            "string": "every day",
+            "lang": "en",
+        }
+    )
+
+    assert due.is_recurring is True
+    assert due.string == "every day"
+    assert due.lang == "en"
+
+
+def test_from_api_leaves_string_none_when_absent() -> None:
+    due = Due.from_api({"date": "2026-07-21"})
+
+    assert due.string is None
+    assert due.lang is None
+
+
+def test_to_api_recurring_includes_string_and_lang() -> None:
+    due = Due(
+        date=datetime.date(2026, 7, 21),
+        is_recurring=True,
+        string="every day",
+        lang="en",
+    )
+
+    assert due.to_api == {"date": "2026-07-21", "string": "every day", "lang": "en"}
+
+
+def test_to_api_non_recurring_omits_string_even_if_present() -> None:
+    due = Due(date=datetime.date(2026, 7, 21), string="every day")
+
+    assert due.to_api == {"date": "2026-07-21"}

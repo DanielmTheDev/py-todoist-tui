@@ -458,6 +458,33 @@ async def test_set_due_updates_the_task() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_set_due_recurring_sends_string_to_preserve_the_rule() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_due(
+        TaskId("6X4"),
+        Due(
+            date=datetime.date(2026, 7, 29),
+            is_recurring=True,
+            string="every day",
+            lang="en",
+        ),
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {
+        "id": "6X4",
+        "due": {"date": "2026-07-29", "string": "every day", "lang": "en"},
+    }
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_set_due_none_clears_the_task_due() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

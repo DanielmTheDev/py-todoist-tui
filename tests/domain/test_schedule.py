@@ -3,7 +3,12 @@ import datetime
 import pytest
 
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.schedule import month_weeks, quick_due, shift_month
+from todoist_tui.domain.schedule import (
+    month_weeks,
+    quick_due,
+    reschedule,
+    shift_month,
+)
 
 _TUESDAY = datetime.date(2026, 7, 28)
 
@@ -53,6 +58,54 @@ def test_quick_due_produces_all_day_dues() -> None:
 def test_unknown_kind_rejected() -> None:
     with pytest.raises(ValueError, match="quick due"):
         quick_due("someday", _TUESDAY)  # type: ignore[arg-type]
+
+
+def test_reschedule_recurring_keeps_rule_moves_date() -> None:
+    original = Due(date=_TUESDAY, is_recurring=True, string="every day", lang="en")
+    picked = Due(date=datetime.date(2026, 8, 3))
+
+    result = reschedule(original, picked)
+
+    assert result == Due(
+        date=datetime.date(2026, 8, 3),
+        is_recurring=True,
+        string="every day",
+        lang="en",
+    )
+
+
+def test_reschedule_recurring_keeps_original_time_of_day() -> None:
+    original = Due(
+        date=_TUESDAY,
+        time=datetime.time(9, 0),
+        is_recurring=True,
+        string="every day at 9am",
+    )
+    picked = Due(date=datetime.date(2026, 8, 3))  # picker yields all-day
+
+    result = reschedule(original, picked)
+
+    assert result is not None
+    assert result.time == datetime.time(9, 0)
+
+
+def test_reschedule_non_recurring_returns_picked_unchanged() -> None:
+    original = Due(date=_TUESDAY)
+    picked = Due(date=datetime.date(2026, 8, 3))
+
+    assert reschedule(original, picked) == picked
+
+
+def test_reschedule_none_original_returns_picked() -> None:
+    picked = Due(date=datetime.date(2026, 8, 3))
+
+    assert reschedule(None, picked) == picked
+
+
+def test_reschedule_clear_drops_recurrence() -> None:
+    original = Due(date=_TUESDAY, is_recurring=True, string="every day")
+
+    assert reschedule(original, None) is None
 
 
 def test_shift_month_forward() -> None:

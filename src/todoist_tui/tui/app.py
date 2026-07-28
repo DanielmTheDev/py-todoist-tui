@@ -26,6 +26,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
+from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.filters import FilterScreen
@@ -306,10 +307,6 @@ class TodoistApp(App[None]):
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         if row is None:
             return
-        if row.due is not None and row.due.is_recurring:
-            # rescheduling would drop the recurrence rule, which we don't model
-            self._set_status("Can't reschedule a recurring task")
-            return
         current = row.due.date if row.due is not None else None
         self.push_screen(
             ScheduleScreen(self._clock.today(), current),
@@ -319,9 +316,15 @@ class TodoistApp(App[None]):
     def _on_scheduled(self, task_id: TaskId, result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
             return
+        # graft the picked date onto the existing rule so a recurring task keeps
+        # recurring (moves its next occurrence) instead of losing the rule
+        original = next(
+            (row.due for row in self._rows if str(row.id) == str(task_id)), None
+        )
+        new_due = reschedule(original, result.due)
         # optimistic: repaint the due cell (and re-group if grouped by due) now
         self._rows = [
-            replace(row, due=result.due) if str(row.id) == str(task_id) else row
+            replace(row, due=new_due) if str(row.id) == str(task_id) else row
             for row in self._rows
         ]
         if self._view.keeps is not None:  # drop it now if it left the view
@@ -332,7 +335,7 @@ class TodoistApp(App[None]):
             # it and let the background refresh restore it if it still matches
             self._rows = [row for row in self._rows if str(row.id) != str(task_id)]
         self._render(arrange(self._rows, self._arrangement), self._view)
-        self._set_due(task_id, result.due)
+        self._set_due(task_id, new_due)
 
     @work
     async def _set_due(self, task_id: TaskId, due: Due | None) -> None:

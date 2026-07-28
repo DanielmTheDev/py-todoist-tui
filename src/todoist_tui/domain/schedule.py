@@ -30,6 +30,27 @@ def quick_due(kind: QuickKind, today: datetime.date) -> Due | None:
     raise ValueError(f"unknown quick due kind: {kind!r}")
 
 
+def reschedule(original: Due | None, picked: Due | None) -> Due | None:
+    """Apply a picked date to a task, preserving recurrence.
+
+    The picker only ever yields a plain date. For a recurring task we graft that
+    date onto the existing rule (keeping its `string`/`lang` and time-of-day) so
+    the update moves the next occurrence without dropping the recurrence. A
+    cleared pick removes the due date and thus the recurrence.
+    """
+    if picked is None:
+        return None
+    if original is not None and original.is_recurring:
+        return Due(
+            date=picked.date,
+            time=picked.time or original.time,
+            is_recurring=True,
+            string=original.string,
+            lang=original.lang,
+        )
+    return picked
+
+
 def shift_month(day: datetime.date, months: int) -> datetime.date:
     """Move `day` by whole months, clamping to the target month's last day."""
     index = day.month - 1 + months
