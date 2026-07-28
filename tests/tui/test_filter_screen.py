@@ -30,9 +30,7 @@ async def test_lists_filters_sorted_by_order() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         options = host.screen.query_one(FilterList)
-        ids = [
-            options.get_option_at_index(i).id for i in range(options.option_count)
-        ]
+        ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
         assert ids == ["a", "b"]
 
 
