@@ -13,6 +13,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.arrange import ArrangeScreen
+from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 
@@ -1136,6 +1137,60 @@ async def test_set_due_failure_is_surfaced_and_resyncs() -> None:
         )
         # failed command resyncs to server truth: the due cell reverts to blank
         assert app.query_one(DataTable[object]).get_row_at(0)[1] == ""
+
+
+@pytest.mark.anyio
+async def test_pressing_enter_opens_detail_screen() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskDetailScreen)
+        details = [s for s in app.screen_stack if isinstance(s, TaskDetailScreen)]
+        assert len(details) == 1  # one Enter opens exactly one card
+
+
+@pytest.mark.anyio
+async def test_enter_then_escape_returns_to_the_list() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, TaskDetailScreen)
+
+
+@pytest.mark.anyio
+async def test_enter_on_empty_table_does_nothing() -> None:
+    app = TodoistApp(FakeRepository([], []))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, TaskDetailScreen)
+
+
+@pytest.mark.anyio
+async def test_enter_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # header on top
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, TaskDetailScreen)  # header rows are inert
 
 
 def _row(content: str, project_id: str = "220") -> Task:

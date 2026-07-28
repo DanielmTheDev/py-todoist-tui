@@ -28,7 +28,9 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
+from todoist_tui.tui.format import format_due
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
+from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
@@ -99,6 +101,7 @@ class TodoistApp(App[None]):
         ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
         ("d", "set_due", "Due"),
+        ("enter", "open_detail", "Detail"),
         Binding("1", "set_priority('P1')", "P1", show=False),
         Binding("2", "set_priority('P2')", "P2", show=False),
         Binding("3", "set_priority('P3')", "P3", show=False),
@@ -313,6 +316,22 @@ class TodoistApp(App[None]):
             lambda result: self._on_scheduled(TaskId(task_id), result),
         )
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        # DataTable consumes Enter for row selection before the app binding can
+        # fire, so open the detail view off its message instead (the binding
+        # stays for the footer hint).
+        self.action_open_detail()
+
+    def action_open_detail(self) -> None:
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        if row is None:
+            return
+        self.push_screen(TaskDetailScreen(row))
+
     def _on_scheduled(self, task_id: TaskId, result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
             return
@@ -374,7 +393,7 @@ class TodoistApp(App[None]):
             row = item.row
             table.add_row(
                 _priority_dot(row.priority),
-                _format_due(row),
+                format_due(row.due),
                 _indent(item.level) + row.content,
                 Text(row.project_name, style="dim") if row.project_name else "",
                 key=_task_key(index, row.id),
@@ -471,12 +490,3 @@ def _arrangement_summary(arrangement: Arrangement) -> str:
 
 def _priority_dot(priority: Priority) -> str:
     return _PRIORITY_DOTS.get(priority, "")  # P4 (default) stays blank
-
-
-def _format_due(row: TaskRow) -> str:
-    if row.due is None:
-        return ""
-    text = row.due.date.isoformat()
-    if row.due.time is not None:
-        text += " " + row.due.time.strftime("%H:%M")
-    return text
