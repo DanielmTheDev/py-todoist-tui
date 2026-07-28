@@ -83,6 +83,9 @@ Each increment is one small, single-purpose diff:
 7. **User reviews** (runs the UAT), then commit.
 Keep diffs small so review is fast. No big-bang PRs.
 
+**Commit straight to `main`.** Single-user repo — no feature branches, no PRs.
+Commit the reviewed increment directly on `main` and push.
+
 ## Reviewer checklist (subagent uses this)
 1. Test-first honored; test exercises real behavior, not trivial.
 2. New logic covered incl. edge cases; no untested public method.
