@@ -60,6 +60,31 @@ def test_task_holds_labels() -> None:
     assert task.labels == ("home", "urgent")
 
 
+def test_task_description_defaults_empty() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="No notes",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+
+    assert task.description == ""
+
+
+def test_task_holds_description() -> None:
+    task = Task(
+        id=TaskId("2"),
+        content="With notes",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        description="Get 2% from the corner store",
+    )
+
+    assert task.description == "Get 2% from the corner store"
+
+
 def test_project_holds_id_and_name() -> None:
     project = Project(id="220", name="Inbox")
 

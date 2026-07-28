@@ -26,7 +26,7 @@ CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
-    labels TEXT
+    labels TEXT, description TEXT
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -67,8 +67,8 @@ class SqliteSnapshotCache:
                     _row_to_task(row)
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
-                        " due_recurring, due_string, due_lang, project_id, labels"
-                        " FROM tasks"
+                        " due_recurring, due_string, due_lang, project_id, labels,"
+                        " description FROM tasks"
                     )
                 ]
                 filters = [
@@ -95,7 +95,7 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox)) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -156,7 +156,17 @@ class SqliteArrangementStore:
 def _task_to_row(
     task: Task,
 ) -> tuple[
-    str, str, int, str | None, str | None, int | None, str | None, str | None, str, str
+    str,
+    str,
+    int,
+    str | None,
+    str | None,
+    int | None,
+    str | None,
+    str | None,
+    str,
+    str,
+    str,
 ]:
     due = task.due
     return (
@@ -170,6 +180,7 @@ def _task_to_row(
         due.lang if due else None,
         task.project_id,
         json.dumps(list(task.labels)),
+        task.description,
     )
 
 
@@ -185,6 +196,7 @@ def _row_to_task(
         str | None,
         str,
         str | None,
+        str | None,
     ],
 ) -> Task:
     (
@@ -198,6 +210,7 @@ def _row_to_task(
         due_lang,
         project_id,
         labels,
+        description,
     ) = row
     due = None
     if due_date is not None:
@@ -215,4 +228,5 @@ def _row_to_task(
         due=due,
         project_id=project_id,
         labels=tuple(json.loads(labels)) if labels else (),
+        description=description or "",
     )

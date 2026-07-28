@@ -37,6 +37,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 ),
                 project_id="220",
                 labels=("home", "urgent"),
+                description="water them all",
             ),
             Task(
                 id=TaskId("b"),
@@ -110,6 +111,7 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded == original
     assert loaded is not None
     assert loaded.tasks[0].labels == ("home", "urgent")
+    assert loaded.tasks[0].description == "water them all"
 
 
 @pytest.mark.anyio

@@ -15,3 +15,4 @@ class Task:
     due: Due | None
     project_id: str
     labels: tuple[str, ...] = ()
+    description: str = ""

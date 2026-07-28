@@ -20,6 +20,7 @@ class TaskRow:
     due: Due | None
     project_name: str | None
     labels: tuple[str, ...] = ()
+    description: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             due=task.due,
             project_name=names.get(task.project_id),
             labels=task.labels,
+            description=task.description,
         )
         for task in tasks
     ]
