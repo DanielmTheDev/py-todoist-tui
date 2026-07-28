@@ -5,6 +5,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Static
 
@@ -51,7 +52,7 @@ class InMemoryArrangements:
 
 
 class TaskTable(DataTable[object]):
-    """DataTable with vim h/j/k/l aliases for the built-in cursor moves."""
+    """DataTable with vim h/j/k/l aliases; the cursor skips group headers."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j", "cursor_down", "Down", show=False),
@@ -59,6 +60,29 @@ class TaskTable(DataTable[object]):
         Binding("h", "cursor_left", "Left", show=False),
         Binding("l", "cursor_right", "Right", show=False),
     ]
+
+    def action_cursor_down(self) -> None:
+        self._skip_to_task(step=1)
+
+    def action_cursor_up(self) -> None:
+        self._skip_to_task(step=-1)
+
+    def _skip_to_task(self, step: int) -> None:
+        target = self._task_row_after(self.cursor_row, step)
+        if target is not None:  # None => no task that way: stay put
+            self.move_cursor(row=target)
+
+    def _task_row_after(self, start: int, step: int) -> int | None:
+        row = start + step
+        while 0 <= row < self.row_count:
+            if self._is_task_row(row):
+                return row
+            row += step  # traverse consecutive headers (nested grouping)
+        return None
+
+    def _is_task_row(self, row: int) -> bool:
+        key = self.coordinate_to_cell_key(Coordinate(row, 0)).row_key
+        return _task_id_of(str(key.value)) is not None
 
 
 class TodoistApp(App[None]):
@@ -338,6 +362,7 @@ class TodoistApp(App[None]):
         prior = self._cursor_task_id(table)  # survive the clear+rebuild below
         table.clear()
         first_row_of: dict[str, int] = {}
+        first_task_row: int | None = None
         task_ids: set[str] = set()
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
@@ -351,10 +376,14 @@ class TodoistApp(App[None]):
                 Text(row.project_name, style="dim") if row.project_name else "",
                 key=_task_key(index, row.id),
             )
+            if first_task_row is None:
+                first_task_row = index
             first_row_of.setdefault(str(row.id), index)
             task_ids.add(str(row.id))
         if prior is not None and prior in first_row_of:
             table.move_cursor(row=first_row_of[prior])  # keep highlight on the task
+        elif first_task_row is not None:
+            table.move_cursor(row=first_task_row)  # never rest on a leading header
         self._set_status(_count_status(view.title, len(task_ids)))
 
     def _cursor_task_id(self, table: TaskTable) -> str | None:
