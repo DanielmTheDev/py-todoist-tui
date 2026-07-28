@@ -564,7 +564,9 @@ async def test_digit_on_a_group_header_does_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # header on top
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("1")
         await pilot.pause()
 
@@ -1087,7 +1089,9 @@ async def test_d_on_a_group_header_does_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # header on top
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("d")
         await pilot.pause()
 
@@ -1186,7 +1190,9 @@ async def test_e_on_a_group_header_does_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "──" in _col2(app.query_one(DataTable[object]))[0]  # header on top
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # header on top
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("e")
         await pilot.pause()
         assert repo.completed == []  # header rows are inert
@@ -1248,6 +1254,107 @@ async def test_j_and_k_move_row_cursor() -> None:
         for key in ("h", "l"):  # no horizontal move in row mode; must not error
             await pilot.press(key)
             assert table.cursor_row == 0
+
+
+def _cursor_content(table: TaskTable) -> str:
+    return _col2(table)[table.cursor_row]
+
+
+@pytest.mark.anyio
+async def test_initial_cursor_lands_on_first_task_not_header() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # row 0 is a group header
+        assert table.cursor_row == 1
+        assert _cursor_content(table).strip() == "w1"  # a task, not the header
+
+
+@pytest.mark.anyio
+async def test_j_skips_a_single_group_header_downward() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert table.cursor_row == 1  # h1, under the Home header
+        await pilot.press("j")  # skip the Work header at row 2
+        assert table.cursor_row == 3
+        assert _col2(table)[3].strip() == "w1"
+
+
+@pytest.mark.anyio
+async def test_j_skips_multiple_consecutive_headers_downward() -> None:
+    home = Task(
+        id=TaskId("home"),
+        content="home",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+        labels=("a",),
+    )
+    work = Task(
+        id=TaskId("work"),
+        content="work",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+        labels=("b",),
+    )
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.PROJECT, Field.LABELS)))
+    repo = FakeRepository(
+        [work, home],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        first = table.cursor_row
+        assert "──" not in _cursor_content(table)  # starts on a task
+        await pilot.press("j")  # cross project + label headers to the next task
+        assert table.cursor_row > first + 1
+        assert "──" not in _cursor_content(table)  # skipped both headers
+
+
+@pytest.mark.anyio
+async def test_k_skips_a_group_header_upward() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("j")  # onto w1 at row 3
+        assert table.cursor_row == 3
+        await pilot.press("k")  # skip the Work header at row 2
+        assert table.cursor_row == 1
+        assert _col2(table)[1].strip() == "h1"
+
+
+@pytest.mark.anyio
+async def test_k_at_first_task_stays_put() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert table.cursor_row == 1
+        await pilot.press("k")  # only a header above; must not move onto it
+        assert table.cursor_row == 1
 
 
 @pytest.mark.anyio
