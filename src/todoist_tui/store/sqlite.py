@@ -21,7 +21,7 @@ DROP TABLE IF EXISTS projects;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS filters;
 CREATE TABLE meta (sync_token TEXT NOT NULL);
-CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER);
+CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER, child_order INTEGER);
 CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
@@ -58,9 +58,9 @@ class SqliteSnapshotCache:
                 if token_row is None:  # schema present but never fully written
                     return None
                 projects = [
-                    Project(id=pid, name=name, is_inbox=bool(is_inbox))
-                    for pid, name, is_inbox in conn.execute(
-                        "SELECT id, name, is_inbox FROM projects"
+                    Project(id=pid, name=name, is_inbox=bool(is_inbox), order=order)
+                    for pid, name, is_inbox, order in conn.execute(
+                        "SELECT id, name, is_inbox, child_order FROM projects"
                     )
                 ]
                 tasks = [
@@ -91,8 +91,9 @@ class SqliteSnapshotCache:
                 "INSERT INTO meta (sync_token) VALUES (?)", (snapshot.sync_token,)
             )
             conn.executemany(
-                "INSERT INTO projects (id, name, is_inbox) VALUES (?, ?, ?)",
-                [(p.id, p.name, int(p.is_inbox)) for p in snapshot.projects],
+                "INSERT INTO projects (id, name, is_inbox, child_order)"
+                " VALUES (?, ?, ?, ?)",
+                [(p.id, p.name, int(p.is_inbox), p.order) for p in snapshot.projects],
             )
             conn.executemany(
                 "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

@@ -48,6 +48,8 @@ class FakeRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
+    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+
     async def refresh(self) -> None: ...
 
 
@@ -76,6 +78,7 @@ async def test_load_today_view_joins_project_name() -> None:
             priority=Priority.P2,
             due=Due(date=datetime.date(2026, 7, 21)),
             project_name="Errands",
+            project_id="220",
         )
     ]
 
@@ -218,6 +221,8 @@ class BarrierRepository:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
+
+    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
 
     async def refresh(self) -> None: ...
 

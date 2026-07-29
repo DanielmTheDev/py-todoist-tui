@@ -56,6 +56,7 @@ class FakeInner:
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
+        self.moves: list[tuple[TaskId, str]] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -92,6 +93,9 @@ class FakeInner:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         self.dues.append((task_id, due))
+
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        self.moves.append((task_id, project_id))
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -271,6 +275,22 @@ async def test_set_due_delegates_then_invalidates_filter_cache() -> None:
     await repo.filtered("a")
 
     assert inner.dues == [(TaskId("x"), Due(date=_TODAY))]
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_set_project_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.set_project(TaskId("x"), "9")  # mutation invalidates cache
+    await repo.filtered("a")
+
+    assert inner.moves == [(TaskId("x"), "9")]
     assert inner.filtered_queries == ["a", "a"]
 
 

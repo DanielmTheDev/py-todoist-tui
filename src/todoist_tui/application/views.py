@@ -19,6 +19,7 @@ class TaskRow:
     priority: Priority
     due: Due | None
     project_name: str | None
+    project_id: str | None = None
     labels: tuple[str, ...] = ()
     description: str = ""
 
@@ -63,6 +64,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             priority=task.priority,
             due=task.due,
             project_name=names.get(task.project_id),
+            project_id=task.project_id,
             labels=task.labels,
             description=task.description,
         )

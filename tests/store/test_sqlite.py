@@ -20,8 +20,8 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
             Filter(id="f2", name="Work today", query="#Work & today", order=2),
         ],
         projects=[
-            Project(id="220", name="Eingang", is_inbox=True),
-            Project(id="9", name="Work"),
+            Project(id="220", name="Eingang", is_inbox=True, order=0),
+            Project(id="9", name="Work", order=5),
         ],
         tasks=[
             Task(

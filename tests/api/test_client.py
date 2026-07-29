@@ -212,6 +212,49 @@ async def test_update_item_due_none_clears_due() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_move_item_posts_item_move_command_with_project() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.move_item("6X4", "220")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "item_move",
+            "uuid": "u-1",
+            "args": {"id": "6X4", "project_id": "220"},
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_move_item_raises_on_command_error() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sync_status": {
+                    "u-1": {"error_tag": "PROJECT_NOT_FOUND", "error": "not found"}
+                }
+            },
+        )
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    with pytest.raises(SyncCommandError, match="not found"):
+        await client.move_item("6X4", "nope")
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reopen_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(

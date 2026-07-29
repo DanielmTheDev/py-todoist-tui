@@ -1,6 +1,6 @@
 import pytest
 
-from todoist_tui.application.set_priority import set_priority
+from todoist_tui.application.move_task import move_task
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -10,7 +10,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.priorities: list[tuple[TaskId, Priority]] = []
+        self.moves: list[tuple[TaskId, str]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -34,20 +34,20 @@ class FakeRepository:
 
     async def uncomplete(self, task_id: TaskId) -> None: ...
 
-    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
-        self.priorities.append((task_id, priority))
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        self.moves.append((task_id, project_id))
 
     async def refresh(self) -> None: ...
 
 
 @pytest.mark.anyio
-async def test_set_priority_delegates_to_repo() -> None:
+async def test_move_task_delegates_to_repo() -> None:
     repo = FakeRepository()
 
-    await set_priority(repo, TaskId("6X4"), Priority.P1)
+    await move_task(repo, TaskId("6X4"), "220")
 
-    assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
+    assert repo.moves == [(TaskId("6X4"), "220")]

@@ -10,6 +10,7 @@ from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.move_task import move_task
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.views import (
@@ -25,6 +26,7 @@ from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
@@ -32,6 +34,7 @@ from todoist_tui.tui.format import format_due
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
@@ -101,6 +104,7 @@ class TodoistApp(App[None]):
         ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
         ("d", "set_due", "Due"),
+        ("v", "move_task", "Move"),
         ("enter", "open_detail", "Detail"),
         Binding("1", "set_priority('P1')", "P1", show=False),
         Binding("2", "set_priority('P2')", "P2", show=False),
@@ -126,6 +130,7 @@ class TodoistApp(App[None]):
         self._status_base = ""
         self._last_undo: tuple[TaskId, list[object]] | None = None
         self._picking_filter = False  # guards against stacking filter pickers
+        self._picking_project = False  # guards against stacking project pickers
         self._active_filter_query: str | None = None  # set while a filter view shows
 
     def compose(self) -> ComposeResult:
@@ -365,6 +370,58 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to set due: {error}")
             return
         self._sync_now()  # pull server delta; re-arranges if grouped/sorted by due
+
+    async def action_move_task(self) -> None:
+        if self._picking_project:  # already loading or picker already open
+            return
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        if row is None:
+            return
+        self._picking_project = True
+        try:
+            projects = await self._repo.projects()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load projects: {error}")
+            self._picking_project = False
+            return
+        self.push_screen(
+            ProjectPickerScreen(projects, current=row.project_id),
+            lambda target: self._on_moved(TaskId(task_id), target),
+        )
+
+    def _on_moved(self, task_id: TaskId, target: Project | None) -> None:
+        self._picking_project = False
+        if target is None:  # picker was cancelled
+            return
+        # optimistic: repaint the project cell (and re-group if grouped by project)
+        self._rows = [
+            replace(row, project_name=target.name, project_id=target.id)
+            if str(row.id) == str(task_id)
+            else row
+            for row in self._rows
+        ]
+        if self._view.key == "inbox" and not target.is_inbox:
+            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        elif self._active_filter_query is not None:
+            # a filter's membership needs the server; assume the move drops it and
+            # let the background refresh restore it if it still matches
+            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._move_task(task_id, target.id)
+
+    @work
+    async def _move_task(self, task_id: TaskId, project_id: str) -> None:
+        try:
+            await move_task(self._repo, task_id, project_id)
+        except Exception as error:  # command rejected: resync, then report
+            await self._reload(self._view)
+            self._set_status(f"Failed to move task: {error}")
+            return
+        self._sync_now()  # pull server delta; re-arranges if grouped by project
 
     async def _reload(self, view: View) -> None:
         try:

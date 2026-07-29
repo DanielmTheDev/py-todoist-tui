@@ -56,6 +56,9 @@ class ApiTaskRepository:
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         await self._client.update_item_due(str(task_id), due.to_api if due else None)
 
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        await self._client.move_item(str(task_id), project_id)
+
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""
 
@@ -102,6 +105,7 @@ def _to_project(record: dict[str, Any]) -> Project:
         id=str(record["id"]),
         name=str(record["name"]),
         is_inbox=bool(record.get("inbox_project")),
+        order=int(record.get("child_order", 0)),
     )
 
 

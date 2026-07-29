@@ -288,8 +288,18 @@ async def test_delta_none_does_a_full_sync() -> None:
                     }
                 ],
                 "projects": [
-                    {"id": "220", "name": "Eingang", "inbox_project": True},
-                    {"id": "9", "name": "Work", "inbox_project": False},
+                    {
+                        "id": "220",
+                        "name": "Eingang",
+                        "inbox_project": True,
+                        "child_order": 0,
+                    },
+                    {
+                        "id": "9",
+                        "name": "Work",
+                        "inbox_project": False,
+                        "child_order": 5,
+                    },
                 ],
                 "sync_token": "abc",
             },
@@ -301,7 +311,10 @@ async def test_delta_none_does_a_full_sync() -> None:
 
     assert delta.full_sync is True
     assert parse_qs(route.calls.last.request.content.decode())["sync_token"] == ["*"]
-    assert [(p.id, p.is_inbox) for p in delta.projects] == [("220", True), ("9", False)]
+    assert [(p.id, p.is_inbox, p.order) for p in delta.projects] == [
+        ("220", True, 0),
+        ("9", False, 5),
+    ]
     (task,) = delta.tasks
     assert task.id == TaskId("6X4")
     assert delta.sync_token == "abc"
@@ -526,6 +539,23 @@ async def test_set_due_none_clears_the_task_due() -> None:
         parse_qs(route.calls.last.request.content.decode())["commands"][0]
     )
     assert commands[0]["args"] == {"id": "6X4", "due": None}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_project_moves_the_task() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_project(TaskId("6X4"), "220")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_move"
+    assert commands[0]["args"] == {"id": "6X4", "project_id": "220"}
 
 
 @pytest.mark.anyio

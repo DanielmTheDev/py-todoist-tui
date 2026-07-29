@@ -15,6 +15,7 @@ from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 
 
@@ -34,6 +35,7 @@ class FakeRepository:
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
+        self.moves: list[tuple[TaskId, str]] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -82,6 +84,16 @@ class FakeRepository:
             replace(t, due=due) if t.id == task_id else t for t in self._tasks
         ]
 
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        self.moves.append((task_id, project_id))
+        self._tasks = [
+            replace(t, project_id=project_id) if t.id == task_id else t
+            for t in self._tasks
+        ]
+        inbox_id = next((p.id for p in self._projects if p.is_inbox), None)
+        if project_id != inbox_id:  # left the inbox: it no longer lists the task
+            self._inbox = [t for t in self._inbox if t.id != task_id]
+
     async def refresh(self) -> None:
         self.refresh_calls += 1
 
@@ -104,7 +116,7 @@ async def test_footer_lists_shortcuts() -> None:
         await pilot.pause()
         footer = app.query_one(Footer)
         shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "z", "t", "i", "f", "r"} <= shown
+        assert {"e", "z", "t", "i", "f", "r", "v"} <= shown
 
 
 @pytest.mark.anyio
@@ -1191,6 +1203,151 @@ async def test_enter_on_a_group_header_does_nothing() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert not isinstance(app.screen, TaskDetailScreen)  # header rows are inert
+
+
+@pytest.mark.anyio
+async def test_v_opens_project_picker() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+
+
+@pytest.mark.anyio
+async def test_v_pick_moves_task_and_updates_project_cell() -> None:
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "9")]
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Work"
+
+
+@pytest.mark.anyio
+async def test_v_moving_out_of_inbox_drops_the_row() -> None:
+    repo = FakeRepository(
+        [],
+        [Project(id="220", name="Inbox", is_inbox=True), Project(id="9", name="Work")],
+        inbox=[_row("in1", "220")],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("i")  # switch to Inbox
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 1
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("in1"), "9")]
+        assert app.query_one(DataTable[object]).row_count == 0  # left the Inbox
+
+
+@pytest.mark.anyio
+async def test_v_on_empty_table_does_nothing() -> None:
+    repo = FakeRepository([], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        assert not isinstance(app.screen, ProjectPickerScreen)
+        assert repo.moves == []
+
+
+@pytest.mark.anyio
+async def test_v_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert "──" in _col2(table)[0]  # header on top
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
+        await pilot.press("v")
+        await pilot.pause()
+        assert not isinstance(app.screen, ProjectPickerScreen)  # header rows are inert
+
+
+@pytest.mark.anyio
+async def test_v_while_picker_open_does_not_stack_screens() -> None:
+    repo = FakeRepository([_row("t1")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("v")  # second press must not stack a second picker
+        await pilot.pause()
+        pickers = [s for s in app.screen_stack if isinstance(s, ProjectPickerScreen)]
+        assert len(pickers) == 1
+
+
+@pytest.mark.anyio
+async def test_cancelling_project_picker_leaves_task_unchanged() -> None:
+    repo = FakeRepository([_row("t1")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ProjectPickerScreen)
+        assert repo.moves == []
+
+
+class FailingMoveRepository(FakeRepository):
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_move_failure_is_surfaced_and_resyncs() -> None:
+    repo = FailingMoveRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to move task: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        # failed command resyncs to server truth: the project cell reverts
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Errands"
 
 
 def _row(content: str, project_id: str = "220") -> Task:

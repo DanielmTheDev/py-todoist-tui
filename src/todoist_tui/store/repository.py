@@ -113,6 +113,10 @@ class SnapshotTaskRepository:
         await self._inner.set_due(task_id, due)
         await self._invalidate()
 
+    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+        await self._inner.set_project(task_id, project_id)
+        await self._invalidate()
+
     async def _invalidate(self) -> None:
         async with self._lock:  # a concurrent reader must not re-cache stale state
             self._snapshot = None
