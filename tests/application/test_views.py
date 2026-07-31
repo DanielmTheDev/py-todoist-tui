@@ -185,6 +185,23 @@ async def test_load_view_carries_description() -> None:
 
 
 @pytest.mark.anyio
+async def test_load_view_carries_parent_id() -> None:
+    child = Task(
+        id=TaskId("x"),
+        content="A subtask",
+        priority=Priority.P2,
+        due=None,
+        project_id="220",
+        parent_id="p",
+    )
+    repo = FakeRepository([child], [], [Project(id="220", name="Errands")])
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].parent_id == "p"
+
+
+@pytest.mark.anyio
 async def test_load_view_missing_project_yields_none_name() -> None:
     repo = FakeRepository(
         [_task("Orphan", "999")], [], [Project(id="220", name="Errands")]

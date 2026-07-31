@@ -53,6 +53,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 priority=Priority.P4,
                 due=None,
                 project_id="9",
+                parent_id="a",
             ),
         ],
         sync_token=sync_token,
@@ -122,8 +123,10 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded.tasks[0].description == "water them all"
     assert loaded.tasks[0].section_id == "s1"
     assert loaded.tasks[0].deadline == Deadline(date=datetime.date(2026, 8, 15))
+    assert loaded.tasks[0].parent_id is None
     assert loaded.tasks[1].section_id is None
     assert loaded.tasks[1].deadline is None
+    assert loaded.tasks[1].parent_id == "a"
     assert [(s.id, s.name, s.order) for s in loaded.sections] == [
         ("s1", "Planning", 1),
         ("s2", "In progress", 2),

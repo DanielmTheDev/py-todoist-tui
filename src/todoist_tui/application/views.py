@@ -27,6 +27,7 @@ class TaskRow:
     labels: tuple[str, ...] = ()
     description: str = ""
     deadline: Deadline | None = None
+    parent_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             labels=task.labels,
             description=task.description,
             deadline=task.deadline,
+            parent_id=task.parent_id,
         )
         for task in tasks
     ]

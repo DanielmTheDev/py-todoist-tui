@@ -136,6 +136,61 @@ async def test_today_defaults_missing_description_to_empty() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_today_maps_parent_id() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "A subtask",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                        "parent_id": "6X0",
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.parent_id == "6X0"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_defaults_missing_parent_id_to_none() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Top level",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.parent_id is None
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_today_maps_labels() -> None:
     respx.get(f"{BASE_URL}/tasks/filter").mock(
         return_value=httpx.Response(

@@ -29,7 +29,8 @@ CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
-    section_id TEXT, labels TEXT, description TEXT, deadline_date TEXT
+    section_id TEXT, labels TEXT, description TEXT, deadline_date TEXT,
+    parent_id TEXT
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -74,7 +75,7 @@ class SqliteSnapshotCache:
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
                         " due_recurring, due_string, due_lang, project_id, section_id,"
-                        " labels, description, deadline_date FROM tasks"
+                        " labels, description, deadline_date, parent_id FROM tasks"
                     )
                 ]
                 filters = [
@@ -112,7 +113,7 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox), p.order) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -191,6 +192,7 @@ def _task_to_row(
     str,
     str,
     str | None,
+    str | None,
 ]:
     due = task.due
     deadline = task.deadline
@@ -208,6 +210,7 @@ def _task_to_row(
         json.dumps(list(task.labels)),
         task.description,
         deadline.date.isoformat() if deadline else None,
+        task.parent_id,
     )
 
 
@@ -222,6 +225,7 @@ def _row_to_task(
         str | None,
         str | None,
         str,
+        str | None,
         str | None,
         str | None,
         str | None,
@@ -242,6 +246,7 @@ def _row_to_task(
         labels,
         description,
         deadline_date,
+        parent_id,
     ) = row
     due = None
     if due_date is not None:
@@ -264,4 +269,5 @@ def _row_to_task(
         deadline=Deadline(date=datetime.date.fromisoformat(deadline_date))
         if deadline_date
         else None,
+        parent_id=parent_id,
     )

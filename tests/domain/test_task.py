@@ -137,6 +137,31 @@ def test_task_holds_deadline() -> None:
     assert task.deadline is deadline
 
 
+def test_task_parent_id_defaults_to_none() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Top level",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+
+    assert task.parent_id is None
+
+
+def test_task_holds_parent_id() -> None:
+    task = Task(
+        id=TaskId("2"),
+        content="A subtask",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        parent_id="1",
+    )
+
+    assert task.parent_id == "1"
+
+
 def test_project_holds_id_and_name() -> None:
     project = Project(id="220", name="Inbox")
 

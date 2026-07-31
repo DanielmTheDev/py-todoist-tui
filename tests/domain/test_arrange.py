@@ -24,6 +24,7 @@ class Row:
     due: Due | None = None
     project_name: str | None = "Work"
     labels: tuple[str, ...] = ()
+    parent_id: str | None = None
 
 
 def _date(y: int, m: int, d: int) -> Due:
@@ -266,6 +267,125 @@ def test_nested_group_project_then_priority_with_sorted_leaves() -> None:
         ("H", 1, Priority.P4.label),
         ("T", 2, "w-low"),
     ]
+
+
+# --- subtask nesting ---
+
+
+def test_expanded_parent_nests_its_child_one_level_deeper() -> None:
+    rows = [Row("p", "parent"), Row("c", "child", parent_id="p")]
+
+    result = arrange(rows, Arrangement(), expanded=frozenset({"p"}))
+
+    assert _shape(result) == [("T", 0, "parent"), ("T", 1, "child")]
+    parent = result[0]
+    assert isinstance(parent, TaskLine)
+    assert parent.has_children is True
+    assert parent.expanded is True
+    child = result[1]
+    assert isinstance(child, TaskLine)
+    assert child.has_children is False
+
+
+def test_collapsed_parent_hides_children_but_is_marked_expandable() -> None:
+    rows = [Row("p", "parent"), Row("c", "child", parent_id="p")]
+
+    result = arrange(rows, Arrangement())  # nothing expanded → collapsed by default
+
+    assert _shape(result) == [("T", 0, "parent")]
+    parent = result[0]
+    assert isinstance(parent, TaskLine)
+    assert parent.has_children is True
+    assert parent.expanded is False
+
+
+def test_child_stays_under_parent_and_is_not_grouped_independently() -> None:
+    rows = [
+        Row("p", "parent", Priority.P1),
+        Row("c", "child", Priority.P4, parent_id="p"),
+    ]
+
+    result = arrange(
+        rows, Arrangement(group_by=(Field.PRIORITY,)), expanded=frozenset({"p"})
+    )
+
+    # Only the root is bucketed (P1); the child nests under it, never in a P4 group.
+    assert _shape(result) == [
+        ("H", 0, Priority.P1.label),
+        ("T", 1, "parent"),
+        ("T", 2, "child"),
+    ]
+
+
+def test_multi_level_nesting_when_all_ancestors_expanded() -> None:
+    rows = [
+        Row("a", "grandparent"),
+        Row("b", "parent", parent_id="a"),
+        Row("c", "child", parent_id="b"),
+    ]
+
+    result = arrange(rows, Arrangement(), expanded=frozenset({"a", "b"}))
+
+    assert _shape(result) == [
+        ("T", 0, "grandparent"),
+        ("T", 1, "parent"),
+        ("T", 2, "child"),
+    ]
+
+
+def test_collapsing_an_intermediate_node_hides_its_whole_subtree() -> None:
+    rows = [
+        Row("a", "grandparent"),
+        Row("b", "parent", parent_id="a"),
+        Row("c", "child", parent_id="b"),
+    ]
+
+    result = arrange(rows, Arrangement(), expanded=frozenset({"a"}))
+
+    assert _shape(result) == [("T", 0, "grandparent"), ("T", 1, "parent")]
+    parent = result[1]
+    assert isinstance(parent, TaskLine)
+    assert parent.has_children is True
+    assert parent.expanded is False
+
+
+def test_orphan_child_whose_parent_is_absent_renders_as_a_root() -> None:
+    rows = [Row("c", "orphan", parent_id="missing")]
+
+    result = arrange(rows, Arrangement())
+
+    assert _shape(result) == [("T", 0, "orphan")]
+    orphan = result[0]
+    assert isinstance(orphan, TaskLine)
+    assert orphan.has_children is False
+
+
+def test_siblings_are_sorted_among_themselves() -> None:
+    rows = [
+        Row("p", "parent"),
+        Row("c2", "zeta", parent_id="p"),
+        Row("c1", "alpha", parent_id="p"),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(sort_by=(SortKey(Field.CONTENT),)),
+        expanded=frozenset({"p"}),
+    )
+
+    assert [c for _, _, c in _shape(result)] == ["parent", "alpha", "zeta"]
+
+
+def test_group_header_counts_only_visible_lines_when_collapsed() -> None:
+    rows = [
+        Row("p", "parent", project_name="Work"),
+        Row("c", "child", project_name="Work", parent_id="p"),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.PROJECT,)))  # collapsed
+
+    header = next(r for r in result if isinstance(r, GroupHeader))
+    assert header.count == 1  # only the visible parent line
 
 
 # --- Arrangement invariants + serde ---

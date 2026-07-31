@@ -19,3 +19,4 @@ class Task:
     labels: tuple[str, ...] = ()
     description: str = ""
     deadline: Deadline | None = None
+    parent_id: str | None = None

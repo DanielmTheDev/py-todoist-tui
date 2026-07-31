@@ -1549,13 +1549,14 @@ async def test_move_failure_is_surfaced_and_resyncs() -> None:
         assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == "Errands"
 
 
-def _row(content: str, project_id: str = "220") -> Task:
+def _row(content: str, project_id: str = "220", parent_id: str | None = None) -> Task:
     return Task(
         id=TaskId(content),
         content=content,
         priority=Priority.P4,
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id=project_id,
+        parent_id=parent_id,
     )
 
 
@@ -1667,13 +1668,76 @@ async def test_j_and_k_move_row_cursor() -> None:
         assert table.cursor_row == 1
         await pilot.press("k")
         assert table.cursor_row == 0
-        for key in ("h", "l"):  # no horizontal move in row mode; must not error
+        for key in ("h", "l"):  # childless roots: expand/collapse are no-ops here
             await pilot.press(key)
             assert table.cursor_row == 0
 
 
 def _cursor_content(table: TaskTable) -> str:
     return _content_col(table)[table.cursor_row]
+
+
+def _parent_and_child() -> FakeRepository:
+    return FakeRepository(
+        [_row("parent"), _row("child", parent_id="parent")],
+        [Project(id="220", name="Work")],
+    )
+
+
+@pytest.mark.anyio
+async def test_subtasks_are_hidden_by_default_with_an_expand_marker() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        contents = _content_col(table)
+        assert [c.strip() for c in contents] == ["▸ parent"]  # child hidden
+
+
+@pytest.mark.anyio
+async def test_l_expands_a_parent_revealing_its_child() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("l")
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert contents == ["▾ parent", "child"]
+        assert table.cursor_row == 0  # cursor stays on the parent
+
+
+@pytest.mark.anyio
+async def test_h_collapses_an_expanded_parent() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("l")
+        await pilot.pause()
+        assert table.row_count == 2
+        await pilot.press("h")
+        await pilot.pause()
+        assert [c.strip() for c in _content_col(table)] == ["▸ parent"]
+
+
+@pytest.mark.anyio
+async def test_h_on_a_child_jumps_the_cursor_to_its_parent() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("l")  # expand
+        await pilot.pause()
+        await pilot.press("j")  # move onto the child
+        assert _cursor_content(table).strip() == "child"
+        await pilot.press("h")  # collapse+jump: land on the parent
+        await pilot.pause()
+        assert _cursor_content(table).strip() == "▾ parent"
 
 
 @pytest.mark.anyio

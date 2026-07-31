@@ -40,6 +40,8 @@ class ArrangeRow(Protocol):
     def project_name(self) -> str | None: ...
     @property
     def labels(self) -> tuple[str, ...]: ...
+    @property
+    def parent_id(self) -> str | None: ...
 
 
 # A group bucket's sort position. `present` (0) always orders before "missing"
@@ -201,16 +203,34 @@ class GroupHeader:
 class TaskLine[T: ArrangeRow]:
     level: int
     row: T
+    has_children: bool = False  # has subtasks present in the same row set
+    expanded: bool = False  # its subtasks are currently shown
 
 
 type RenderRow[T: ArrangeRow] = GroupHeader | TaskLine[T]
 
 
 def arrange[T: ArrangeRow](
-    rows: list[T], arrangement: Arrangement
+    rows: list[T], arrangement: Arrangement, expanded: frozenset[Any] = frozenset()
 ) -> list[RenderRow[T]]:
+    """Group/sort the *root* tasks; nest each task's subtasks directly beneath it.
+
+    A task is a root unless its `parent_id` names another row in `rows` (so an
+    orphan whose parent is absent renders flat). Only roots are grouped/sorted;
+    a task's children always follow it, indented one level deeper, and appear
+    only when the task's id is in `expanded`.
+    """
+    present = {row.id for row in rows}
+    children: dict[Any, list[T]] = {}
+    roots: list[T] = []
+    for row in rows:
+        parent = row.parent_id
+        if parent is not None and parent in present:
+            children.setdefault(parent, []).append(row)
+        else:
+            roots.append(row)
     out: list[RenderRow[T]] = []
-    _emit(list(rows), arrangement, 0, out)
+    _emit(roots, arrangement, 0, out, children, expanded)
     return out
 
 
@@ -219,13 +239,16 @@ def _emit[T: ArrangeRow](
     arrangement: Arrangement,
     level: int,
     out: list[RenderRow[T]],
+    children: dict[Any, list[T]],
+    expanded: frozenset[Any],
 ) -> int:
     """Append this level's rows to `out`; return the task-line count emitted."""
     group_by = arrangement.group_by[level:]
     if not group_by:
-        lines = [TaskLine(level, row) for row in _sorted(rows, arrangement.sort_by)]
-        out.extend(lines)
-        return len(lines)
+        total = 0
+        for row in _sorted(rows, arrangement.sort_by):
+            total += _emit_subtree(row, arrangement, level, out, children, expanded)
+        return total
     field = group_by[0]
     ascending = arrangement.group_ascending(field)
     members: dict[str, list[T]] = {}
@@ -239,11 +262,34 @@ def _emit[T: ArrangeRow](
         members, key=lambda lbl: _bucket_order(order[lbl], lbl, ascending)
     ):
         subtree: list[RenderRow[T]] = []  # emit children first to know the count
-        count = _emit(members[label], arrangement, level + 1, subtree)
+        count = _emit(
+            members[label], arrangement, level + 1, subtree, children, expanded
+        )
         out.append(GroupHeader(level, label, field, count))
         out.extend(subtree)
         total += count
     return total
+
+
+def _emit_subtree[T: ArrangeRow](
+    row: T,
+    arrangement: Arrangement,
+    level: int,
+    out: list[RenderRow[T]],
+    children: dict[Any, list[T]],
+    expanded: frozenset[Any],
+) -> int:
+    """Emit `row` then, if expanded, its subtask subtree; return lines emitted."""
+    kids = children.get(row.id, [])
+    is_expanded = bool(kids) and row.id in expanded
+    out.append(TaskLine(level, row, has_children=bool(kids), expanded=is_expanded))
+    count = 1
+    if is_expanded:
+        for child in _sorted(kids, arrangement.sort_by):
+            count += _emit_subtree(
+                child, arrangement, level + 1, out, children, expanded
+            )
+    return count
 
 
 def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[T]:

@@ -162,4 +162,5 @@ def _to_task(record: dict[str, Any]) -> Task:
         labels=tuple(str(label) for label in record.get("labels") or ()),
         description=str(record.get("description") or ""),
         deadline=Deadline.from_api(deadline) if deadline else None,
+        parent_id=str(record["parent_id"]) if record.get("parent_id") else None,
     )

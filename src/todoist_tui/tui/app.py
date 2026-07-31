@@ -7,6 +7,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
+from textual.message import Message
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
@@ -23,7 +24,13 @@ from todoist_tui.application.views import (
     load_view,
     project_view,
 )
-from todoist_tui.domain.arrange import Arrangement, GroupHeader, RenderRow, arrange
+from todoist_tui.domain.arrange import (
+    Arrangement,
+    GroupHeader,
+    RenderRow,
+    TaskLine,
+    arrange,
+)
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -63,20 +70,37 @@ class InMemoryArrangements:
 
 
 class TaskTable(DataTable[object]):
-    """DataTable with vim h/j/k/l aliases; the cursor skips group headers."""
+    """DataTable with vim j/k row nav and h/l subtask collapse/expand.
+
+    The cursor skips group headers. h/l don't move the column cursor (the table
+    is row-mode); they ask the app to collapse/expand the subtasks of the row
+    under the cursor.
+    """
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("h", "cursor_left", "Left", show=False),
-        Binding("l", "cursor_right", "Right", show=False),
+        Binding("h", "collapse", "Collapse", show=False),
+        Binding("l", "expand", "Expand", show=False),
     ]
+
+    class Expand(Message):
+        """Reveal the subtasks of the row under the cursor."""
+
+    class Collapse(Message):
+        """Hide the subtasks of the row under the cursor, or jump to its parent."""
 
     def action_cursor_down(self) -> None:
         self._skip_to_task(step=1)
 
     def action_cursor_up(self) -> None:
         self._skip_to_task(step=-1)
+
+    def action_expand(self) -> None:
+        self.post_message(self.Expand())
+
+    def action_collapse(self) -> None:
+        self.post_message(self.Collapse())
 
     def _skip_to_task(self, step: int) -> None:
         target = self._task_row_after(self.cursor_row, step)
@@ -134,6 +158,7 @@ class TodoistApp(App[None]):
         self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
+        self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
@@ -324,7 +349,7 @@ class TodoistApp(App[None]):
             replace(row, priority=priority) if str(row.id) == task_id else row
             for row in self._rows
         ]
-        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._render(self._arrange(self._rows), self._view)
         self._set_priority(TaskId(task_id), priority)
 
     @work
@@ -409,7 +434,7 @@ class TodoistApp(App[None]):
             # a filter's membership needs the server; assume the reschedule drops
             # it and let the background refresh restore it if it still matches
             self._rows = [row for row in self._rows if str(row.id) != str(task_id)]
-        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._render(self._arrange(self._rows), self._view)
         self._set_due(task_id, new_due)
 
     @work
@@ -433,7 +458,7 @@ class TodoistApp(App[None]):
             replace(row, deadline=new_deadline) if str(row.id) == str(task_id) else row
             for row in self._rows
         ]
-        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._render(self._arrange(self._rows), self._view)
         self._set_deadline(task_id, new_deadline)
 
     @work
@@ -497,7 +522,7 @@ class TodoistApp(App[None]):
             # a filter's membership needs the server; assume the move drops it and
             # let the background refresh restore it if it still matches
             self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
-        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._render(self._arrange(self._rows), self._view)
         self._move_task(task_id, target.project_id, target.section_id)
 
     @work
@@ -520,7 +545,47 @@ class TodoistApp(App[None]):
             return
         self._arrangement = await self._arrangements.get(view.key)
         self._rows = rows  # retained so a priority keypress can re-arrange locally
-        self._render(arrange(rows, self._arrangement), view)
+        self._render(self._arrange(rows), view)
+
+    def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
+        return arrange(rows, self._arrangement, frozenset(self._expanded))
+
+    def on_task_table_expand(self, _message: TaskTable.Expand) -> None:
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None or task_id in self._expanded:
+            return
+        if not self._has_children(task_id):  # nothing to reveal
+            return
+        self._expanded.add(TaskId(task_id))
+        self._render(self._arrange(self._rows), self._view)  # cursor stays on it
+
+    def on_task_table_collapse(self, _message: TaskTable.Collapse) -> None:
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:
+            return
+        if task_id in self._expanded:  # an expanded parent: fold it away
+            self._expanded.discard(TaskId(task_id))
+            self._render(self._arrange(self._rows), self._view)  # cursor stays on it
+            return
+        parent_id = self._parent_of(task_id)  # a leaf/child: step out to the parent
+        if parent_id is not None:
+            self._move_cursor_to_task(table, parent_id)
+
+    def _has_children(self, task_id: str) -> bool:
+        return any(row.parent_id == task_id for row in self._rows)
+
+    def _parent_of(self, task_id: str) -> str | None:
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        return row.parent_id if row is not None else None
+
+    def _move_cursor_to_task(self, table: TaskTable, task_id: str) -> None:
+        for row in range(table.row_count):
+            key = table.coordinate_to_cell_key(Coordinate(row, 0)).row_key
+            if _task_id_of(str(key.value)) == task_id:
+                table.move_cursor(row=row)
+                return
 
     def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:
         try:
@@ -540,6 +605,7 @@ class TodoistApp(App[None]):
                 continue
             row = item.row
             content = Text(_indent(item.level))
+            content.append(_expand_marker(item))
             content.append_text(render_links(row.content))
             table.add_row(
                 _priority_dot(row.priority),
@@ -641,3 +707,9 @@ def _arrangement_summary(arrangement: Arrangement) -> str:
 
 def _priority_dot(priority: Priority) -> str:
     return _PRIORITY_DOTS.get(priority, "")  # P4 (default) stays blank
+
+
+def _expand_marker(line: TaskLine[TaskRow]) -> str:
+    if not line.has_children:
+        return ""  # leaves carry no marker (and don't shift childless lists)
+    return "▾ " if line.expanded else "▸ "
