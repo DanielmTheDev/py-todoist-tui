@@ -15,9 +15,9 @@ class Due:
 
     @classmethod
     def from_api(cls, data: dict[str, object]) -> "Due":
-        raw = data.get("datetime") or data.get("date")
+        raw = data.get("date")  # `date` holds a datetime string when timed
         if not isinstance(raw, str):
-            raise ValueError(f"due missing date/datetime: {data!r}")
+            raise ValueError(f"due missing date: {data!r}")
 
         parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
         has_time = "T" in raw
@@ -33,17 +33,18 @@ class Due:
 
     @property
     def to_api(self) -> dict[str, str]:
-        """Todoist Sync `due` object: date-only when all-day, else a datetime.
+        """Todoist Sync `due` object: the `date` field holds a plain date when
+        all-day, else a floating ISO datetime (no tz) — Todoist has no separate
+        `datetime` key and silently drops one, clearing the due.
 
         A recurring due also carries its `string` (and `lang`) so an update
         moves the next occurrence without dropping the recurrence rule.
         """
         if self.time is None:
-            payload = {"date": self.date.isoformat()}
+            value = self.date.isoformat()
         else:
-            payload = {
-                "datetime": datetime.datetime.combine(self.date, self.time).isoformat()
-            }
+            value = datetime.datetime.combine(self.date, self.time).isoformat()
+        payload = {"date": value}
         if self.is_recurring and self.string:
             payload["string"] = self.string
             if self.lang:
