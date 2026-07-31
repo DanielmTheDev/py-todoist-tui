@@ -65,6 +65,12 @@ never calls httpx or the DB directly. Enforced by `import-linter`
   Live calls only in `tests/smoke/`, marked `smoke`, excluded from default runs.
 - Destructive ops honor a `--dry-run` where applicable. Never mutate the real
   account from an automated/CI run.
+- **Free to probe the live API to confirm behavior before implementing.** A
+  throwaway test account token lives in the repo-root `.env` as
+  `TODOIST_SMOKE_TOKEN` (same one the `smoke` tests use). When the API's real
+  response shape or a payload's effect is uncertain, write a scratch script
+  against that account and verify first — don't guess and don't build on an
+  assumption. Clean up any tasks you create.
 
 ## Development loop
 Each increment is one small, single-purpose diff:
