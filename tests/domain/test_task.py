@@ -85,6 +85,31 @@ def test_task_holds_description() -> None:
     assert task.description == "Get 2% from the corner store"
 
 
+def test_task_section_id_defaults_to_none() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Rootless",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+
+    assert task.section_id is None
+
+
+def test_task_holds_section_id() -> None:
+    task = Task(
+        id=TaskId("2"),
+        content="In a section",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        section_id="77",
+    )
+
+    assert task.section_id == "77"
+
+
 def test_project_holds_id_and_name() -> None:
     project = Project(id="220", name="Inbox")
 

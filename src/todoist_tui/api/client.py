@@ -62,7 +62,9 @@ class TodoistClient:
             "/sync",
             data={
                 "sync_token": sync_token,
-                "resource_types": json.dumps(["items", "projects", "filters"]),
+                "resource_types": json.dumps(
+                    ["items", "projects", "filters", "sections"]
+                ),
             },
         )
         response.raise_for_status()
@@ -81,8 +83,17 @@ class TodoistClient:
         # `due=None` clears the date; otherwise a Sync `due` object (date/datetime).
         await self._command("item_update", {"id": task_id, "due": due})
 
-    async def move_item(self, task_id: str, project_id: str) -> None:
-        await self._command("item_move", {"id": task_id, "project_id": project_id})
+    async def move_item(
+        self, task_id: str, project_id: str, section_id: str | None = None
+    ) -> None:
+        # A section move sends section_id alone (Todoist infers the project);
+        # a project move sends project_id alone and clears any section.
+        args = (
+            {"id": task_id, "section_id": section_id}
+            if section_id is not None
+            else {"id": task_id, "project_id": project_id}
+        )
+        await self._command("item_move", args)
 
     async def _command(self, kind: str, args: dict[str, Any]) -> None:
         command_uuid = self._uuid()

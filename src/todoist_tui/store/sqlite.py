@@ -11,6 +11,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
 # Dropped and recreated on every save: the snapshot is disposable and fully
@@ -20,16 +21,20 @@ DROP TABLE IF EXISTS meta;
 DROP TABLE IF EXISTS projects;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS filters;
+DROP TABLE IF EXISTS sections;
 CREATE TABLE meta (sync_token TEXT NOT NULL);
 CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER, child_order INTEGER);
 CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
-    labels TEXT, description TEXT
+    section_id TEXT, labels TEXT, description TEXT
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
+);
+CREATE TABLE sections (
+    id TEXT, project_id TEXT, name TEXT, section_order INTEGER
 );
 """
 
@@ -67,8 +72,8 @@ class SqliteSnapshotCache:
                     _row_to_task(row)
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
-                        " due_recurring, due_string, due_lang, project_id, labels,"
-                        " description FROM tasks"
+                        " due_recurring, due_string, due_lang, project_id, section_id,"
+                        " labels, description FROM tasks"
                     )
                 ]
                 filters = [
@@ -77,10 +82,20 @@ class SqliteSnapshotCache:
                         "SELECT id, name, query, item_order FROM filters"
                     )
                 ]
+                sections = [
+                    Section(id=sid, project_id=pid, name=name, order=order)
+                    for sid, pid, name, order in conn.execute(
+                        "SELECT id, project_id, name, section_order FROM sections"
+                    )
+                ]
             except sqlite3.OperationalError:  # missing/legacy schema: treat as cold
                 return None
         return Snapshot(
-            projects=projects, tasks=tasks, sync_token=token_row[0], filters=filters
+            projects=projects,
+            tasks=tasks,
+            sync_token=token_row[0],
+            filters=filters,
+            sections=sections,
         )
 
     def _save(self, snapshot: Snapshot) -> None:
@@ -96,12 +111,17 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox), p.order) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
                 "INSERT INTO filters (id, name, query, item_order) VALUES (?, ?, ?, ?)",
                 [(f.id, f.name, f.query, f.order) for f in snapshot.filters],
+            )
+            conn.executemany(
+                "INSERT INTO sections (id, project_id, name, section_order)"
+                " VALUES (?, ?, ?, ?)",
+                [(s.id, s.project_id, s.name, s.order) for s in snapshot.sections],
             )
             conn.commit()
 
@@ -166,6 +186,7 @@ def _task_to_row(
     str | None,
     str | None,
     str,
+    str | None,
     str,
     str,
 ]:
@@ -180,6 +201,7 @@ def _task_to_row(
         due.string if due else None,
         due.lang if due else None,
         task.project_id,
+        task.section_id,
         json.dumps(list(task.labels)),
         task.description,
     )
@@ -198,6 +220,7 @@ def _row_to_task(
         str,
         str | None,
         str | None,
+        str | None,
     ],
 ) -> Task:
     (
@@ -210,6 +233,7 @@ def _row_to_task(
         due_string,
         due_lang,
         project_id,
+        section_id,
         labels,
         description,
     ) = row
@@ -228,6 +252,7 @@ def _row_to_task(
         priority=Priority(priority),
         due=due,
         project_id=project_id,
+        section_id=section_id,
         labels=tuple(json.loads(labels)) if labels else (),
         description=description or "",
     )

@@ -63,6 +63,7 @@ class TaskDetailScreen(ModalScreen[None]):
         text.append(f"Due       {self._due_line()}\n")
         text.append(f"Priority  {row.priority.label}\n")
         text.append(f"Project   {row.project_name or _DASH}\n")
+        text.append(f"Section   {row.section_name or _DASH}\n")
         text.append(f"Labels    {self._labels_line()}\n\n")
         text.append("Description\n", style="bold")
         if row.description:

@@ -20,6 +20,8 @@ class TaskRow:
     due: Due | None
     project_name: str | None
     project_id: str | None = None
+    section_id: str | None = None
+    section_name: str | None = None
     labels: tuple[str, ...] = ()
     description: str = ""
 
@@ -55,8 +57,11 @@ def filter_view(f: Filter) -> View:
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
-    tasks, projects = await asyncio.gather(view.fetch(repo), repo.projects())
+    tasks, projects, sections = await asyncio.gather(
+        view.fetch(repo), repo.projects(), repo.sections()
+    )
     names = {project.id: project.name for project in projects}
+    section_names = {section.id: section.name for section in sections}
     return [
         TaskRow(
             id=task.id,
@@ -65,6 +70,10 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             due=task.due,
             project_name=names.get(task.project_id),
             project_id=task.project_id,
+            section_id=task.section_id,
+            section_name=(
+                section_names.get(task.section_id) if task.section_id else None
+            ),
             labels=task.labels,
             description=task.description,
         )

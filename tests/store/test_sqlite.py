@@ -9,6 +9,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.store.sqlite import SqliteSnapshotCache
 
@@ -23,6 +24,10 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
             Project(id="220", name="Eingang", is_inbox=True, order=0),
             Project(id="9", name="Work", order=5),
         ],
+        sections=[
+            Section(id="s1", project_id="9", name="Planning", order=1),
+            Section(id="s2", project_id="9", name="In progress", order=2),
+        ],
         tasks=[
             Task(
                 id=TaskId("a"),
@@ -35,7 +40,8 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                     string="every day at 9:30",
                     lang="en",
                 ),
-                project_id="220",
+                project_id="9",
+                section_id="s1",
                 labels=("home", "urgent"),
                 description="water them all",
             ),
@@ -112,6 +118,12 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.tasks[0].labels == ("home", "urgent")
     assert loaded.tasks[0].description == "water them all"
+    assert loaded.tasks[0].section_id == "s1"
+    assert loaded.tasks[1].section_id is None
+    assert [(s.id, s.name, s.order) for s in loaded.sections] == [
+        ("s1", "Planning", 1),
+        ("s2", "In progress", 2),
+    ]
 
 
 @pytest.mark.anyio

@@ -14,5 +14,6 @@ class Task:
     priority: Priority
     due: Due | None
     project_id: str
+    section_id: str | None = None
     labels: tuple[str, ...] = ()
     description: str = ""

@@ -18,6 +18,7 @@ def _row(
     due: Due | None = _DUE,
     priority: Priority = Priority.P1,
     project_name: str | None = "Errands",
+    section_name: str | None = "Planning",
     labels: tuple[str, ...] = ("home", "errand"),
     description: str = "2% from the corner store",
 ) -> TaskRow:
@@ -27,6 +28,7 @@ def _row(
         priority=priority,
         due=due,
         project_name=project_name,
+        section_name=section_name,
         labels=labels,
         description=description,
     )
@@ -92,9 +94,18 @@ async def test_renders_title_and_all_fields() -> None:
     assert "2026-07-29 09:00" in shown
     assert "P1" in shown
     assert "Errands" in shown
+    assert "Planning" in shown
     assert "@home" in shown
     assert "@errand" in shown
     assert "2% from the corner store" in shown
+
+
+@pytest.mark.anyio
+async def test_no_section_renders_a_dash() -> None:
+    shown = await _shown(_row(section_name=None))
+
+    assert "Section" in shown
+    assert "—" in shown
 
 
 @pytest.mark.anyio

@@ -6,6 +6,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ class TaskRepository(Protocol):
 
     async def projects(self) -> list[Project]: ...
 
+    async def sections(self) -> list[Section]: ...
+
     async def filters(self) -> list[Filter]: ...
 
     async def complete(self, task_id: TaskId) -> None: ...
@@ -35,7 +38,9 @@ class TaskRepository(Protocol):
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None: ...
 
     async def refresh(self) -> None: ...
 
@@ -48,6 +53,7 @@ class Snapshot:
     tasks: list[Task]
     sync_token: str
     filters: list[Filter] = field(default_factory=list[Filter])
+    sections: list[Section] = field(default_factory=list[Section])
 
 
 class SnapshotSource(Protocol):

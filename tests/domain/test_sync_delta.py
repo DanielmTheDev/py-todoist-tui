@@ -2,12 +2,17 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta, merge
 from todoist_tui.domain.task import Task, TaskId
 
 
 def _filter(fid: str, name: str | None = None) -> Filter:
     return Filter(id=fid, name=name or fid, query="today", order=0)
+
+
+def _section(sid: str, name: str | None = None) -> Section:
+    return Section(id=sid, project_id="9", name=name or sid, order=0)
 
 
 def _task(task_id: str, project_id: str = "9", content: str | None = None) -> Task:
@@ -124,6 +129,44 @@ def test_incremental_upserts_and_deletes_filters() -> None:
     merged = merge(prior, delta)
 
     assert [(f.id, f.name) for f in merged.filters] == [("b", "B renamed")]
+
+
+def test_full_sync_replaces_sections() -> None:
+    prior = Snapshot(projects=[], tasks=[], sync_token="old", sections=[_section("x")])
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=True,
+        sections=[_section("y")],
+    )
+
+    assert [s.id for s in merge(prior, delta).sections] == ["y"]
+
+
+def test_incremental_upserts_and_deletes_sections() -> None:
+    prior = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="old",
+        sections=[_section("a", "A"), _section("b", "B")],
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        sections=[_section("b", "B renamed")],
+        deleted_section_ids=frozenset({"a"}),
+    )
+
+    merged = merge(prior, delta)
+
+    assert [(s.id, s.name) for s in merged.sections] == [("b", "B renamed")]
 
 
 def test_incremental_removes_deleted_project() -> None:

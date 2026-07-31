@@ -8,6 +8,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.store.repository import SnapshotTaskRepository
@@ -34,6 +35,7 @@ def _full_delta(snapshot: Snapshot) -> SyncDelta:
         sync_token=snapshot.sync_token,
         full_sync=True,
         filters=snapshot.filters,
+        sections=snapshot.sections,
     )
 
 
@@ -56,7 +58,7 @@ class FakeInner:
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
-        self.moves: list[tuple[TaskId, str]] = []
+        self.moves: list[tuple[TaskId, str, str | None]] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -79,6 +81,9 @@ class FakeInner:
     async def projects(self) -> list[Project]:  # pragma: no cover
         raise AssertionError("projects() must be served from the snapshot")
 
+    async def sections(self) -> list[Section]:  # pragma: no cover
+        raise AssertionError("sections() must be served from the snapshot")
+
     async def filters(self) -> list[Filter]:  # pragma: no cover
         raise AssertionError("filters() must be served from the snapshot")
 
@@ -94,8 +99,10 @@ class FakeInner:
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         self.dues.append((task_id, due))
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None:
-        self.moves.append((task_id, project_id))
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        self.moves.append((task_id, project_id, section_id))
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -290,8 +297,37 @@ async def test_set_project_delegates_then_invalidates_filter_cache() -> None:
     await repo.set_project(TaskId("x"), "9")  # mutation invalidates cache
     await repo.filtered("a")
 
-    assert inner.moves == [(TaskId("x"), "9")]
+    assert inner.moves == [(TaskId("x"), "9", None)]
     assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_set_project_forwards_section_id() -> None:
+    inner = FakeInner()
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_full_delta(_snapshot())), FakeCache(), _CLOCK
+    )
+
+    await repo.set_project(TaskId("x"), "9", "77")
+
+    assert inner.moves == [(TaskId("x"), "9", "77")]
+
+
+@pytest.mark.anyio
+async def test_sections_served_from_snapshot() -> None:
+    snapshot = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="tok",
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    repo = SnapshotTaskRepository(
+        FakeInner(), FakeSource(_full_delta(snapshot)), FakeCache(), _CLOCK
+    )
+
+    (s,) = await repo.sections()
+
+    assert (s.id, s.name) == ("s1", "Planning")
 
 
 @pytest.mark.anyio

@@ -44,8 +44,37 @@ async def test_today_maps_json_to_domain_task() -> None:
     assert task.due is not None
     assert task.due.time == datetime.time(9, 30)
     assert task.project_id == "220"
+    assert task.section_id is None
     assert task.labels == ()
     assert task.description == "2% from the corner store"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_maps_section_id() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "In a section",
+                        "priority": 1,
+                        "project_id": "220",
+                        "section_id": "77",
+                        "due": None,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.section_id == "77"
 
 
 @pytest.mark.anyio
@@ -432,6 +461,103 @@ async def test_delta_tolerates_missing_filters_key() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_delta_parses_and_splits_sections() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "sections": [
+                    {
+                        "id": "s1",
+                        "project_id": "9",
+                        "name": "Planning",
+                        "section_order": 1,
+                    },
+                    {
+                        "id": "s2",
+                        "project_id": "9",
+                        "name": "Old",
+                        "section_order": 2,
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert [(s.id, s.project_id, s.name, s.order) for s in delta.sections] == [
+        ("s1", "9", "Planning", 1)
+    ]
+    assert delta.deleted_section_ids == frozenset({"s2"})
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_tolerates_missing_sections_key() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert delta.sections == []
+    assert delta.deleted_section_ids == frozenset()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_sections_reads_via_sync() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "sections": [
+                    {
+                        "id": "s1",
+                        "project_id": "9",
+                        "name": "Planning",
+                        "section_order": 1,
+                    },
+                    {
+                        "id": "s2",
+                        "project_id": "9",
+                        "name": "Gone",
+                        "section_order": 2,
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (s,) = await repo.sections()
+
+    assert (s.id, s.project_id, s.name, s.order) == ("s1", "9", "Planning", 1)
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_complete_closes_the_task() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
@@ -556,6 +682,23 @@ async def test_set_project_moves_the_task() -> None:
     )
     assert commands[0]["type"] == "item_move"
     assert commands[0]["args"] == {"id": "6X4", "project_id": "220"}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_project_with_section_moves_into_section() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_project(TaskId("6X4"), "220", "77")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_move"
+    assert commands[0]["args"] == {"id": "6X4", "section_id": "77"}
 
 
 @pytest.mark.anyio

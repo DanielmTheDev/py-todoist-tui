@@ -8,6 +8,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -17,10 +18,12 @@ class FakeRepository:
         today: list[Task],
         inbox: list[Task],
         projects: list[Project],
+        sections: list[Section] | None = None,
     ) -> None:
         self._today = today
         self._inbox = inbox
         self._projects = projects
+        self._sections = sections or []
 
     async def today(self) -> list[Task]:
         return self._today
@@ -37,6 +40,9 @@ class FakeRepository:
     async def projects(self) -> list[Project]:
         return self._projects
 
+    async def sections(self) -> list[Section]:
+        return self._sections
+
     async def filters(self) -> list[Filter]:
         return []
 
@@ -48,7 +54,9 @@ class FakeRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None: ...
 
     async def refresh(self) -> None: ...
 
@@ -94,6 +102,37 @@ async def test_load_inbox_view_uses_inbox_tasks() -> None:
     rows = await load_view(repo, INBOX)
 
     assert [row.content for row in rows] == ["Inbox thing"]
+
+
+@pytest.mark.anyio
+async def test_load_view_resolves_section_name() -> None:
+    task = Task(
+        id=TaskId("x"),
+        content="In a section",
+        priority=Priority.P2,
+        due=None,
+        project_id="9",
+        section_id="s1",
+    )
+    repo = FakeRepository(
+        [task],
+        [],
+        [Project(id="9", name="Work")],
+        [Section(id="s1", project_id="9", name="Planning")],
+    )
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].section_name == "Planning"
+
+
+@pytest.mark.anyio
+async def test_load_view_no_section_yields_none_name() -> None:
+    repo = FakeRepository([_task("Rootless", "9")], [], [Project(id="9", name="Work")])
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].section_name is None
 
 
 @pytest.mark.anyio
@@ -205,6 +244,9 @@ class BarrierRepository:
         await self._today_started.wait()
         return [Project(id="220", name="Errands")]
 
+    async def sections(self) -> list[Section]:
+        return []
+
     async def filtered(self, query: str) -> list[Task]:
         return []
 
@@ -222,7 +264,9 @@ class BarrierRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None: ...
 
     async def refresh(self) -> None: ...
 

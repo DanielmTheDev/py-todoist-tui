@@ -27,7 +27,6 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
-from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
@@ -35,7 +34,7 @@ from todoist_tui.tui.format import format_due, render_links
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
-from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
+from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
@@ -387,22 +386,34 @@ class TodoistApp(App[None]):
         self._picking_project = True
         try:
             projects = await self._repo.projects()
+            sections = await self._repo.sections()
         except Exception as error:  # offline / sync failed: report, stay put
             self._set_status(f"Failed to load projects: {error}")
             self._picking_project = False
             return
         self.push_screen(
-            ProjectPickerScreen(projects, current=row.project_id),
+            ProjectPickerScreen(
+                projects,
+                sections,
+                current_project=row.project_id,
+                current_section=row.section_id,
+            ),
             lambda target: self._on_moved(TaskId(task_id), target),
         )
 
-    def _on_moved(self, task_id: TaskId, target: Project | None) -> None:
+    def _on_moved(self, task_id: TaskId, target: MoveTarget | None) -> None:
         self._picking_project = False
         if target is None:  # picker was cancelled
             return
         # optimistic: repaint the project cell (and re-group if grouped by project)
         self._rows = [
-            replace(row, project_name=target.name, project_id=target.id)
+            replace(
+                row,
+                project_name=target.project_name,
+                project_id=target.project_id,
+                section_id=target.section_id,
+                section_name=target.section_name,
+            )
             if str(row.id) == str(task_id)
             else row
             for row in self._rows
@@ -414,12 +425,14 @@ class TodoistApp(App[None]):
             # let the background refresh restore it if it still matches
             self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
         self._render(arrange(self._rows, self._arrangement), self._view)
-        self._move_task(task_id, target.id)
+        self._move_task(task_id, target.project_id, target.section_id)
 
     @work
-    async def _move_task(self, task_id: TaskId, project_id: str) -> None:
+    async def _move_task(
+        self, task_id: TaskId, project_id: str, section_id: str | None
+    ) -> None:
         try:
-            await move_task(self._repo, task_id, project_id)
+            await move_task(self._repo, task_id, project_id, section_id)
         except Exception as error:  # command rejected: resync, then report
             await self._reload(self._view)
             self._set_status(f"Failed to move task: {error}")

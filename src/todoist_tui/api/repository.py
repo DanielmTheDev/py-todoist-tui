@@ -6,6 +6,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 
@@ -44,6 +45,12 @@ class ApiTaskRepository:
     async def projects(self) -> list[Project]:
         return [_to_project(record) for record in await self._client.projects()]
 
+    async def sections(self) -> list[Section]:
+        # No REST list endpoint used here; a full /sync is the source, like filters().
+        body = await self._client.sync("*")
+        live, _deleted = _split(body.get("sections", []), _to_section)
+        return live
+
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
 
@@ -56,8 +63,10 @@ class ApiTaskRepository:
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         await self._client.update_item_due(str(task_id), due.to_api if due else None)
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None:
-        await self._client.move_item(str(task_id), project_id)
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        await self._client.move_item(str(task_id), project_id, section_id)
 
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""
@@ -74,6 +83,7 @@ class ApiSnapshotSource:
         projects, deleted_projects = _split(body["projects"], _to_project)
         tasks, deleted_tasks = _split(body["items"], _to_task, _is_gone)
         filters, deleted_filters = _split(body.get("filters", []), _to_filter)
+        sections, deleted_sections = _split(body.get("sections", []), _to_section)
         return SyncDelta(
             projects=projects,
             tasks=tasks,
@@ -83,6 +93,8 @@ class ApiSnapshotSource:
             full_sync=bool(body["full_sync"]),
             filters=filters,
             deleted_filter_ids=deleted_filters,
+            sections=sections,
+            deleted_section_ids=deleted_sections,
         )
 
 
@@ -109,6 +121,15 @@ def _to_project(record: dict[str, Any]) -> Project:
     )
 
 
+def _to_section(record: dict[str, Any]) -> Section:
+    return Section(
+        id=str(record["id"]),
+        project_id=str(record["project_id"]),
+        name=str(record["name"]),
+        order=int(record.get("section_order", 0)),
+    )
+
+
 def _to_filter(record: dict[str, Any]) -> Filter:
     return Filter(
         id=str(record["id"]),
@@ -126,6 +147,7 @@ def _to_task(record: dict[str, Any]) -> Task:
         priority=Priority.from_api(int(record["priority"])),
         due=Due.from_api(due) if due else None,
         project_id=str(record["project_id"]),
+        section_id=str(record["section_id"]) if record.get("section_id") else None,
         labels=tuple(str(label) for label in record.get("labels") or ()),
         description=str(record.get("description") or ""),
     )

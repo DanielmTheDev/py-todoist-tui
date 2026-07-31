@@ -7,6 +7,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -29,6 +30,9 @@ class FakeRepository:
     async def projects(self) -> list[Project]:
         return []
 
+    async def sections(self) -> list[Section]:
+        return []
+
     async def filters(self) -> list[Filter]:
         return []
 
@@ -41,7 +45,9 @@ class FakeRepository:
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         self.dues.append((task_id, due))
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None: ...
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None: ...
 
     async def refresh(self) -> None: ...
 

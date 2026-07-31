@@ -12,6 +12,7 @@ from todoist_tui.domain.repository import (
     SnapshotSource,
     TaskRepository,
 )
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import merge
 from todoist_tui.domain.task import Task, TaskId
 
@@ -71,6 +72,9 @@ class SnapshotTaskRepository:
     async def projects(self) -> list[Project]:
         return (await self._snapshot_now()).projects
 
+    async def sections(self) -> list[Section]:
+        return (await self._snapshot_now()).sections
+
     async def inbox(self) -> list[Task]:
         snapshot = await self._snapshot_now()
         inbox = next((p for p in snapshot.projects if p.is_inbox), None)
@@ -113,8 +117,10 @@ class SnapshotTaskRepository:
         await self._inner.set_due(task_id, due)
         await self._invalidate()
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None:
-        await self._inner.set_project(task_id, project_id)
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        await self._inner.set_project(task_id, project_id, section_id)
         await self._invalidate()
 
     async def _invalidate(self) -> None:

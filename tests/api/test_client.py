@@ -235,6 +235,25 @@ async def test_move_item_posts_item_move_command_with_project() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_move_item_with_section_sends_section_id_only() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.move_item("6X4", "220", section_id="77")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "item_move", "uuid": "u-1", "args": {"id": "6X4", "section_id": "77"}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_move_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(
@@ -294,7 +313,12 @@ async def test_sync_posts_full_sync_and_returns_body() -> None:
     assert "application/x-www-form-urlencoded" in request.headers["content-type"]
     form = parse_qs(request.content.decode())
     assert form["sync_token"] == ["*"]
-    assert json.loads(form["resource_types"][0]) == ["items", "projects", "filters"]
+    assert json.loads(form["resource_types"][0]) == [
+        "items",
+        "projects",
+        "filters",
+        "sections",
+    ]
     await client.aclose()
 
 

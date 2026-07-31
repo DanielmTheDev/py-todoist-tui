@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -7,10 +8,23 @@ from textual.widgets import Input, OptionList
 from textual.widgets.option_list import Option
 
 from todoist_tui.domain.project import Project, sorted_projects
+from todoist_tui.domain.section import Section, sorted_sections
 
 
-class ProjectPickerScreen(ModalScreen["Project | None"]):
-    """Pick a project, filtering by typing. Dismisses the choice, or None on cancel."""
+@dataclass(frozen=True, slots=True)
+class MoveTarget:
+    """Where a task should move: a project root, or a section within it."""
+
+    project_id: str
+    project_name: str
+    section_id: str | None = None
+    section_name: str | None = None
+    is_inbox: bool = False
+
+
+class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
+    """Pick a move target — a project root or one of its sections — by typing.
+    Dismisses the chosen `MoveTarget`, or None on cancel."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "cancel", "Cancel"),
@@ -36,31 +50,43 @@ class ProjectPickerScreen(ModalScreen["Project | None"]):
     }
     """
 
-    def __init__(self, projects: list[Project], current: str | None = None) -> None:
+    def __init__(
+        self,
+        projects: list[Project],
+        sections: list[Section],
+        current_project: str | None = None,
+        current_section: str | None = None,
+    ) -> None:
         super().__init__()
-        self._sorted = sorted_projects(projects)
-        self._visible = list(self._sorted)
-        self._current = current
+        self._targets = _targets(projects, sections)
+        self._visible = list(self._targets)
+        self._current_project = current_project
+        self._current_section = current_section
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="Move to project…")
-        yield OptionList(*(_option(p) for p in self._sorted))
+        yield Input(placeholder="Move to project or section…")
+        yield OptionList(*(_option(t) for t in self._targets))
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
-        if self._current is not None:
-            index = next(
-                (i for i, p in enumerate(self._sorted) if p.id == self._current), None
-            )
-            if index is not None:
-                self.query_one(OptionList).highlighted = index
+        index = next(
+            (
+                i
+                for i, t in enumerate(self._targets)
+                if t.project_id == self._current_project
+                and t.section_id == self._current_section
+            ),
+            None,
+        )
+        if index is not None:
+            self.query_one(OptionList).highlighted = index
 
     def on_input_changed(self, event: Input.Changed) -> None:
         query = event.value.casefold()
-        self._visible = [p for p in self._sorted if query in p.name.casefold()]
+        self._visible = [t for t in self._targets if query in _label(t).casefold()]
         options = self.query_one(OptionList)
         options.clear_options()
-        options.add_options([_option(p) for p in self._visible])
+        options.add_options([_option(t) for t in self._visible])
         if self._visible:
             options.highlighted = 0
 
@@ -83,5 +109,31 @@ class ProjectPickerScreen(ModalScreen["Project | None"]):
         self.dismiss(self._visible[index])
 
 
-def _option(project: Project) -> Option:
-    return Option(project.name, id=project.id)
+def _targets(projects: list[Project], sections: list[Section]) -> list[MoveTarget]:
+    by_project: dict[str, list[Section]] = {}
+    for section in sections:
+        by_project.setdefault(section.project_id, []).append(section)
+    targets: list[MoveTarget] = []
+    for project in sorted_projects(projects):
+        targets.append(MoveTarget(project.id, project.name, is_inbox=project.is_inbox))
+        for section in sorted_sections(by_project.get(project.id, [])):
+            targets.append(
+                MoveTarget(
+                    project.id,
+                    project.name,
+                    section.id,
+                    section.name,
+                    is_inbox=project.is_inbox,
+                )
+            )
+    return targets
+
+
+def _label(target: MoveTarget) -> str:
+    if target.section_name is None:
+        return target.project_name
+    return f"{target.project_name} / {target.section_name}"
+
+
+def _option(target: MoveTarget) -> Option:
+    return Option(_label(target))

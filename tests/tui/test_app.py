@@ -10,6 +10,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.arrange import ArrangeScreen
@@ -26,16 +27,18 @@ class FakeRepository:
         projects: list[Project],
         inbox: list[Task] | None = None,
         filters: list[Filter] | None = None,
+        sections: list[Section] | None = None,
     ) -> None:
         self._tasks = tasks
         self._projects = projects
         self._inbox = inbox or []
         self._filters = filters or []
+        self._sections = sections or []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
-        self.moves: list[tuple[TaskId, str]] = []
+        self.moves: list[tuple[TaskId, str, str | None]] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -57,6 +60,9 @@ class FakeRepository:
 
     async def projects(self) -> list[Project]:
         return self._projects
+
+    async def sections(self) -> list[Section]:
+        return list(self._sections)
 
     async def filters(self) -> list[Filter]:
         return list(self._filters)
@@ -84,10 +90,14 @@ class FakeRepository:
             replace(t, due=due) if t.id == task_id else t for t in self._tasks
         ]
 
-    async def set_project(self, task_id: TaskId, project_id: str) -> None:
-        self.moves.append((task_id, project_id))
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        self.moves.append((task_id, project_id, section_id))
         self._tasks = [
-            replace(t, project_id=project_id) if t.id == task_id else t
+            replace(t, project_id=project_id, section_id=section_id)
+            if t.id == task_id
+            else t
             for t in self._tasks
         ]
         inbox_id = next((p.id for p in self._projects if p.is_inbox), None)
@@ -1253,8 +1263,29 @@ async def test_v_pick_moves_task_and_updates_project_cell() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        assert repo.moves == [(TaskId("t1"), "9")]
+        assert repo.moves == [(TaskId("t1"), "9", None)]
         assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Work"
+
+
+@pytest.mark.anyio
+async def test_v_pick_section_moves_task_into_section() -> None:
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("/")  # "Work / Planning" is the only entry with a slash
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "9", "s1")]
 
 
 @pytest.mark.anyio
@@ -1278,7 +1309,7 @@ async def test_v_moving_out_of_inbox_drops_the_row() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        assert repo.moves == [(TaskId("in1"), "9")]
+        assert repo.moves == [(TaskId("in1"), "9", None)]
         assert app.query_one(DataTable[object]).row_count == 0  # left the Inbox
 
 
@@ -1341,7 +1372,9 @@ async def test_cancelling_project_picker_leaves_task_unchanged() -> None:
 
 
 class FailingMoveRepository(FakeRepository):
-    async def set_project(self, task_id: TaskId, project_id: str) -> None:
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
         raise RuntimeError("boom")
 
 
