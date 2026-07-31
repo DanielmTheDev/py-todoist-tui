@@ -9,7 +9,13 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.schedule import QuickKind, month_weeks, quick_due, shift_month
+from todoist_tui.domain.schedule import (
+    QuickKind,
+    month_weeks,
+    parse_time_digits,
+    quick_due,
+    shift_month,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,11 +68,17 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
     """
 
     def __init__(
-        self, today: datetime.date, current: datetime.date | None = None
+        self,
+        today: datetime.date,
+        current: datetime.date | None = None,
+        current_time: datetime.time | None = None,
     ) -> None:
         super().__init__()
         self._today = today
         self._cursor = current or today  # calendar starts on the task's due date
+        # Time-of-day buffer as typed digits (HHMM); "" means all-day.
+        self._time = f"{current_time:%H%M}" if current_time is not None else ""
+        self._error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._content(), id="schedule")
@@ -75,14 +87,38 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
-            self.dismiss(DueResult(Due(date=self._cursor)))
-        elif event.key in _QUICK_KEYS:
+            self._confirm()
+        elif event.key in _QUICK_KEYS:  # quick keys are all-day, ignore any time
             kind, _label = _QUICK_KEYS[event.key]
             self.dismiss(DueResult(quick_due(kind, self._today)))
+        elif event.character and event.character.isdigit() and len(self._time) < 4:
+            self._time += event.character
+            self._error = None
+            self._refresh()
+        elif event.key == "backspace":
+            self._time = self._time[:-1]
+            self._error = None
+            self._refresh()
+        elif event.key == "r":  # remove the time, keep the date (all-day)
+            self._time = ""
+            self._error = None
+            self._refresh()
         elif (move := _NAV.get(event.character or "")) is not None:
             self._cursor = move(self._cursor)
-            self.query_one("#schedule", Static).update(self._content())
+            self._refresh()
         event.stop()  # consume every key so app bindings never fire under the modal
+
+    def _confirm(self) -> None:
+        try:
+            time = parse_time_digits(self._time)
+        except ValueError:
+            self._error = f"invalid time: {self._time}"
+            self._refresh()
+            return
+        self.dismiss(DueResult(Due(date=self._cursor, time=time)))
+
+    def _refresh(self) -> None:
+        self.query_one("#schedule", Static).update(self._content())
 
     def _content(self) -> Text:
         text = Text()
@@ -102,5 +138,26 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
                 else:
                     text.append(f"{cell.day:2d}")
             text.append("\n")
-        text.append("\nhjkl move  [ ] month  enter pick  esc cancel", style="dim")
+        text.append(f"\n\n{self._time_line()}\n")
+        if self._error is not None:
+            text.append(f"{self._error}\n", style="bold red")
+        hint = "hjkl move  [ ] month  digits time"
+        if self._time:
+            hint += "  r remove time"
+        hint += "  enter pick  esc cancel"
+        text.append(hint, style="dim")
         return text
+
+    def _time_line(self) -> Text:
+        line = Text("Time: ", style="bold")
+        if not self._time:
+            line.append("all-day", style="dim")
+            return line
+        line.append(self._time)
+        try:  # show the parsed HH:MM preview while the buffer is valid
+            parsed = parse_time_digits(self._time)
+        except ValueError:
+            return line
+        if parsed is not None:
+            line.append(f"  → {parsed:%H:%M}", style="dim")
+        return line

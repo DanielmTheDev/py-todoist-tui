@@ -30,6 +30,23 @@ def quick_due(kind: QuickKind, today: datetime.date) -> Due | None:
     raise ValueError(f"unknown quick due kind: {kind!r}")
 
 
+def parse_time_digits(digits: str) -> datetime.time | None:
+    """Length-based 24h parse of typed digits. '' -> None (all-day);
+    1-2 digits = hour, 3-4 = H(H)MM. Raises ValueError on non-digits,
+    >4 digits, or an out-of-range hour/minute."""
+    if not digits:
+        return None
+    if not digits.isdigit() or len(digits) > 4:
+        raise ValueError(f"not a time: {digits!r}")
+    if len(digits) <= 2:
+        hour, minute = int(digits), 0
+    else:
+        hour, minute = int(digits[:-2]), int(digits[-2:])
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"time out of range: {digits!r}")
+    return datetime.time(hour, minute)
+
+
 def reschedule(original: Due | None, picked: Due | None) -> Due | None:
     """Apply a picked date to a task, preserving recurrence.
 

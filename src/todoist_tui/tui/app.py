@@ -318,8 +318,9 @@ class TodoistApp(App[None]):
         if row is None:
             return
         current = row.due.date if row.due is not None else None
+        current_time = row.due.time if row.due is not None else None
         self.push_screen(
-            ScheduleScreen(self._clock.today(), current),
+            ScheduleScreen(self._clock.today(), current, current_time),
             lambda result: self._on_scheduled(TaskId(task_id), result),
         )
 

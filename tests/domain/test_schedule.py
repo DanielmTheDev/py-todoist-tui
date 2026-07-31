@@ -5,6 +5,7 @@ import pytest
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.schedule import (
     month_weeks,
+    parse_time_digits,
     quick_due,
     reschedule,
     shift_month,
@@ -106,6 +107,32 @@ def test_reschedule_clear_drops_recurrence() -> None:
     original = Due(date=_TUESDAY, is_recurring=True, string="every day")
 
     assert reschedule(original, None) is None
+
+
+def test_parse_time_empty_is_all_day() -> None:
+    assert parse_time_digits("") is None
+
+
+@pytest.mark.parametrize(
+    ("digits", "expected"),
+    [
+        ("4", datetime.time(4, 0)),
+        ("9", datetime.time(9, 0)),
+        ("16", datetime.time(16, 0)),
+        ("930", datetime.time(9, 30)),
+        ("1430", datetime.time(14, 30)),
+        ("2359", datetime.time(23, 59)),
+        ("0000", datetime.time(0, 0)),
+    ],
+)
+def test_parse_time_length_based(digits: str, expected: datetime.time) -> None:
+    assert parse_time_digits(digits) == expected
+
+
+@pytest.mark.parametrize("digits", ["25", "99", "999", "1260", "12345", "9a", "12:30"])
+def test_parse_time_rejects_invalid(digits: str) -> None:
+    with pytest.raises(ValueError):
+        parse_time_digits(digits)
 
 
 def test_shift_month_forward() -> None:
