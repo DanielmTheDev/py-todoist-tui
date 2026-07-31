@@ -68,6 +68,10 @@ never calls httpx or the DB directly. Enforced by `import-linter`
 
 ## Development loop
 Each increment is one small, single-purpose diff:
+0. **Clarify intent first.** Before a feature or behavior change, ask targeted
+   questions with concrete options (which surface, UX/keys, edge cases,
+   multi-item handling) — don't assume intent. Skip only for trivial/mechanical
+   diffs (docs, pure refactors, typos).
 1. Write the failing test.
 2. Minimal implementation to green.
 3. Refactor (tests stay green).

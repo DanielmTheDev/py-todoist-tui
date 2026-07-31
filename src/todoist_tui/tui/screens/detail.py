@@ -5,13 +5,15 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.links import Link, LinkOpener, XdgOpenLinkOpener, annotate
 from todoist_tui.tui.format import format_due
 
 _DASH = "—"  # stands in for an unset field
 
 
 class TaskDetailScreen(ModalScreen[None]):
-    """Read-only card for a single task. Any of escape/enter/q closes it."""
+    """Read-only card for a single task. Any of escape/enter/q closes it.
+    Links in the title/description are numbered; 1-9 or `o` open them."""
 
     DEFAULT_CSS = """
     TaskDetailScreen {
@@ -26,9 +28,17 @@ class TaskDetailScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, row: TaskRow) -> None:
+    def __init__(self, row: TaskRow, opener: LinkOpener | None = None) -> None:
         super().__init__()
         self._row = row
+        self._opener = opener or XdgOpenLinkOpener()
+        content, content_links = annotate(row.content, 1)
+        description, description_links = annotate(
+            row.description, len(content_links) + 1
+        )
+        self._content_text = content
+        self._description_text = description
+        self._links: list[Link] = content_links + description_links
 
     def compose(self) -> ComposeResult:
         yield Static(self._content(), id="detail")
@@ -36,22 +46,36 @@ class TaskDetailScreen(ModalScreen[None]):
     def on_key(self, event: events.Key) -> None:
         if event.key in ("escape", "enter", "q"):
             self.dismiss()
+        elif event.key == "o":
+            self._open(1)
+        elif event.character and event.character.isdigit():
+            self._open(int(event.character))
         event.stop()  # consume every key so app bindings never fire under the modal
+
+    def _open(self, number: int) -> None:
+        if 1 <= number <= len(self._links):
+            self._opener.open(self._links[number - 1].url)
 
     def _content(self) -> Text:
         row = self._row
         text = Text()
-        text.append(f"{row.content}\n\n", style="bold")
+        text.append(f"{self._content_text}\n\n", style="bold")
         text.append(f"Due       {self._due_line()}\n")
         text.append(f"Priority  {row.priority.label}\n")
         text.append(f"Project   {row.project_name or _DASH}\n")
         text.append(f"Labels    {self._labels_line()}\n\n")
         text.append("Description\n", style="bold")
         if row.description:
-            text.append(row.description)
+            text.append(self._description_text)
         else:
             text.append("No description", style="dim")
-        text.append("\n\nesc close", style="dim")
+        if self._links:
+            text.append("\n\nLinks\n", style="bold")
+            for number, link in enumerate(self._links, start=1):
+                text.append(f"[{number}] ")
+                text.append(f"{link.url}\n", style=f"link {link.url}")
+        hint = "1-9 open link  o open  esc close" if self._links else "esc close"
+        text.append(f"\n{hint}", style="dim")
         return text
 
     def _due_line(self) -> str:

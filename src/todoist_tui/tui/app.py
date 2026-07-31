@@ -25,12 +25,13 @@ from todoist_tui.domain.arrange import Arrangement, GroupHeader, RenderRow, arra
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.format import format_due
+from todoist_tui.tui.format import format_due, render_links
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
@@ -118,11 +119,13 @@ class TodoistApp(App[None]):
         repo: TaskRepository,
         arrangements: ArrangementStore | None = None,
         clock: Clock | None = None,
+        link_opener: LinkOpener | None = None,
     ) -> None:
         super().__init__()
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
         self._clock = clock or SystemClock()
+        self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
         self._view = TODAY
@@ -335,7 +338,7 @@ class TodoistApp(App[None]):
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         if row is None:
             return
-        self.push_screen(TaskDetailScreen(row))
+        self.push_screen(TaskDetailScreen(row, self._link_opener))
 
     def _on_scheduled(self, task_id: TaskId, result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
@@ -448,10 +451,12 @@ class TodoistApp(App[None]):
                 table.add_row("", "", _header_text(item), "", key=_header_key(index))
                 continue
             row = item.row
+            content = Text(_indent(item.level))
+            content.append_text(render_links(row.content))
             table.add_row(
                 _priority_dot(row.priority),
                 format_due(row.due),
-                _indent(item.level) + row.content,
+                content,
                 Text(row.project_name, style="dim") if row.project_name else "",
                 key=_task_key(index, row.id),
             )

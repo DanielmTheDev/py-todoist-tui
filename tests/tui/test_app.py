@@ -148,7 +148,7 @@ async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
         assert not isinstance(app.screen, FilterScreen)  # picker dismissed
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert table.get_row_at(0)[2] == "Filtered task"
+        assert str(table.get_row_at(0)[2]) == "Filtered task"
         status = str(app.query_one("#status", Static).render())
         assert "My Filter" in status
 
@@ -300,8 +300,27 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         row = table.get_row_at(0)
         assert row[0] == "🔴"
         assert row[1] == "2026-07-21 09:30"
-        assert row[2] == "Buy milk"
+        assert str(row[2]) == "Buy milk"
         assert str(row[3]) == "Errands"
+
+
+@pytest.mark.anyio
+async def test_list_hides_markdown_link_syntax_showing_the_label() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="[Check calendar](https://cal) today",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert (
+            str(app.query_one(DataTable[object]).get_row_at(0)[2])
+            == "Check calendar today"
+        )
 
 
 @pytest.mark.anyio
@@ -646,7 +665,7 @@ async def test_pressing_u_undoes_last_complete() -> None:
         assert repo.uncompleted == [TaskId("6X4")]
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert table.get_row_at(0)[2] == "Buy milk"
+        assert str(table.get_row_at(0)[2]) == "Buy milk"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -1591,7 +1610,7 @@ async def test_refresh_keeps_cursor_on_the_same_task() -> None:
         await pilot.pause()
 
         assert table.cursor_row == 1  # cursor stayed on "Second", not reset to top
-        assert table.get_row_at(table.cursor_row)[2] == "Second"
+        assert str(table.get_row_at(table.cursor_row)[2]) == "Second"
 
 
 @pytest.mark.anyio
@@ -1615,12 +1634,12 @@ async def test_pressing_i_switches_to_inbox() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[2] == "Today thing"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[2]) == "Today thing"
 
         await pilot.press("i")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert table.get_row_at(0)[2] == "Inbox thing"
+        assert str(table.get_row_at(0)[2]) == "Inbox thing"
         assert "Inbox · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -1636,7 +1655,7 @@ async def test_pressing_t_switches_back_to_today() -> None:
         await pilot.press("t")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert table.get_row_at(0)[2] == "Today thing"
+        assert str(table.get_row_at(0)[2]) == "Today thing"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
