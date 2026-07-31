@@ -1,5 +1,6 @@
 from rich.text import Text
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.links import parse
 
@@ -14,6 +15,11 @@ def format_due(due: Due | None) -> str:
     if due.time is not None:
         text += " " + due.time.strftime("%H:%M")
     return text
+
+
+def format_deadline(deadline: Deadline | None) -> str:
+    """Deadline date as ISO. Blank when unset."""
+    return deadline.date.isoformat() if deadline is not None else ""
 
 
 def render_links(text: str) -> Text:

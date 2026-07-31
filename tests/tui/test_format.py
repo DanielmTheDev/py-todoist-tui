@@ -1,6 +1,17 @@
+import datetime
+
 from rich.text import Text
 
-from todoist_tui.tui.format import render_links
+from todoist_tui.domain.deadline import Deadline
+from todoist_tui.tui.format import format_deadline, render_links
+
+
+def test_format_deadline_renders_iso_date() -> None:
+    assert format_deadline(Deadline(date=datetime.date(2026, 8, 15))) == "2026-08-15"
+
+
+def test_format_deadline_blank_when_unset() -> None:
+    assert format_deadline(None) == ""
 
 
 def _styled(text: Text, needle: str) -> str | None:

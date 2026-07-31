@@ -1,6 +1,7 @@
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from rich.text import Text
 from textual import events
@@ -17,11 +18,14 @@ from todoist_tui.domain.schedule import (
     shift_month,
 )
 
+Kind = Literal["due", "deadline"]
+
 
 @dataclass(frozen=True, slots=True)
 class DueResult:
-    """A chosen due date. `due is None` means "clear the date" (distinct from a
-    cancelled modal, which dismisses with None instead of a DueResult)."""
+    """A chosen date. `due is None` means "clear it" (distinct from a cancelled
+    modal, which dismisses with None instead of a DueResult). In deadline mode
+    the carried `Due` is date-only — the caller reads its `date`."""
 
     due: Due | None
 
@@ -72,12 +76,17 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         today: datetime.date,
         current: datetime.date | None = None,
         current_time: datetime.time | None = None,
+        kind: Kind = "due",
     ) -> None:
         super().__init__()
         self._today = today
-        self._cursor = current or today  # calendar starts on the task's due date
-        # Time-of-day buffer as typed digits (HHMM); "" means all-day.
-        self._time = f"{current_time:%H%M}" if current_time is not None else ""
+        self._kind = kind
+        self._cursor = current or today  # calendar starts on the task's date
+        # Time-of-day buffer as typed digits (HHMM); "" means all-day. Deadlines
+        # are date-only, so the buffer is always empty and the time UI is hidden.
+        self._time = (
+            f"{current_time:%H%M}" if kind == "due" and current_time is not None else ""
+        )
         self._error: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -91,15 +100,20 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         elif event.key in _QUICK_KEYS:  # quick keys are all-day, ignore any time
             kind, _label = _QUICK_KEYS[event.key]
             self.dismiss(DueResult(quick_due(kind, self._today)))
-        elif event.character and event.character.isdigit() and len(self._time) < 4:
+        elif (
+            self._kind == "due"
+            and event.character
+            and event.character.isdigit()
+            and len(self._time) < 4
+        ):
             self._time += event.character
             self._error = None
             self._refresh()
-        elif event.key == "backspace":
+        elif self._kind == "due" and event.key == "backspace":
             self._time = self._time[:-1]
             self._error = None
             self._refresh()
-        elif event.key == "r":  # remove the time, keep the date (all-day)
+        elif self._kind == "due" and event.key == "r":  # remove time, keep date
             self._time = ""
             self._error = None
             self._refresh()
@@ -122,7 +136,8 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
 
     def _content(self) -> Text:
         text = Text()
-        text.append(f"Set due — {self._cursor:%B %Y}\n\n", style="bold")
+        label = "deadline" if self._kind == "deadline" else "due"
+        text.append(f"Set {label} — {self._cursor:%B %Y}\n\n", style="bold")
         text.append(f"{_HINT}\n\n")
         text.append(f"{_WEEKDAYS}\n", style="dim")
         for week in month_weeks(self._cursor.year, self._cursor.month):
@@ -138,12 +153,17 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
                 else:
                     text.append(f"{cell.day:2d}")
             text.append("\n")
-        text.append(f"\n\n{self._time_line()}\n")
+        if self._kind == "due":
+            text.append(f"\n\n{self._time_line()}\n")
+        else:
+            text.append("\n\n")
         if self._error is not None:
             text.append(f"{self._error}\n", style="bold red")
-        hint = "hjkl move  [ ] month  digits time"
-        if self._time:
-            hint += "  r remove time"
+        hint = "hjkl move  [ ] month"
+        if self._kind == "due":
+            hint += "  digits time"
+            if self._time:
+                hint += "  r remove time"
         hint += "  enter pick  esc cancel"
         text.append(hint, style="dim")
         return text

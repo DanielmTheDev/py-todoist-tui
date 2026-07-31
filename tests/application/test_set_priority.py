@@ -1,6 +1,7 @@
 import pytest
 
 from todoist_tui.application.set_priority import set_priority
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -42,6 +43,10 @@ class FakeRepository:
         self.priorities.append((task_id, priority))
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
+
+    async def set_deadline(
+        self, task_id: TaskId, deadline: Deadline | None
+    ) -> None: ...
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None

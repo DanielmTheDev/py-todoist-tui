@@ -6,7 +6,7 @@ from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.links import Link, LinkOpener, XdgOpenLinkOpener, annotate
-from todoist_tui.tui.format import format_due
+from todoist_tui.tui.format import format_deadline, format_due
 
 _DASH = "—"  # stands in for an unset field
 
@@ -61,6 +61,7 @@ class TaskDetailScreen(ModalScreen[None]):
         text = Text()
         text.append(f"{self._content_text}\n\n", style="bold")
         text.append(f"Due       {self._due_line()}\n")
+        text.append(f"Deadline  {format_deadline(row.deadline) or _DASH}\n")
         text.append(f"Priority  {row.priority.label}\n")
         text.append(f"Project   {row.project_name or _DASH}\n")
         text.append(f"Section   {row.section_name or _DASH}\n")

@@ -8,6 +8,7 @@ import respx
 
 from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import TaskId
@@ -47,6 +48,35 @@ async def test_today_maps_json_to_domain_task() -> None:
     assert task.section_id is None
     assert task.labels == ()
     assert task.description == "2% from the corner store"
+    assert task.deadline is None
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_maps_deadline() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Ship it",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                        "deadline": {"date": "2026-08-15", "lang": "en"},
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.deadline == Deadline(date=datetime.date(2026, 8, 15))
 
 
 @pytest.mark.anyio
@@ -665,6 +695,39 @@ async def test_set_due_none_clears_the_task_due() -> None:
         parse_qs(route.calls.last.request.content.decode())["commands"][0]
     )
     assert commands[0]["args"] == {"id": "6X4", "due": None}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_deadline_updates_the_task() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_deadline(TaskId("6X4"), Deadline(date=datetime.date(2026, 8, 15)))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_update"
+    assert commands[0]["args"] == {"id": "6X4", "deadline": {"date": "2026-08-15"}}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_deadline_none_clears_the_task_deadline() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_deadline(TaskId("6X4"), None)
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {"id": "6X4", "deadline": None}
 
 
 @pytest.mark.anyio

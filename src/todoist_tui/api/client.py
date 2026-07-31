@@ -83,6 +83,12 @@ class TodoistClient:
         # `due=None` clears the date; otherwise a Sync `due` object (date/datetime).
         await self._command("item_update", {"id": task_id, "due": due})
 
+    async def update_item_deadline(
+        self, task_id: str, deadline: dict[str, str] | None
+    ) -> None:
+        # `deadline=None` clears it; otherwise a Sync `deadline` object (date-only).
+        await self._command("item_update", {"id": task_id, "deadline": deadline})
+
     async def move_item(
         self, task_id: str, project_id: str, section_id: str | None = None
     ) -> None:

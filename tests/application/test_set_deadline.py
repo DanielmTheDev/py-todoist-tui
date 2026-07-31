@@ -1,6 +1,8 @@
+import datetime
+
 import pytest
 
-from todoist_tui.application.move_task import move_task
+from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -12,7 +14,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.deadlines: list[tuple[TaskId, Deadline | None]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -43,31 +45,30 @@ class FakeRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
-    async def set_deadline(
-        self, task_id: TaskId, deadline: Deadline | None
-    ) -> None: ...
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        self.deadlines.append((task_id, deadline))
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None
-    ) -> None:
-        self.moves.append((task_id, project_id, section_id))
+    ) -> None: ...
 
     async def refresh(self) -> None: ...
 
 
 @pytest.mark.anyio
-async def test_move_task_delegates_to_repo() -> None:
+async def test_set_deadline_delegates_to_repo() -> None:
     repo = FakeRepository()
+    deadline = Deadline(date=datetime.date(2026, 8, 15))
 
-    await move_task(repo, TaskId("6X4"), "220")
+    await set_deadline(repo, TaskId("6X4"), deadline)
 
-    assert repo.moves == [(TaskId("6X4"), "220", None)]
+    assert repo.deadlines == [(TaskId("6X4"), deadline)]
 
 
 @pytest.mark.anyio
-async def test_move_task_forwards_section_id() -> None:
+async def test_set_deadline_clear_passes_none() -> None:
     repo = FakeRepository()
 
-    await move_task(repo, TaskId("6X4"), "220", "77")
+    await set_deadline(repo, TaskId("6X4"), None)
 
-    assert repo.moves == [(TaskId("6X4"), "220", "77")]
+    assert repo.deadlines == [(TaskId("6X4"), None)]

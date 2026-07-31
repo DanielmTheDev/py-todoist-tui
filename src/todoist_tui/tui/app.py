@@ -11,6 +11,7 @@ from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.move_task import move_task
+from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.views import (
@@ -23,6 +24,7 @@ from todoist_tui.application.views import (
 )
 from todoist_tui.domain.arrange import Arrangement, GroupHeader, RenderRow, arrange
 from todoist_tui.domain.clock import Clock, SystemClock
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
@@ -30,7 +32,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.format import format_due, render_links
+from todoist_tui.tui.format import format_deadline, format_due, render_links
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
@@ -38,7 +40,7 @@ from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScre
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
-_COLUMNS = ("", "Due", "Task", "Project")  # priority dot needs no header
+_COLUMNS = ("", "Due", "Deadline", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _HEADER_WIDTH = 56  # target width of a group divider rule
@@ -97,13 +99,14 @@ class TodoistApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("e", "complete", "Complete"),
         ("z", "undo", "Undo"),
-        ("t", "view_today", "Today"),
+        (".", "view_today", "Today"),
         ("i", "view_inbox", "Inbox"),
         ("f", "view_filters", "Filters"),
         ("g", "arrange_group", "Group"),
         ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
-        ("d", "set_due", "Due"),
+        ("t", "set_due", "Due"),
+        ("d", "set_deadline", "Deadline"),
         ("v", "move_task", "Move"),
         ("enter", "open_detail", "Detail"),
         Binding("1", "set_priority('P1')", "P1", show=False),
@@ -324,6 +327,23 @@ class TodoistApp(App[None]):
             lambda result: self._on_scheduled(TaskId(task_id), result),
         )
 
+    def action_set_deadline(self) -> None:
+        table = self.query_one(TaskTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        task_id = _task_id_of(str(row_key.value))
+        if task_id is None:  # cursor is on a group header: nothing to set
+            return
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        if row is None:
+            return
+        current = row.deadline.date if row.deadline is not None else None
+        self.push_screen(
+            ScheduleScreen(self._clock.today(), current, kind="deadline"),
+            lambda result: self._on_deadline(TaskId(task_id), result),
+        )
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # DataTable consumes Enter for row selection before the app binding can
         # fire, so open the detail view off its message instead (the binding
@@ -373,6 +393,30 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to set due: {error}")
             return
         self._sync_now()  # pull server delta; re-arranges if grouped/sorted by due
+
+    def _on_deadline(self, task_id: TaskId, result: DueResult | None) -> None:
+        if result is None:  # picker was cancelled
+            return
+        # the deadline screen carries a date-only Due; map it to a Deadline
+        new_deadline = (
+            Deadline(date=result.due.date) if result.due is not None else None
+        )
+        self._rows = [  # optimistic: repaint the deadline cell now
+            replace(row, deadline=new_deadline) if str(row.id) == str(task_id) else row
+            for row in self._rows
+        ]
+        self._render(arrange(self._rows, self._arrangement), self._view)
+        self._set_deadline(task_id, new_deadline)
+
+    @work
+    async def _set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        try:
+            await set_deadline(self._repo, task_id, deadline)
+        except Exception as error:  # command rejected: resync, then report
+            await self._reload(self._view)
+            self._set_status(f"Failed to set deadline: {error}")
+            return
+        self._sync_now()
 
     async def action_move_task(self) -> None:
         if self._picking_project:  # already loading or picker already open
@@ -462,7 +506,9 @@ class TodoistApp(App[None]):
         task_ids: set[str] = set()
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
-                table.add_row("", "", _header_text(item), "", key=_header_key(index))
+                table.add_row(
+                    "", "", "", _header_text(item), "", key=_header_key(index)
+                )
                 continue
             row = item.row
             content = Text(_indent(item.level))
@@ -470,6 +516,7 @@ class TodoistApp(App[None]):
             table.add_row(
                 _priority_dot(row.priority),
                 format_due(row.due),
+                format_deadline(row.deadline),
                 content,
                 Text(row.project_name, style="dim") if row.project_name else "",
                 key=_task_key(index, row.id),

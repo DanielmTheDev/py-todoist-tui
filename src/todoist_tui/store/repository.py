@@ -1,6 +1,7 @@
 import asyncio
 
 from todoist_tui.domain.clock import Clock
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.filter_query import FilterQuery
@@ -115,6 +116,10 @@ class SnapshotTaskRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         await self._inner.set_due(task_id, due)
+        await self._invalidate()
+
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        await self._inner.set_deadline(task_id, deadline)
         await self._invalidate()
 
     async def set_project(

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import NewType
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 
@@ -17,3 +18,4 @@ class Task:
     section_id: str | None = None
     labels: tuple[str, ...] = ()
     description: str = ""
+    deadline: Deadline | None = None

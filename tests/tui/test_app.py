@@ -6,6 +6,7 @@ import pytest
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -38,6 +39,7 @@ class FakeRepository:
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
+        self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
@@ -88,6 +90,12 @@ class FakeRepository:
         self.dues.append((task_id, due))
         self._tasks = [
             replace(t, due=due) if t.id == task_id else t for t in self._tasks
+        ]
+
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        self.deadlines.append((task_id, deadline))
+        self._tasks = [
+            replace(t, deadline=deadline) if t.id == task_id else t for t in self._tasks
         ]
 
     async def set_project(
@@ -158,7 +166,7 @@ async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
         assert not isinstance(app.screen, FilterScreen)  # picker dismissed
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[2]) == "Filtered task"
+        assert str(table.get_row_at(0)[3]) == "Filtered task"
         status = str(app.query_one("#status", Static).render())
         assert "My Filter" in status
 
@@ -226,7 +234,7 @@ async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
         await pilot.press("enter")
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("t")  # back to Today clears the active filter
+        await pilot.press(".")  # back to Today clears the active filter
         await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
@@ -310,8 +318,8 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         row = table.get_row_at(0)
         assert row[0] == "🔴"
         assert row[1] == "2026-07-21 09:30"
-        assert str(row[2]) == "Buy milk"
-        assert str(row[3]) == "Errands"
+        assert str(row[3]) == "Buy milk"
+        assert str(row[4]) == "Errands"
 
 
 @pytest.mark.anyio
@@ -328,7 +336,7 @@ async def test_list_hides_markdown_link_syntax_showing_the_label() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert (
-            str(app.query_one(DataTable[object]).get_row_at(0)[2])
+            str(app.query_one(DataTable[object]).get_row_at(0)[3])
             == "Check calendar today"
         )
 
@@ -394,7 +402,7 @@ async def test_task_without_project_blank() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == ""
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == ""
 
 
 @pytest.mark.anyio
@@ -569,17 +577,17 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         table = app.query_one(TaskTable)
-        assert "P4" in _col2(table)[0]  # starts under the P4 header
+        assert "P4" in _content_col(table)[0]  # starts under the P4 header
         await pilot.press("j")  # move cursor onto the task
         repo.release.clear()  # block the post-change sync
 
         await pilot.press("1")
         # optimistic, before the network resolves: it jumped to a fresh P1 group
-        col2 = _col2(table)
+        col2 = _content_col(table)
         assert "P1" in col2[0]
         assert col2[1].strip() == "Buy milk"
         assert not any("P4" in c for c in col2)
-        assert str(table.get_row_at(table.cursor_row)[2]).strip() == "Buy milk"  # <-
+        assert str(table.get_row_at(table.cursor_row)[3]).strip() == "Buy milk"  # <-
 
         repo.release.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
@@ -607,7 +615,7 @@ async def test_digit_on_a_group_header_does_nothing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # header on top
+        assert "──" in _content_col(table)[0]  # header on top
         table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("1")
         await pilot.pause()
@@ -675,7 +683,7 @@ async def test_pressing_u_undoes_last_complete() -> None:
         assert repo.uncompleted == [TaskId("6X4")]
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[2]) == "Buy milk"
+        assert str(table.get_row_at(0)[3]) == "Buy milk"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -865,15 +873,71 @@ async def test_empty_shows_status_message() -> None:
 
 
 @pytest.mark.anyio
-async def test_pressing_d_opens_schedule_screen() -> None:
+async def test_pressing_t_opens_schedule_screen() -> None:
     repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+
+
+@pytest.mark.anyio
+async def test_pressing_d_sets_a_deadline_and_shows_it() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Ship it",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),  # stays in Today regardless of the deadline
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.press("d")
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)
+        await pilot.press("m")  # tomorrow (quick key)
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.deadlines == [
+            (TaskId("6X4"), Deadline(date=datetime.date(2026, 7, 29)))
+        ]
+        table = app.query_one(DataTable[object])
+        assert table.get_row_at(0)[2] == "2026-07-29"  # Deadline column
+
+
+@pytest.mark.anyio
+async def test_pressing_d_clear_removes_the_deadline() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Ship it",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+        deadline=Deadline(date=datetime.date(2026, 7, 29)),
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert app.query_one(DataTable[object]).get_row_at(0)[2] == "2026-07-29"
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("x")  # clear
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.deadlines == [(TaskId("6X4"), None)]
+        assert app.query_one(DataTable[object]).get_row_at(0)[2] == ""
 
 
 @pytest.mark.anyio
@@ -897,7 +961,7 @@ async def test_d_then_tomorrow_drops_task_from_today_immediately() -> None:
         await pilot.pause()
         repo.release.clear()  # block the sync that follows the change
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")  # tomorrow: it no longer belongs in Today
         # optimistic: the row leaves Today before the network command resolves
@@ -924,7 +988,7 @@ async def test_d_then_today_keeps_task_in_today_with_date() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("t")  # today: it stays, now dated
         table = app.query_one(DataTable[object])
@@ -951,7 +1015,7 @@ async def test_d_then_clear_removes_due() -> None:
         assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-28"
         repo.release.clear()  # block the sync that follows the change
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("x")  # clear: an undated task no longer belongs in Today
         assert app.query_one(DataTable[object]).row_count == 0
@@ -980,7 +1044,7 @@ async def test_calendar_pick_applies_optimistically() -> None:
         await pilot.pause()
         repo.release.clear()  # block the sync that follows the change
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("l")  # calendar: move cursor to tomorrow
         await pilot.press("enter")  # pick it: task leaves Today
@@ -1022,7 +1086,7 @@ async def test_reschedule_on_filter_view_drops_task_immediately() -> None:
         assert app.query_one(DataTable[object]).row_count == 1
         repo.release.clear()  # block the sync that follows the change
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")  # reschedule: it leaves the filter immediately
         assert app.query_one(DataTable[object]).row_count == 0
@@ -1052,7 +1116,7 @@ async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         repo.release.clear()  # block the sync so we observe the optimistic state
 
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")  # a due change must not remove it from Inbox
         table = app.query_one(DataTable[object])
@@ -1074,7 +1138,7 @@ async def test_d_on_recurring_task_reschedules_keeping_the_rule() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)  # picker opens for recurring
         await pilot.press("m")  # tomorrow
@@ -1103,7 +1167,7 @@ async def test_d_then_escape_changes_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
@@ -1120,7 +1184,7 @@ async def test_d_on_empty_table_does_nothing() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
 
         assert not isinstance(app.screen, ScheduleScreen)
@@ -1137,9 +1201,9 @@ async def test_d_on_a_group_header_does_nothing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # header on top
+        assert "──" in _content_col(table)[0]  # header on top
         table.move_cursor(row=0)  # cursor never rests here; force it for the guard
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
 
         assert not isinstance(app.screen, ScheduleScreen)
@@ -1167,7 +1231,7 @@ async def test_set_due_failure_is_surfaced_and_resyncs() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
@@ -1227,7 +1291,7 @@ async def test_enter_on_a_group_header_does_nothing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # header on top
+        assert "──" in _content_col(table)[0]  # header on top
         table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("enter")
         await pilot.pause()
@@ -1264,7 +1328,7 @@ async def test_v_pick_moves_task_and_updates_project_cell() -> None:
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", None)]
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Work"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == "Work"
 
 
 @pytest.mark.anyio
@@ -1334,7 +1398,7 @@ async def test_v_on_a_group_header_does_nothing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # header on top
+        assert "──" in _content_col(table)[0]  # header on top
         table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("v")
         await pilot.pause()
@@ -1399,7 +1463,7 @@ async def test_move_failure_is_surfaced_and_resyncs() -> None:
             app.query_one("#status", Static).render()
         )
         # failed command resyncs to server truth: the project cell reverts
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Errands"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == "Errands"
 
 
 def _row(content: str, project_id: str = "220") -> Task:
@@ -1418,8 +1482,8 @@ async def _grouped_by_project() -> InMemoryArrangements:
     return store
 
 
-def _col2(table: DataTable[object]) -> list[str]:
-    return [str(table.get_row_at(i)[2]) for i in range(table.row_count)]
+def _content_col(table: DataTable[object]) -> list[str]:
+    return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
 
 
 @pytest.mark.anyio
@@ -1432,7 +1496,7 @@ async def test_grouping_renders_headers_and_tasks() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        col2 = _col2(app.query_one(DataTable[object]))
+        col2 = _content_col(app.query_one(DataTable[object]))
 
         assert any("──" in c and "Home" in c for c in col2)
         assert any("──" in c and "Work" in c for c in col2)
@@ -1460,7 +1524,7 @@ async def test_e_on_a_group_header_does_nothing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # header on top
+        assert "──" in _content_col(table)[0]  # header on top
         table.move_cursor(row=0)  # cursor never rests here; force it for the guard
         await pilot.press("e")
         await pilot.pause()
@@ -1500,7 +1564,7 @@ async def test_label_grouping_lists_task_under_each_label() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        col2 = _col2(app.query_one(DataTable[object]))
+        col2 = _content_col(app.query_one(DataTable[object]))
 
         assert sum(1 for c in col2 if c.strip() == "Pay rent") == 2  # once per label
         assert any("home" in c and "──" in c for c in col2)
@@ -1526,7 +1590,7 @@ async def test_j_and_k_move_row_cursor() -> None:
 
 
 def _cursor_content(table: TaskTable) -> str:
-    return _col2(table)[table.cursor_row]
+    return _content_col(table)[table.cursor_row]
 
 
 @pytest.mark.anyio
@@ -1537,7 +1601,7 @@ async def test_initial_cursor_lands_on_first_task_not_header() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _col2(table)[0]  # row 0 is a group header
+        assert "──" in _content_col(table)[0]  # row 0 is a group header
         assert table.cursor_row == 1
         assert _cursor_content(table).strip() == "w1"  # a task, not the header
 
@@ -1556,7 +1620,7 @@ async def test_j_skips_a_single_group_header_downward() -> None:
         assert table.cursor_row == 1  # h1, under the Home header
         await pilot.press("j")  # skip the Work header at row 2
         assert table.cursor_row == 3
-        assert _col2(table)[3].strip() == "w1"
+        assert _content_col(table)[3].strip() == "w1"
 
 
 @pytest.mark.anyio
@@ -1610,7 +1674,7 @@ async def test_k_skips_a_group_header_upward() -> None:
         assert table.cursor_row == 3
         await pilot.press("k")  # skip the Work header at row 2
         assert table.cursor_row == 1
-        assert _col2(table)[1].strip() == "h1"
+        assert _content_col(table)[1].strip() == "h1"
 
 
 @pytest.mark.anyio
@@ -1643,7 +1707,7 @@ async def test_refresh_keeps_cursor_on_the_same_task() -> None:
         await pilot.pause()
 
         assert table.cursor_row == 1  # cursor stayed on "Second", not reset to top
-        assert str(table.get_row_at(table.cursor_row)[2]) == "Second"
+        assert str(table.get_row_at(table.cursor_row)[3]) == "Second"
 
 
 @pytest.mark.anyio
@@ -1667,12 +1731,12 @@ async def test_pressing_i_switches_to_inbox() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[2]) == "Today thing"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Today thing"
 
         await pilot.press("i")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[2]) == "Inbox thing"
+        assert str(table.get_row_at(0)[3]) == "Inbox thing"
         assert "Inbox · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -1685,10 +1749,10 @@ async def test_pressing_t_switches_back_to_today() -> None:
         await pilot.pause()
         await pilot.press("i")
         await pilot.pause()
-        await pilot.press("t")
+        await pilot.press(".")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[2]) == "Today thing"
+        assert str(table.get_row_at(0)[3]) == "Today thing"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -1724,7 +1788,7 @@ async def test_g_then_field_keys_group_the_list_and_persist() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        col2 = _col2(app.query_one(DataTable[object]))
+        col2 = _content_col(app.query_one(DataTable[object]))
         assert any("──" in c and "Home" in c for c in col2)
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
 
@@ -1928,9 +1992,11 @@ async def test_arrangement_is_restored_per_view() -> None:
         await pilot.press("i")  # Inbox has no arrangement → flat
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert not any("──" in c for c in _col2(app.query_one(DataTable[object])))
+        assert not any(
+            "──" in c for c in _content_col(app.query_one(DataTable[object]))
+        )
 
-        await pilot.press("t")  # back to Today → its grouping returns
+        await pilot.press(".")  # back to Today → its grouping returns
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert any("──" in c for c in _col2(app.query_one(DataTable[object])))
+        assert any("──" in c for c in _content_col(app.query_one(DataTable[object])))

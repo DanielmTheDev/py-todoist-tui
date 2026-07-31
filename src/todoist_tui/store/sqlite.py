@@ -6,6 +6,7 @@ from contextlib import closing
 from pathlib import Path
 
 from todoist_tui.domain.arrange import Arrangement
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -28,7 +29,7 @@ CREATE TABLE tasks (
     id TEXT, content TEXT, priority INTEGER,
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
-    section_id TEXT, labels TEXT, description TEXT
+    section_id TEXT, labels TEXT, description TEXT, deadline_date TEXT
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -73,7 +74,7 @@ class SqliteSnapshotCache:
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
                         " due_recurring, due_string, due_lang, project_id, section_id,"
-                        " labels, description FROM tasks"
+                        " labels, description, deadline_date FROM tasks"
                     )
                 ]
                 filters = [
@@ -111,7 +112,7 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox), p.order) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -189,8 +190,10 @@ def _task_to_row(
     str | None,
     str,
     str,
+    str | None,
 ]:
     due = task.due
+    deadline = task.deadline
     return (
         task.id,
         task.content,
@@ -204,6 +207,7 @@ def _task_to_row(
         task.section_id,
         json.dumps(list(task.labels)),
         task.description,
+        deadline.date.isoformat() if deadline else None,
     )
 
 
@@ -218,6 +222,7 @@ def _row_to_task(
         str | None,
         str | None,
         str,
+        str | None,
         str | None,
         str | None,
         str | None,
@@ -236,6 +241,7 @@ def _row_to_task(
         section_id,
         labels,
         description,
+        deadline_date,
     ) = row
     due = None
     if due_date is not None:
@@ -255,4 +261,7 @@ def _row_to_task(
         section_id=section_id,
         labels=tuple(json.loads(labels)) if labels else (),
         description=description or "",
+        deadline=Deadline(date=datetime.date.fromisoformat(deadline_date))
+        if deadline_date
+        else None,
     )

@@ -5,6 +5,7 @@ from textual.app import App
 from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import TaskId
@@ -21,6 +22,7 @@ def _row(
     section_name: str | None = "Planning",
     labels: tuple[str, ...] = ("home", "errand"),
     description: str = "2% from the corner store",
+    deadline: Deadline | None = None,
 ) -> TaskRow:
     return TaskRow(
         id=TaskId("6X4"),
@@ -31,6 +33,7 @@ def _row(
         section_name=section_name,
         labels=labels,
         description=description,
+        deadline=deadline,
     )
 
 
@@ -98,6 +101,22 @@ async def test_renders_title_and_all_fields() -> None:
     assert "@home" in shown
     assert "@errand" in shown
     assert "2% from the corner store" in shown
+
+
+@pytest.mark.anyio
+async def test_renders_deadline_when_set() -> None:
+    shown = await _shown(_row(deadline=Deadline(date=datetime.date(2026, 8, 15))))
+
+    assert "Deadline" in shown
+    assert "2026-08-15" in shown
+
+
+@pytest.mark.anyio
+async def test_no_deadline_renders_a_dash() -> None:
+    shown = await _shown(_row(deadline=None))
+
+    assert "Deadline" in shown
+    assert "—" in shown
 
 
 @pytest.mark.anyio

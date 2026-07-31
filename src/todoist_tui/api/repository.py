@@ -2,6 +2,7 @@ from collections.abc import Callable
 from typing import Any
 
 from todoist_tui.api.client import TodoistClient
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -62,6 +63,11 @@ class ApiTaskRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         await self._client.update_item_due(str(task_id), due.to_api if due else None)
+
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        await self._client.update_item_deadline(
+            str(task_id), deadline.to_api if deadline else None
+        )
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None
@@ -141,6 +147,7 @@ def _to_filter(record: dict[str, Any]) -> Filter:
 
 def _to_task(record: dict[str, Any]) -> Task:
     due = record.get("due")
+    deadline = record.get("deadline")
     return Task(
         id=TaskId(str(record["id"])),
         content=str(record["content"]),
@@ -150,4 +157,5 @@ def _to_task(record: dict[str, Any]) -> Task:
         section_id=str(record["section_id"]) if record.get("section_id") else None,
         labels=tuple(str(label) for label in record.get("labels") or ()),
         description=str(record.get("description") or ""),
+        deadline=Deadline.from_api(deadline) if deadline else None,
     )

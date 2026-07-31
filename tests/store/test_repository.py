@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -58,6 +59,7 @@ class FakeInner:
         self.uncompleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
+        self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
@@ -98,6 +100,9 @@ class FakeInner:
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
         self.dues.append((task_id, due))
+
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        self.deadlines.append((task_id, deadline))
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None

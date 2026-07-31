@@ -3,6 +3,7 @@ import datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -24,6 +25,7 @@ class TaskRow:
     section_name: str | None = None
     labels: tuple[str, ...] = ()
     description: str = ""
+    deadline: Deadline | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             ),
             labels=task.labels,
             description=task.description,
+            deadline=task.deadline,
         )
         for task in tasks
     ]

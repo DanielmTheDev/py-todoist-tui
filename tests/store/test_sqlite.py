@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
@@ -44,6 +45,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 section_id="s1",
                 labels=("home", "urgent"),
                 description="water them all",
+                deadline=Deadline(date=datetime.date(2026, 8, 15)),
             ),
             Task(
                 id=TaskId("b"),
@@ -119,7 +121,9 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded.tasks[0].labels == ("home", "urgent")
     assert loaded.tasks[0].description == "water them all"
     assert loaded.tasks[0].section_id == "s1"
+    assert loaded.tasks[0].deadline == Deadline(date=datetime.date(2026, 8, 15))
     assert loaded.tasks[1].section_id is None
+    assert loaded.tasks[1].deadline is None
     assert [(s.id, s.name, s.order) for s in loaded.sections] == [
         ("s1", "Planning", 1),
         ("s2", "In progress", 2),

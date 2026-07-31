@@ -6,7 +6,7 @@ from textual.app import App
 from textual.widgets import Static
 
 from todoist_tui.domain.due import Due
-from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
+from todoist_tui.tui.screens.schedule import DueResult, Kind, ScheduleScreen
 
 _TUESDAY = datetime.date(2026, 7, 28)
 
@@ -18,16 +18,18 @@ class _Host(App[None]):
         on_result: Callable[[DueResult | None], None],
         current: datetime.date | None = None,
         current_time: datetime.time | None = None,
+        kind: Kind = "due",
     ) -> None:
         super().__init__()
         self._today = today
         self._on_result = on_result
         self._current = current
         self._current_time = current_time
+        self._kind: Kind = kind
 
     def on_mount(self) -> None:
         self.push_screen(
-            ScheduleScreen(self._today, self._current, self._current_time),
+            ScheduleScreen(self._today, self._current, self._current_time, self._kind),
             self._on_result,
         )
 
@@ -37,9 +39,10 @@ async def _press(
     today: datetime.date = _TUESDAY,
     current: datetime.date | None = None,
     current_time: datetime.time | None = None,
+    kind: Kind = "due",
 ) -> DueResult | None:
     results: list[DueResult | None] = []
-    host = _Host(today, results.append, current, current_time)
+    host = _Host(today, results.append, current, current_time, kind)
     async with host.run_test() as pilot:
         await pilot.pause()
         for key in keys:
@@ -185,3 +188,37 @@ async def test_calendar_renders_the_cursor_month_label() -> None:
         await pilot.pause()
         rendered = str(host.screen.query_one("#schedule", Static).render())
         assert "July 2026" in rendered
+
+
+@pytest.mark.anyio
+async def test_deadline_mode_titles_and_hides_time() -> None:
+    results: list[DueResult | None] = []
+    host = _Host(_TUESDAY, results.append, kind="deadline")
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        rendered = str(host.screen.query_one("#schedule", Static).render())
+        assert "Set deadline" in rendered
+        assert "Time:" not in rendered
+        assert "digits time" not in rendered
+
+
+@pytest.mark.anyio
+async def test_deadline_mode_ignores_typed_digits() -> None:
+    # Digits would set a time in due mode; deadlines are date-only, so enter
+    # yields the cursor date with no time.
+    assert await _press("9", "3", "0", "enter", kind="deadline") == DueResult(
+        Due(date=_TUESDAY)
+    )
+
+
+@pytest.mark.anyio
+async def test_deadline_mode_quick_key_and_clear_still_work() -> None:
+    assert await _press("t", kind="deadline") == DueResult(Due(date=_TUESDAY))
+    assert await _press("x", kind="deadline") == DueResult(None)
+
+
+@pytest.mark.anyio
+async def test_deadline_mode_navigates_and_picks() -> None:
+    assert await _press("l", "enter", kind="deadline") == DueResult(
+        Due(date=datetime.date(2026, 7, 29))
+    )

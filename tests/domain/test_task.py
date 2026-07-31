@@ -1,5 +1,6 @@
 import datetime
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
@@ -108,6 +109,32 @@ def test_task_holds_section_id() -> None:
     )
 
     assert task.section_id == "77"
+
+
+def test_task_deadline_defaults_to_none() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="No deadline",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+
+    assert task.deadline is None
+
+
+def test_task_holds_deadline() -> None:
+    deadline = Deadline(date=datetime.date(2026, 8, 15))
+    task = Task(
+        id=TaskId("2"),
+        content="With deadline",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        deadline=deadline,
+    )
+
+    assert task.deadline is deadline
 
 
 def test_project_holds_id_and_name() -> None:
