@@ -21,6 +21,7 @@ from todoist_tui.application.views import (
     View,
     filter_view,
     load_view,
+    project_view,
 )
 from todoist_tui.domain.arrange import Arrangement, GroupHeader, RenderRow, arrange
 from todoist_tui.domain.clock import Clock, SystemClock
@@ -29,6 +30,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import ArrangementStore, TaskRepository
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
@@ -36,6 +38,7 @@ from todoist_tui.tui.format import format_deadline, format_due, render_links
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
@@ -102,6 +105,7 @@ class TodoistApp(App[None]):
         (".", "view_today", "Today"),
         ("i", "view_inbox", "Inbox"),
         ("f", "view_filters", "Filters"),
+        ("p", "view_project_list", "Projects"),
         ("g", "arrange_group", "Group"),
         ("s", "arrange_sort", "Sort"),
         ("r", "refresh", "Refresh"),
@@ -136,6 +140,7 @@ class TodoistApp(App[None]):
         self._last_undo: tuple[TaskId, list[object]] | None = None
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
+        self._picking_project_list = False  # guards against stacking the project list
         self._active_filter_query: str | None = None  # set while a filter view shows
 
     def compose(self) -> ComposeResult:
@@ -217,6 +222,29 @@ class TodoistApp(App[None]):
         self._active_filter_query = chosen.query
         self._view = filter_view(chosen)
         self._open_filter(self._view, chosen.query)
+
+    async def action_view_project_list(self) -> None:
+        if self._picking_project_list:  # already loading or picker already open
+            return
+        self._picking_project_list = True
+        try:
+            projects = await self._repo.projects()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load projects: {error}")
+            self._picking_project_list = False
+            return
+        if not any(not p.is_inbox for p in projects):
+            self._set_status("No projects")
+            self._picking_project_list = False
+            return
+        self.push_screen(ProjectListScreen(projects), self._on_project_list_chosen)
+
+    def _on_project_list_chosen(self, chosen: Project | None) -> None:
+        self._picking_project_list = False
+        if chosen is None:  # picker was cancelled
+            return
+        self._active_filter_query = None  # a project view isn't a saved filter
+        self._switch_to(project_view(chosen))
 
     @work(exclusive=True, group="reload")
     async def _open_filter(self, view: View, query: str) -> None:

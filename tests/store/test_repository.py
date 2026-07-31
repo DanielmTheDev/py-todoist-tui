@@ -80,6 +80,11 @@ class FakeInner:
     async def inbox(self) -> list[Task]:  # pragma: no cover - must not be called
         raise AssertionError("inbox() must be served from the snapshot")
 
+    async def by_project(  # pragma: no cover - must not be called
+        self, project_id: str
+    ) -> list[Task]:
+        raise AssertionError("by_project() must be served from the snapshot")
+
     async def projects(self) -> list[Project]:  # pragma: no cover
         raise AssertionError("projects() must be served from the snapshot")
 
@@ -164,6 +169,17 @@ async def test_projects_and_inbox_share_one_sync() -> None:
 
     assert [p.id for p in projects] == ["220", "9"]
     assert [t.id for t in inbox] == [TaskId("a"), TaskId("c")]
+    assert source.snapshot_calls == 1
+
+
+@pytest.mark.anyio
+async def test_by_project_served_from_snapshot() -> None:
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache(), _CLOCK)
+
+    tasks = await repo.by_project("9")
+
+    assert [str(t.id) for t in tasks] == ["b"]
     assert source.snapshot_calls == 1
 
 

@@ -17,6 +17,7 @@ from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 
@@ -52,6 +53,9 @@ class FakeRepository:
 
     async def inbox(self) -> list[Task]:
         return list(self._inbox)
+
+    async def by_project(self, project_id: str) -> list[Task]:
+        return [t for t in self._tasks if t.project_id == project_id]
 
     async def filtered(self, query: str) -> list[Task]:
         return list(self._tasks)
@@ -134,7 +138,7 @@ async def test_footer_lists_shortcuts() -> None:
         await pilot.pause()
         footer = app.query_one(Footer)
         shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "z", "t", "i", "f", "r", "v"} <= shown
+        assert {"e", "z", "t", "i", "f", "p", "r", "v"} <= shown
 
 
 @pytest.mark.anyio
@@ -274,6 +278,85 @@ async def test_cancelling_filter_picker_keeps_current_view() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, FilterScreen)
+        status = str(app.query_one("#status", Static).render())
+        assert "Today" in status  # unchanged from the startup view
+
+
+@pytest.mark.anyio
+async def test_p_opens_project_list_then_selection_switches_view() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Work task",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+    )
+    repo = FakeRepository(
+        [task],
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+        ],
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectListScreen)
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ProjectListScreen)  # picker dismissed
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert str(table.get_row_at(0)[3]) == "Work task"
+        status = str(app.query_one("#status", Static).render())
+        assert "Work" in status
+
+
+@pytest.mark.anyio
+async def test_p_with_no_projects_reports_and_opens_nothing() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Eingang", is_inbox=True)])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        assert not isinstance(app.screen, ProjectListScreen)
+        status = str(app.query_one("#status", Static).render())
+        assert "No projects" in status
+
+
+@pytest.mark.anyio
+async def test_p_while_picker_open_does_not_stack_screens() -> None:
+    repo = FakeRepository([], [Project(id="9", name="Work")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("p")  # second press must not stack a second picker
+        await pilot.pause()
+        pickers = [s for s in app.screen_stack if isinstance(s, ProjectListScreen)]
+        assert len(pickers) == 1
+
+
+@pytest.mark.anyio
+async def test_cancelling_project_list_keeps_current_view() -> None:
+    repo = FakeRepository([], [Project(id="9", name="Work")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectListScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ProjectListScreen)
         status = str(app.query_one("#status", Static).render())
         assert "Today" in status  # unchanged from the startup view
 

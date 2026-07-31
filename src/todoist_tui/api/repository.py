@@ -43,6 +43,10 @@ class ApiTaskRepository:
         records = await self._client.tasks_in_project(str(inbox["id"]))
         return [_to_task(record) for record in records]
 
+    async def by_project(self, project_id: str) -> list[Task]:
+        records = await self._client.tasks_in_project(project_id)
+        return [_to_task(record) for record in records]
+
     async def projects(self) -> list[Project]:
         return [_to_project(record) for record in await self._client.projects()]
 

@@ -83,6 +83,10 @@ class SnapshotTaskRepository:
             raise LookupError("no inbox project found")
         return [task for task in snapshot.tasks if task.project_id == inbox.id]
 
+    async def by_project(self, project_id: str) -> list[Task]:
+        snapshot = await self._snapshot_now()
+        return [task for task in snapshot.tasks if task.project_id == project_id]
+
     async def today(self) -> list[Task]:
         snapshot = await self._snapshot_now()
         today = self._clock.today()

@@ -7,6 +7,7 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.task import Task, TaskId
 
@@ -56,6 +57,16 @@ INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
 def filter_view(f: Filter) -> View:
     """A view backed by a saved filter, evaluated server-side by its query."""
     return View(f.name, f"filter:{f.id}", lambda repo: repo.filtered(f.query))
+
+
+def project_view(p: Project) -> View:
+    """A view of one project's tasks; a move drops the row without a resync."""
+    return View(
+        p.name,
+        f"project:{p.id}",
+        lambda repo: repo.by_project(p.id),
+        keeps=lambda row, _today: row.project_id == p.id,
+    )
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:

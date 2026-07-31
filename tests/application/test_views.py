@@ -3,7 +3,14 @@ import datetime
 
 import pytest
 
-from todoist_tui.application.views import INBOX, TODAY, TaskRow, filter_view, load_view
+from todoist_tui.application.views import (
+    INBOX,
+    TODAY,
+    TaskRow,
+    filter_view,
+    load_view,
+    project_view,
+)
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -31,6 +38,9 @@ class FakeRepository:
 
     async def inbox(self) -> list[Task]:
         return self._inbox
+
+    async def by_project(self, project_id: str) -> list[Task]:
+        return [t for t in self._today if t.project_id == project_id]
 
     async def filtered(self, query: str) -> list[Task]:
         return []
@@ -204,6 +214,44 @@ def test_view_keys_are_stable_identities() -> None:
         filter_view(Filter(id="f1", name="Work", query="@work", order=1)).key
         == "filter:f1"
     )
+    assert project_view(Project(id="9", name="Work")).key == "project:9"
+
+
+@pytest.mark.anyio
+async def test_project_view_titled_by_name_fetches_its_tasks() -> None:
+    repo = FakeRepository(
+        [_task("mine", "9"), _task("other", "220")], [], [Project(id="9", name="Work")]
+    )
+    view = project_view(Project(id="9", name="Work"))
+
+    tasks = await view.fetch(repo)
+
+    assert view.title == "Work"
+    assert [str(t.id) for t in tasks] == ["mine"]
+
+
+def test_project_view_keeps_only_matching_rows() -> None:
+    view = project_view(Project(id="9", name="Work"))
+    assert view.keeps is not None
+    mine = TaskRow(
+        id=TaskId("x"),
+        content="x",
+        priority=Priority.P2,
+        due=None,
+        project_name="Work",
+        project_id="9",
+    )
+    moved = TaskRow(
+        id=TaskId("y"),
+        content="y",
+        priority=Priority.P2,
+        due=None,
+        project_name="Errands",
+        project_id="220",
+    )
+    today = datetime.date(2026, 7, 31)
+    assert view.keeps(mine, today) is True
+    assert view.keeps(moved, today) is False
 
 
 class RecordingRepository(FakeRepository):
@@ -242,6 +290,9 @@ class BarrierRepository:
         return [_task("Buy milk", "220")]
 
     async def inbox(self) -> list[Task]:
+        return []
+
+    async def by_project(self, project_id: str) -> list[Task]:
         return []
 
     async def projects(self) -> list[Project]:
