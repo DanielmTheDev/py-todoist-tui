@@ -1,8 +1,9 @@
 import asyncio
 import datetime
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -24,6 +25,7 @@ class TaskRow:
     project_id: str | None = None
     section_id: str | None = None
     section_name: str | None = None
+    section_order: int = 0
     labels: tuple[str, ...] = ()
     description: str = ""
     deadline: Deadline | None = None
@@ -44,6 +46,8 @@ class View:
     key: str
     fetch: Callable[[TaskRepository], Awaitable[list[Task]]]
     keeps: Callable[[TaskRow, datetime.date], bool] | None = None
+    # applied until the user saves an arrangement for this view
+    default_arrangement: Arrangement = field(default_factory=Arrangement)
 
 
 def _due_today(row: TaskRow, today: datetime.date) -> bool:
@@ -67,6 +71,7 @@ def project_view(p: Project) -> View:
         f"project:{p.id}",
         lambda repo: repo.by_project(p.id),
         keeps=lambda row, _today: row.project_id == p.id,
+        default_arrangement=Arrangement(group_by=(Field.SECTION,)),  # like Todoist
     )
 
 
@@ -75,7 +80,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
         view.fetch(repo), repo.projects(), repo.sections()
     )
     names = {project.id: project.name for project in projects}
-    section_names = {section.id: section.name for section in sections}
+    sections_by_id = {section.id: section for section in sections}
     return [
         TaskRow(
             id=task.id,
@@ -86,7 +91,14 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             project_id=task.project_id,
             section_id=task.section_id,
             section_name=(
-                section_names.get(task.section_id) if task.section_id else None
+                sections_by_id[task.section_id].name
+                if task.section_id and task.section_id in sections_by_id
+                else None
+            ),
+            section_order=(
+                sections_by_id[task.section_id].order
+                if task.section_id and task.section_id in sections_by_id
+                else 0
             ),
             labels=task.labels,
             description=task.description,

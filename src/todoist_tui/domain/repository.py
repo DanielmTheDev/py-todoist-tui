@@ -82,8 +82,14 @@ class SnapshotCache(Protocol):
 
 
 class ArrangementStore(Protocol):
-    """Persists each view's group/sort arrangement. `get` is empty when unset."""
+    """Persists each view's group/sort arrangement.
 
-    async def get(self, view_key: str) -> Arrangement: ...
+    `get` returns `default` only when the view was never saved; a saved (even
+    empty) arrangement always wins, so clearing a view's grouping sticks.
+    """
+
+    async def get(
+        self, view_key: str, default: Arrangement | None = None
+    ) -> Arrangement: ...
 
     async def save(self, view_key: str, arrangement: Arrangement) -> None: ...

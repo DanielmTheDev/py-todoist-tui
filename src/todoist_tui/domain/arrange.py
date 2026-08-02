@@ -20,6 +20,7 @@ _NO_PROJECT = "No project"
 _NO_LABELS = "(no labels)"
 _NO_DUE_DATE = "No due date"
 _NO_DUE_TIME = "No time"
+_NO_SECTION = "(no section)"
 
 
 class ArrangeRow(Protocol):
@@ -42,6 +43,10 @@ class ArrangeRow(Protocol):
     def labels(self) -> tuple[str, ...]: ...
     @property
     def parent_id(self) -> str | None: ...
+    @property
+    def section_name(self) -> str | None: ...
+    @property
+    def section_order(self) -> int: ...
 
 
 # A group bucket's sort position. `present` (0) always orders before "missing"
@@ -53,6 +58,7 @@ class Field(Enum):
     """A task attribute that can be grouped or sorted by."""
 
     PROJECT = "project"
+    SECTION = "section"
     PRIORITY = "priority"
     DUE_DATE = "due_date"
     DUE_TIME = "due_time"
@@ -67,6 +73,7 @@ class Field(Enum):
 
 _FIELD_LABELS = {
     Field.PROJECT: "Project",
+    Field.SECTION: "Section",
     Field.PRIORITY: "Priority",
     Field.DUE_DATE: "Due date",
     Field.DUE_TIME: "Due time",
@@ -80,6 +87,7 @@ _FIELD_LABELS = {
 class _Bucket:
     order: _OrderKey
     label: str
+    headerless: bool = False  # emit members loose, with no group header (no-section)
 
 
 def _buckets(field: Field, row: ArrangeRow) -> list[_Bucket]:
@@ -90,6 +98,12 @@ def _buckets(field: Field, row: ArrangeRow) -> list[_Bucket]:
             if name is None:
                 return [_Bucket((1, ""), _NO_PROJECT)]
             return [_Bucket((0, name.lower()), name)]
+        case Field.SECTION:
+            name = row.section_name
+            if name is None:
+                # section-less tasks lead the list loose, above every section
+                return [_Bucket((-1, 0), _NO_SECTION, headerless=True)]
+            return [_Bucket((0, row.section_order), name)]
         case Field.PRIORITY:
             return [_Bucket((0, -row.priority.value), row.priority.label)]
         case Field.RECURRING:
@@ -253,14 +267,24 @@ def _emit[T: ArrangeRow](
     ascending = arrangement.group_ascending(field)
     members: dict[str, list[T]] = {}
     order: dict[str, _OrderKey] = {}
+    headerless: set[str] = set()
     for row in rows:
         for bucket in _buckets(field, row):
             members.setdefault(bucket.label, []).append(row)
             order[bucket.label] = bucket.order
+            if bucket.headerless:
+                headerless.add(bucket.label)
     total = 0
     for label in sorted(
         members, key=lambda lbl: _bucket_order(order[lbl], lbl, ascending)
     ):
+        if label in headerless:
+            # A headerless bucket (section-less tasks) is a flat loose list at this
+            # level: no header, and no further subgrouping — mirroring how Todoist
+            # shows a project's un-sectioned tasks above the first section.
+            for row in _sorted(members[label], arrangement.sort_by):
+                total += _emit_subtree(row, arrangement, level, out, children, expanded)
+            continue
         subtree: list[RenderRow[T]] = []  # emit children first to know the count
         count = _emit(
             members[label], arrangement, level + 1, subtree, children, expanded

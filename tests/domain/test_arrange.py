@@ -25,6 +25,8 @@ class Row:
     project_name: str | None = "Work"
     labels: tuple[str, ...] = ()
     parent_id: str | None = None
+    section_name: str | None = None
+    section_order: int = 0
 
 
 def _date(y: int, m: int, d: int) -> Due:
@@ -240,6 +242,63 @@ def test_group_by_labels_no_labels_bucket() -> None:
 
     labels = [lbl for kind, _, lbl in _shape(result) if kind == "H"]
     assert labels == ["home", "(no labels)"]
+
+
+def test_group_by_section_orders_headers_by_section_order() -> None:
+    rows = [
+        Row("1", "b1", section_name="Backlog", section_order=2),
+        Row("2", "p1", section_name="Planning", section_order=1),
+        Row("3", "b2", section_name="Backlog", section_order=2),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.SECTION,)))
+
+    # headers follow the sections' own order, not alphabetical
+    assert _shape(result) == [
+        ("H", 0, "Planning"),
+        ("T", 1, "p1"),
+        ("H", 0, "Backlog"),
+        ("T", 1, "b1"),
+        ("T", 1, "b2"),
+    ]
+
+
+def test_group_by_section_renders_no_section_tasks_loose_at_top() -> None:
+    rows = [
+        Row("1", "loose", section_name=None),
+        Row("2", "in-sec", section_name="Planning", section_order=1),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.SECTION,)))
+
+    # a Todoist project shows section-less tasks first, with no header above them
+    assert _shape(result) == [
+        ("T", 0, "loose"),
+        ("H", 0, "Planning"),
+        ("T", 1, "in-sec"),
+    ]
+
+
+def test_group_by_section_then_priority_keeps_loose_tasks_flat() -> None:
+    rows = [
+        Row("1", "sec-a", Priority.P1, section_name="Planning", section_order=1),
+        Row("2", "sec-b", Priority.P4, section_name="Planning", section_order=1),
+        Row("3", "loose-a", Priority.P1, section_name=None),
+        Row("4", "loose-b", Priority.P4, section_name=None),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.SECTION, Field.PRIORITY)))
+
+    # section-less tasks stay a flat loose list; only sectioned tasks subgroup
+    assert _shape(result) == [
+        ("T", 0, "loose-a"),
+        ("T", 0, "loose-b"),
+        ("H", 0, "Planning"),
+        ("H", 1, Priority.P1.label),
+        ("T", 2, "sec-a"),
+        ("H", 1, Priority.P4.label),
+        ("T", 2, "sec-b"),
+    ]
 
 
 def test_nested_group_project_then_priority_with_sorted_leaves() -> None:

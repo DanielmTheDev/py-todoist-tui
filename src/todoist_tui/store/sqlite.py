@@ -141,28 +141,30 @@ class SqliteArrangementStore:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    async def get(self, view_key: str) -> Arrangement:
-        return await asyncio.to_thread(self._get, view_key)
+    async def get(
+        self, view_key: str, default: Arrangement | None = None
+    ) -> Arrangement:
+        return await asyncio.to_thread(self._get, view_key, default or Arrangement())
 
     async def save(self, view_key: str, arrangement: Arrangement) -> None:
         await asyncio.to_thread(self._save, view_key, arrangement)
 
-    def _get(self, view_key: str) -> Arrangement:
+    def _get(self, view_key: str, default: Arrangement) -> Arrangement:
         if not self._path.is_file():
-            return Arrangement()
+            return default
         with closing(sqlite3.connect(self._path)) as conn:
             try:
                 row = conn.execute(
                     "SELECT spec FROM arrangement WHERE view_key = ?", (view_key,)
                 ).fetchone()
             except sqlite3.OperationalError:  # table not created yet
-                return Arrangement()
+                return default
         if row is None:
-            return Arrangement()
-        try:  # a corrupt or legacy spec falls back to the empty default
+            return default
+        try:  # a corrupt or legacy spec falls back to the default
             return Arrangement.from_dict(json.loads(row[0]))
         except (ValueError, KeyError, TypeError):
-            return Arrangement()
+            return default
 
     def _save(self, view_key: str, arrangement: Arrangement) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

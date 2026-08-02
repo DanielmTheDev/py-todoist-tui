@@ -13,6 +13,7 @@ Mode = Literal["group", "sort"]
 # Single-letter key per arrangeable field (shown in the hint bar).
 _FIELD_KEYS: dict[str, Field] = {
     "p": Field.PROJECT,
+    "s": Field.SECTION,
     "r": Field.PRIORITY,
     "d": Field.DUE_DATE,
     "t": Field.DUE_TIME,

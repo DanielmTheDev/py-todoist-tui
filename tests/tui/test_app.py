@@ -1570,6 +1570,66 @@ def _content_col(table: DataTable[object]) -> list[str]:
     return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
 
 
+def _in_section(content: str, section_id: str | None) -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=None,
+        project_id="9",
+        section_id=section_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_opening_a_project_groups_tasks_under_section_headers() -> None:
+    repo = FakeRepository(
+        [_in_section("planned", "s1"), _in_section("loose", None)],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        col = _content_col(app.query_one(DataTable[object]))
+
+    assert any("──" in c and "Planning" in c for c in col)  # section header shown
+    assert any(c.strip() == "planned" for c in col)
+    assert any(c.strip() == "loose" for c in col)  # section-less task still listed
+    assert not any("──" in c and "section" in c.lower() for c in col)  # no such header
+
+
+@pytest.mark.anyio
+async def test_saved_project_arrangement_overrides_the_section_default() -> None:
+    repo = FakeRepository(
+        [_in_section("planned", "s1")],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement())  # user cleared grouping for this view
+    app = TodoistApp(repo, arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        col = _content_col(app.query_one(DataTable[object]))
+
+    assert not any("Planning" in c for c in col)  # saved empty beats the default
+
+
 @pytest.mark.anyio
 async def test_grouping_renders_headers_and_tasks() -> None:
     repo = FakeRepository(
@@ -1938,6 +1998,31 @@ async def test_g_then_field_keys_group_the_list_and_persist() -> None:
         col2 = _content_col(app.query_one(DataTable[object]))
         assert any("──" in c and "Home" in c for c in col2)
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
+
+
+@pytest.mark.anyio
+async def test_g_then_s_groups_the_list_by_section() -> None:
+    repo = FakeRepository(
+        [_in_section("planned", "s1")],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    store = InMemoryArrangements()
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("s")  # group by Section
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        col = _content_col(app.query_one(DataTable[object]))
+        assert any("──" in c and "Planning" in c for c in col)
+        assert await store.get("today") == Arrangement(group_by=(Field.SECTION,))
 
 
 @pytest.mark.anyio

@@ -11,6 +11,7 @@ from todoist_tui.application.views import (
     load_view,
     project_view,
 )
+from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -142,6 +143,28 @@ async def test_load_view_resolves_section_name() -> None:
 
 
 @pytest.mark.anyio
+async def test_load_view_resolves_section_order() -> None:
+    task = Task(
+        id=TaskId("x"),
+        content="In a section",
+        priority=Priority.P2,
+        due=None,
+        project_id="9",
+        section_id="s1",
+    )
+    repo = FakeRepository(
+        [task],
+        [],
+        [Project(id="9", name="Work")],
+        [Section(id="s1", project_id="9", name="Planning", order=3)],
+    )
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].section_order == 3
+
+
+@pytest.mark.anyio
 async def test_load_view_no_section_yields_none_name() -> None:
     repo = FakeRepository([_task("Rootless", "9")], [], [Project(id="9", name="Work")])
 
@@ -232,6 +255,15 @@ def test_view_keys_are_stable_identities() -> None:
         == "filter:f1"
     )
     assert project_view(Project(id="9", name="Work")).key == "project:9"
+
+
+def test_project_view_defaults_to_grouping_by_section() -> None:
+    view = project_view(Project(id="9", name="Work"))
+    assert view.default_arrangement == Arrangement(group_by=(Field.SECTION,))
+
+
+def test_today_view_has_no_default_grouping() -> None:
+    assert TODAY.default_arrangement == Arrangement()
 
 
 @pytest.mark.anyio

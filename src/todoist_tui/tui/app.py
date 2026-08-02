@@ -62,8 +62,13 @@ class InMemoryArrangements:
     def __init__(self) -> None:
         self._by_key: dict[str, Arrangement] = {}
 
-    async def get(self, view_key: str) -> Arrangement:
-        return self._by_key.get(view_key, Arrangement())
+    async def get(
+        self, view_key: str, default: Arrangement | None = None
+    ) -> Arrangement:
+        stored = self._by_key.get(view_key)
+        if stored is not None:
+            return stored
+        return default if default is not None else Arrangement()
 
     async def save(self, view_key: str, arrangement: Arrangement) -> None:
         self._by_key[view_key] = arrangement
@@ -543,7 +548,9 @@ class TodoistApp(App[None]):
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
             return
-        self._arrangement = await self._arrangements.get(view.key)
+        self._arrangement = await self._arrangements.get(
+            view.key, view.default_arrangement
+        )
         self._rows = rows  # retained so a priority keypress can re-arrange locally
         self._render(self._arrange(rows), view)
 
