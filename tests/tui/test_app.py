@@ -132,13 +132,18 @@ _TODAY = datetime.date(2026, 7, 28)  # a Tuesday
 
 
 @pytest.mark.anyio
-async def test_footer_lists_shortcuts() -> None:
+async def test_footer_shows_only_the_help_hint() -> None:
     app = TodoistApp(FakeRepository([], []))
     async with app.run_test() as pilot:
         await pilot.pause()
         footer = app.query_one(Footer)
-        shown = {ab.binding.key for ab in footer.screen.active_bindings.values()}
-        assert {"e", "z", "t", "i", "f", "p", "r", "v"} <= shown
+        shown = {
+            ab.binding.key
+            for ab in footer.screen.active_bindings.values()
+            if ab.binding.show
+        }
+        assert "question_mark" in shown
+        assert not ({"e", "z", "t", "i", "f", "p", "r", "v"} & shown)  # all hidden
 
 
 @pytest.mark.anyio

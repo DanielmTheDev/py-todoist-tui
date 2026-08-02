@@ -45,6 +45,7 @@ from todoist_tui.tui.format import format_deadline, format_due, render_links
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
@@ -54,6 +55,26 @@ _COLUMNS = ("", "Due", "Deadline", "Task", "Project")  # priority dot needs no h
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _HEADER_WIDTH = 56  # target width of a group divider rule
+
+
+def as_binding(entry: BindingType) -> Binding:
+    """Normalize a Textual binding entry (tuple or `Binding`) to a `Binding`."""
+    if isinstance(entry, Binding):
+        return entry
+    key, action, *rest = entry
+    return Binding(key, action, rest[0] if rest else "")
+
+
+def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
+    """Flatten Textual binding definitions into (key, description) help rows,
+    dropping entries with no description and the help binding itself."""
+    rows: list[tuple[str, str]] = []
+    for bindings in binding_lists:
+        for binding in map(as_binding, bindings):
+            if binding.action == "help" or not binding.description:
+                continue
+            rows.append((binding.key, binding.description))
+    return rows
 
 
 class InMemoryArrangements:
@@ -129,19 +150,20 @@ class TodoistApp(App[None]):
     """Row-highlighted task table; switch between the Today and Inbox views."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        ("e", "complete", "Complete"),
-        ("z", "undo", "Undo"),
-        (".", "view_today", "Today"),
-        ("i", "view_inbox", "Inbox"),
-        ("f", "view_filters", "Filters"),
-        ("p", "view_project_list", "Projects"),
-        ("g", "arrange_group", "Group"),
-        ("s", "arrange_sort", "Sort"),
-        ("r", "refresh", "Refresh"),
-        ("t", "set_due", "Due"),
-        ("d", "set_deadline", "Deadline"),
-        ("v", "move_task", "Move"),
-        ("enter", "open_detail", "Detail"),
+        Binding("question_mark", "help", "Help"),  # the only footer entry
+        Binding("e", "complete", "Complete", show=False),
+        Binding("z", "undo", "Undo", show=False),
+        Binding(".", "view_today", "Today", show=False),
+        Binding("i", "view_inbox", "Inbox", show=False),
+        Binding("f", "view_filters", "Filters", show=False),
+        Binding("p", "view_project_list", "Projects", show=False),
+        Binding("g", "arrange_group", "Group", show=False),
+        Binding("s", "arrange_sort", "Sort", show=False),
+        Binding("r", "refresh", "Refresh", show=False),
+        Binding("t", "set_due", "Due", show=False),
+        Binding("d", "set_deadline", "Deadline", show=False),
+        Binding("v", "move_task", "Move", show=False),
+        Binding("enter", "open_detail", "Detail", show=False),
         Binding("1", "set_priority('P1')", "P1", show=False),
         Binding("2", "set_priority('P2')", "P2", show=False),
         Binding("3", "set_priority('P3')", "P3", show=False),
@@ -407,6 +429,12 @@ class TodoistApp(App[None]):
         # fire, so open the detail view off its message instead (the binding
         # stays for the footer hint).
         self.action_open_detail()
+
+    def action_help(self) -> None:
+        if isinstance(self.screen, HelpScreen):  # already open
+            return
+        rows = shortcut_rows(TodoistApp.BINDINGS, TaskTable.BINDINGS)
+        self.push_screen(HelpScreen(rows))
 
     def action_open_detail(self) -> None:
         table = self.query_one(TaskTable)
