@@ -132,14 +132,15 @@ async def test_current_project_root_is_preselected() -> None:
 
 
 @pytest.mark.anyio
-async def test_root_target_carries_is_inbox() -> None:
-    chosen: list[MoveTarget | None] = []
-    host = _Host([Project(id="1", name="Inbox", is_inbox=True)], [], chosen.append)
+async def test_inbox_is_not_a_move_target() -> None:
+    projects = [
+        Project(id="1", name="Inbox", is_inbox=True),
+        Project(id="9", name="Work"),
+    ]
+    host = _Host(projects, [], lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert chosen == [MoveTarget("1", "Inbox", is_inbox=True)]
+        assert _labels(host) == ["Work"]  # Inbox has its own `i` key, not a target
 
 
 @pytest.mark.anyio

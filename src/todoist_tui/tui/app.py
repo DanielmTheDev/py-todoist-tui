@@ -549,7 +549,7 @@ class TodoistApp(App[None]):
             else row
             for row in self._rows
         ]
-        if self._view.key == "inbox" and not target.is_inbox:
+        if self._view.key == "inbox":  # moved out of Inbox: it no longer lists the task
             self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
         elif self._active_filter_query is not None:
             # a filter's membership needs the server; assume the move drops it and

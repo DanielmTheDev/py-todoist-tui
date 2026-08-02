@@ -19,7 +19,6 @@ class MoveTarget:
     project_name: str
     section_id: str | None = None
     section_name: str | None = None
-    is_inbox: bool = False
 
 
 class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
@@ -115,16 +114,12 @@ def _targets(projects: list[Project], sections: list[Section]) -> list[MoveTarge
         by_project.setdefault(section.project_id, []).append(section)
     targets: list[MoveTarget] = []
     for project in sorted_projects(projects):
-        targets.append(MoveTarget(project.id, project.name, is_inbox=project.is_inbox))
+        if project.is_inbox:  # Inbox is not a move target (has its own `i` key)
+            continue
+        targets.append(MoveTarget(project.id, project.name))
         for section in sorted_sections(by_project.get(project.id, [])):
             targets.append(
-                MoveTarget(
-                    project.id,
-                    project.name,
-                    section.id,
-                    section.name,
-                    is_inbox=project.is_inbox,
-                )
+                MoveTarget(project.id, project.name, section.id, section.name)
             )
     return targets
 
