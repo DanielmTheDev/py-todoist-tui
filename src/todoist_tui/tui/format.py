@@ -27,11 +27,12 @@ def format_deadline(deadline: Deadline | None, today: datetime.date) -> str:
 
 
 def styled_date(label: str, d: datetime.date, today: datetime.date) -> Text:
-    """`label` as red when `d` is overdue (before `today`), else plain.
+    """`label` red when `d` is overdue (before `today`), else dim so dates
+    recede behind the task title.
 
     Overdue is date-granular: the clock exposes only `today()`, so a timed task
     earlier today is not flagged."""
-    return Text(label, style="red" if d < today else "")
+    return Text(label, style="red" if d < today else "dim")
 
 
 def render_links(text: str) -> Text:

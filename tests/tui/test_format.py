@@ -43,10 +43,10 @@ def test_styled_date_reds_overdue() -> None:
     assert result.style == "red"
 
 
-def test_styled_date_plain_when_not_overdue() -> None:
+def test_styled_date_dims_when_not_overdue() -> None:
     result = styled_date("Today", _TODAY, _TODAY)
     assert result.plain == "Today"
-    assert result.style == ""
+    assert result.style == "dim"
 
 
 def _styled(text: Text, needle: str) -> str | None:

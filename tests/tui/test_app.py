@@ -3,6 +3,7 @@ import datetime
 from dataclasses import replace
 
 import pytest
+from rich.text import Text
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
@@ -180,7 +181,7 @@ async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
         assert not isinstance(app.screen, FilterScreen)  # picker dismissed
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[3]) == "Filtered task"
+        assert str(table.get_row_at(0)[1]) == "Filtered task"
         status = str(app.query_one("#status", Static).render())
         assert "My Filter" in status
 
@@ -323,7 +324,7 @@ async def test_p_opens_project_list_then_selection_switches_view() -> None:
         assert not isinstance(app.screen, ProjectListScreen)  # picker dismissed
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[3]) == "Work task"
+        assert str(table.get_row_at(0)[1]) == "Work task"
         status = str(app.query_one("#status", Static).render())
         assert "Work" in status
 
@@ -413,9 +414,53 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         assert table.row_count == 1
         row = table.get_row_at(0)
         assert row[0] == "🔴"
-        assert str(row[1]) == "21 Jul 09:30"  # overdue relative to _TODAY
-        assert str(row[3]) == "Buy milk"
-        assert str(row[4]) == "Errands"
+        assert str(row[1]) == "Buy milk"  # title leads, right after the priority dot
+        assert str(_cell(table, 0, "Due")) == "21 Jul 09:30"  # overdue vs _TODAY
+        assert str(_cell(table, 0, "Project")) == "Errands"
+
+
+@pytest.mark.anyio
+async def test_all_empty_metadata_columns_are_hidden() -> None:
+    # no deadline, no project on any task -> those columns drop out entirely
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 30)),
+        project_id="220",  # no matching Project provided -> no project name
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        labels = [str(c.label) for c in table.ordered_columns]
+        assert labels == ["", "Task", "Due"]  # Deadline + Project omitted
+
+
+@pytest.mark.anyio
+async def test_title_is_bold_and_dates_dimmed() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 30)),  # future: dim, not red
+        project_id="220",
+    )
+    app = TodoistApp(
+        FakeRepository([task], [Project(id="220", name="Errands")]),
+        clock=FakeClock(_TODAY),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        title = table.get_row_at(0)[1]
+        due = _cell(table, 0, "Due")
+        project = _cell(table, 0, "Project")
+        assert isinstance(title, Text) and title.style == "bold"  # title, theme-safe
+        assert isinstance(due, Text) and due.style == "dim"  # due recedes
+        assert isinstance(project, Text) and project.style == "dim"  # project recedes
 
 
 @pytest.mark.anyio
@@ -432,7 +477,7 @@ async def test_list_hides_markdown_link_syntax_showing_the_label() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert (
-            str(app.query_one(DataTable[object]).get_row_at(0)[3])
+            str(app.query_one(DataTable[object]).get_row_at(0)[1])
             == "Check calendar today"
         )
 
@@ -469,7 +514,8 @@ async def test_all_day_task_shows_date_without_time() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "21 Jul"
+        table = app.query_one(DataTable[object])
+        assert str(_cell(table, 0, "Due")) == "21 Jul"
 
 
 @pytest.mark.anyio
@@ -485,7 +531,8 @@ async def test_task_without_due_has_blank_due_cell() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[1] == ""
+        # the sole task has no due → the Due column drops out entirely
+        assert _cell(app.query_one(DataTable[object]), 0, "Due") is None
 
 
 @pytest.mark.anyio
@@ -501,7 +548,8 @@ async def test_task_without_project_blank() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == ""
+        # no task has a project name → the Project column drops out entirely
+        assert _cell(app.query_one(DataTable[object]), 0, "Project") is None
 
 
 @pytest.mark.anyio
@@ -686,7 +734,7 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
         assert "P1" in col2[0]
         assert col2[1].strip() == "Buy milk"
         assert not any("P4" in c for c in col2)
-        assert str(table.get_row_at(table.cursor_row)[3]).strip() == "Buy milk"  # <-
+        assert str(table.get_row_at(table.cursor_row)[1]).strip() == "Buy milk"  # <-
 
         repo.release.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
@@ -782,7 +830,7 @@ async def test_pressing_u_undoes_last_complete() -> None:
         assert repo.uncompleted == [TaskId("6X4")]
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[3]) == "Buy milk"
+        assert str(table.get_row_at(0)[1]) == "Buy milk"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -931,7 +979,7 @@ async def test_undo_restores_a_completed_task_even_while_server_lags() -> None:
         assert repo.uncompleted == [TaskId("Buy milk")]
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[3]) == "Buy milk"
+        assert str(table.get_row_at(0)[1]) == "Buy milk"
 
 
 class RecurringCompleteRepository(FakeRepository):
@@ -984,7 +1032,7 @@ async def test_recurring_completion_reappears_with_its_next_due() -> None:
         # its next occurrence has a new due: it must come back, not stay hidden
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[3]) == "Water plants"
+        assert str(table.get_row_at(0)[1]) == "Water plants"
 
 
 @pytest.mark.anyio
@@ -1004,7 +1052,7 @@ async def test_completing_moves_cursor_to_the_task_below() -> None:
 
         table = app.query_one(DataTable[object])
         assert table.row_count == 2
-        assert str(table.get_row_at(table.cursor_row)[3]) == "C"  # not back up to A
+        assert str(table.get_row_at(table.cursor_row)[1]) == "C"  # not back up to A
 
 
 @pytest.mark.anyio
@@ -1025,7 +1073,7 @@ async def test_completing_the_last_task_moves_cursor_up() -> None:
 
         table = app.query_one(DataTable[object])
         assert table.row_count == 2
-        assert str(table.get_row_at(table.cursor_row)[3]) == "B"  # up to the one above
+        assert str(table.get_row_at(table.cursor_row)[1]) == "B"  # up to the one above
 
 
 class FailingUncompleteRepository(FakeRepository):
@@ -1183,7 +1231,7 @@ async def test_pressing_d_sets_a_deadline_and_shows_it() -> None:
             (TaskId("6X4"), Deadline(date=datetime.date(2026, 7, 29)))
         ]
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[2]) == "Tomorrow"  # Deadline column
+        assert str(_cell(table, 0, "Deadline")) == "Tomorrow"
 
 
 @pytest.mark.anyio
@@ -1202,7 +1250,7 @@ async def test_pressing_d_clear_removes_the_deadline() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[2]) == "Tomorrow"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("x")  # clear
@@ -1210,7 +1258,8 @@ async def test_pressing_d_clear_removes_the_deadline() -> None:
         await pilot.pause()
 
         assert repo.deadlines == [(TaskId("6X4"), None)]
-        assert app.query_one(DataTable[object]).get_row_at(0)[2] == ""
+        # deadline cleared → the Deadline column drops out
+        assert _cell(app.query_one(DataTable[object]), 0, "Deadline") is None
 
 
 @pytest.mark.anyio
@@ -1266,7 +1315,7 @@ async def test_d_then_today_keeps_task_in_today_with_date() -> None:
         await pilot.press("t")  # today: it stays, now dated
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[1]) == "Today"
+        assert str(_cell(table, 0, "Due")) == "Today"
 
 
 @pytest.mark.anyio
@@ -1285,7 +1334,7 @@ async def test_d_then_clear_removes_due() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "Today"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Today"
         repo.release.clear()  # block the sync that follows the change
 
         await pilot.press("t")
@@ -1394,7 +1443,7 @@ async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
         await pilot.press("m")  # a due change must not remove it from Inbox
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert str(table.get_row_at(0)[1]) == "Tomorrow"
+        assert str(_cell(table, 0, "Due")) == "Tomorrow"
 
 
 @pytest.mark.anyio
@@ -1447,7 +1496,7 @@ async def test_d_then_escape_changes_nothing() -> None:
 
         assert not isinstance(app.screen, ScheduleScreen)
         assert repo.dues == []
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "Today"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Today"
 
 
 @pytest.mark.anyio
@@ -1513,8 +1562,8 @@ async def test_set_due_failure_is_surfaced_and_resyncs() -> None:
         assert "Failed to set due: boom" in str(
             app.query_one("#status", Static).render()
         )
-        # failed command resyncs to server truth: the due cell reverts to blank
-        assert app.query_one(DataTable[object]).get_row_at(0)[1] == ""
+        # failed command resyncs to server truth: due reverts to none, column drops
+        assert _cell(app.query_one(DataTable[object]), 0, "Due") is None
 
 
 @pytest.mark.anyio
@@ -1601,7 +1650,7 @@ async def test_v_pick_moves_task_and_updates_project_cell() -> None:
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", None)]
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == "Work"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
 
 
 @pytest.mark.anyio
@@ -1736,7 +1785,7 @@ async def test_move_failure_is_surfaced_and_resyncs() -> None:
             app.query_one("#status", Static).render()
         )
         # failed command resyncs to server truth: the project cell reverts
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[4]) == "Errands"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Errands"
 
 
 def _row(content: str, project_id: str = "220", parent_id: str | None = None) -> Task:
@@ -1757,7 +1806,15 @@ async def _grouped_by_project() -> InMemoryArrangements:
 
 
 def _content_col(table: DataTable[object]) -> list[str]:
-    return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+
+
+def _cell(table: DataTable[object], row: int, label: str) -> object:
+    """A cell by column label, or None when that column is hidden (all-empty)."""
+    labels = [str(c.label) for c in table.ordered_columns]
+    if label not in labels:
+        return None
+    return table.get_row_at(row)[labels.index(label)]
 
 
 def _in_section(content: str, section_id: str | None) -> Task:
@@ -2130,7 +2187,7 @@ async def test_refresh_keeps_cursor_on_the_same_task() -> None:
         await pilot.pause()
 
         assert table.cursor_row == 1  # cursor stayed on "Second", not reset to top
-        assert str(table.get_row_at(table.cursor_row)[3]) == "Second"
+        assert str(table.get_row_at(table.cursor_row)[1]) == "Second"
 
 
 @pytest.mark.anyio
@@ -2154,12 +2211,12 @@ async def test_pressing_i_switches_to_inbox() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert str(app.query_one(DataTable[object]).get_row_at(0)[3]) == "Today thing"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "Today thing"
 
         await pilot.press("i")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[3]) == "Inbox thing"
+        assert str(table.get_row_at(0)[1]) == "Inbox thing"
         assert "Inbox · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -2175,7 +2232,7 @@ async def test_pressing_t_switches_back_to_today() -> None:
         await pilot.press(".")
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[3]) == "Today thing"
+        assert str(table.get_row_at(0)[1]) == "Today thing"
         assert "Today · 1 task(s)" in str(app.query_one("#status", Static).render())
 
 
@@ -2487,7 +2544,7 @@ async def test_startup_opens_the_stored_home_view() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(DataTable[object])
-        assert str(table.get_row_at(0)[3]) == "i1"
+        assert str(table.get_row_at(0)[1]) == "i1"
         assert "Inbox" in str(app.query_one("#status", Static).render())
 
 

@@ -65,7 +65,6 @@ from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScre
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
-_COLUMNS = ("", "Due", "Deadline", "Task", "Project")  # priority dot needs no header
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _HEADER_WIDTH = 56  # target width of a group divider rule
@@ -221,7 +220,7 @@ class TodoistApp(App[None]):
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
-        self._last_undo: tuple[TaskId, list[object]] | None = None
+        self._last_undo: tuple[TaskId, TaskRow] | None = None
         # tasks closed locally, kept hidden across reloads until the server's
         # snapshot reflects the change (gone, or a recurring task's new due)
         self._pending_close: dict[str, Due | None] = {}
@@ -238,7 +237,7 @@ class TodoistApp(App[None]):
     async def on_mount(self) -> None:
         table = self.query_one(TaskTable)
         table.cursor_type = "row"
-        table.add_columns(*_COLUMNS)
+        table.cell_padding = 2  # breathing room between columns; _render owns columns
         self._view, self._active_filter_query = await self._resolve_home()
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
@@ -391,7 +390,6 @@ class TodoistApp(App[None]):
         task_id = _task_id_of(str(row_key.value))
         if task_id is None:  # cursor is on a group header: nothing to complete
             return
-        cells = table.get_row(row_key)  # kept to restore the row on undo
         cursor_row = table.cursor_row  # follow the highlight down to the neighbour
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         self._pending_close[task_id] = row.due if row is not None else None
@@ -399,10 +397,10 @@ class TodoistApp(App[None]):
         self._rows = [r for r in self._rows if str(r.id) != task_id]
         self._render(self._arrange(self._rows), self._view)
         self._focus_task_at(table, cursor_row)
-        self._complete(TaskId(task_id), cells)
+        self._complete(TaskId(task_id), row)
 
     @work
-    async def _complete(self, task_id: TaskId, cells: list[object]) -> None:
+    async def _complete(self, task_id: TaskId, row: TaskRow | None) -> None:
         try:
             await complete_task(self._repo, task_id)
         except Exception as error:  # command rejected: unhide it, resync, report
@@ -410,18 +408,20 @@ class TodoistApp(App[None]):
             await self._reload(self._view)
             self._set_status(f"Failed to complete task: {error}")
             return
-        self._last_undo = (task_id, cells)  # only a confirmed close is undoable
+        if row is not None:  # only a confirmed close of a known row is undoable
+            self._last_undo = (task_id, row)
         self._sync_now()  # pull server delta so the view reflects the close
 
     def action_undo(self) -> None:
         if self._last_undo is None:
             return
-        task_id, cells = self._last_undo
+        task_id, row = self._last_undo
         self._last_undo = None  # single-level: each undo reverses one close
         self._pending_close.pop(str(task_id), None)  # reopened: no longer filter it out
-        table = self.query_one(TaskTable)
-        table.add_row(*cells, key=_task_key(table.row_count, task_id))  # lands at end
-        self._set_status(_count_status(self._view.title, _visible_task_count(table)))
+        # restore into the model and repaint; columns/placement rebuild naturally
+        if all(str(r.id) != str(task_id) for r in self._rows):
+            self._rows = [*self._rows, row]
+        self._render(self._arrange(self._rows), self._view)
         self._uncomplete(task_id)
 
     @work
@@ -718,25 +718,39 @@ class TodoistApp(App[None]):
         first_row_of: dict[str, int] = {}
         first_task_row: int | None = None
         task_ids: set[str] = set()
-        table.clear()
+        # drop metadata columns empty for every visible task, so short lists don't
+        # strand three near-blank columns beside the titles
+        tasks = [item.row for item in render_rows if isinstance(item, TaskLine)]
+        show_due = any(t.due for t in tasks)
+        show_deadline = any(t.deadline for t in tasks)
+        show_project = any(t.project_name for t in tasks)
+        columns = ["", "Task"]
+        if show_due:
+            columns.append("Due")
+        if show_deadline:
+            columns.append("Deadline")
+        if show_project:
+            columns.append("Project")
+        table.clear(columns=True)
+        table.add_columns(*columns)
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
-                table.add_row(
-                    "", "", "", _header_text(item, today), "", key=_header_key(index)
-                )
+                header = ["", _header_text(item, today)] + [""] * (len(columns) - 2)
+                table.add_row(*header, key=_header_key(index))
                 continue
             row = item.row
-            content = Text(_indent(item.level))
+            # bold (no color) so the title leads on any theme; dim metadata recedes
+            content = Text(_indent(item.level), style="bold")
             content.append(_expand_marker(item))
             content.append_text(render_links(row.content))
-            table.add_row(
-                _priority_dot(row.priority),
-                _due_cell(row.due, today),
-                _deadline_cell(row.deadline, today),
-                content,
-                Text(row.project_name, style="dim") if row.project_name else "",
-                key=_task_key(index, row.id),
-            )
+            cells: list[Text | str] = [_priority_dot(row.priority), content]
+            if show_due:
+                cells.append(_due_cell(row.due, today))
+            if show_deadline:
+                cells.append(_deadline_cell(row.deadline, today))
+            if show_project:
+                cells.append(_project_cell(row.project_name))
+            table.add_row(*cells, key=_task_key(index, row.id))
             if first_task_row is None:
                 first_task_row = index
             first_row_of.setdefault(str(row.id), index)
@@ -801,6 +815,10 @@ def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | st
     return styled_date(format_deadline(deadline, today), deadline.date, today)
 
 
+def _project_cell(project_name: str | None) -> Text | str:
+    return Text(project_name, style="dim") if project_name else ""
+
+
 def _header_text(header: GroupHeader, today: datetime.date) -> Text:
     indent = _indent(header.level)
     label = header.label
@@ -833,12 +851,6 @@ def _task_id_of(row_key: str) -> str | None:
     if row_key.startswith("t:"):
         return row_key.split(":", 2)[2]
     return None
-
-
-def _visible_task_count(table: TaskTable) -> int:
-    ids = {_task_id_of(str(key.value)) for key in table.rows}
-    ids.discard(None)
-    return len(ids)
 
 
 def _arrangement_summary(arrangement: Arrangement) -> str:
