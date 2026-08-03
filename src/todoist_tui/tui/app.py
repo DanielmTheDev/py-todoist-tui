@@ -224,6 +224,9 @@ class TodoistApp(App[None]):
         # tasks closed locally, kept hidden across reloads until the server's
         # snapshot reflects the change (gone, or a recurring task's new due)
         self._pending_close: dict[str, Due | None] = {}
+        # fields edited locally, kept applied across reloads until the server
+        # snapshot reflects them — so a lagging sync can't revert an optimistic edit
+        self._pending_edits: dict[str, dict[str, object]] = {}
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_project_list = False  # guards against stacking the project list
@@ -443,6 +446,7 @@ class TodoistApp(App[None]):
         if task_id is None:  # cursor is on a group header: nothing to set
             return
         priority = Priority[name]
+        self._record_edit(task_id, priority=priority)
         # optimistic: re-arrange now so the task jumps to its new priority group
         # (and its dot repaints), then sync in the background
         self._rows = [
@@ -457,6 +461,7 @@ class TodoistApp(App[None]):
         try:
             await set_priority(self._repo, task_id, priority)
         except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(str(task_id), "priority")
             await self._reload(self._view)
             self._set_status(f"Failed to set priority: {error}")
             return
@@ -528,6 +533,7 @@ class TodoistApp(App[None]):
             (row.due for row in self._rows if str(row.id) == str(task_id)), None
         )
         new_due = reschedule(original, result.due)
+        self._record_edit(str(task_id), due=new_due)
         # optimistic: repaint the due cell (and re-group if grouped by due) now
         self._rows = [
             replace(row, due=new_due) if str(row.id) == str(task_id) else row
@@ -548,6 +554,7 @@ class TodoistApp(App[None]):
         try:
             await set_due(self._repo, task_id, due)
         except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(str(task_id), "due")
             await self._reload(self._view)
             self._set_status(f"Failed to set due: {error}")
             return
@@ -560,6 +567,7 @@ class TodoistApp(App[None]):
         new_deadline = (
             Deadline(date=result.due.date) if result.due is not None else None
         )
+        self._record_edit(str(task_id), deadline=new_deadline)
         self._rows = [  # optimistic: repaint the deadline cell now
             replace(row, deadline=new_deadline) if str(row.id) == str(task_id) else row
             for row in self._rows
@@ -572,6 +580,7 @@ class TodoistApp(App[None]):
         try:
             await set_deadline(self._repo, task_id, deadline)
         except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(str(task_id), "deadline")
             await self._reload(self._view)
             self._set_status(f"Failed to set deadline: {error}")
             return
@@ -609,6 +618,13 @@ class TodoistApp(App[None]):
         self._picking_project = False
         if target is None:  # picker was cancelled
             return
+        self._record_edit(
+            str(task_id),
+            project_name=target.project_name,
+            project_id=target.project_id,
+            section_id=target.section_id,
+            section_name=target.section_name,
+        )
         # optimistic: repaint the project cell (and re-group if grouped by project)
         self._rows = [
             replace(
@@ -638,6 +654,13 @@ class TodoistApp(App[None]):
         try:
             await move_task(self._repo, task_id, project_id, section_id)
         except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(
+                str(task_id),
+                "project_name",
+                "project_id",
+                "section_id",
+                "section_name",
+            )
             await self._reload(self._view)
             self._set_status(f"Failed to move task: {error}")
             return
@@ -653,8 +676,48 @@ class TodoistApp(App[None]):
             view.key, view.default_arrangement
         )
         rows = self._drop_closed(rows)
+        rows = self._apply_pending_edits(rows)
         self._rows = rows  # retained so a priority keypress can re-arrange locally
         self._render(self._arrange(rows), view)
+
+    def _record_edit(self, task_id: str, **fields: object) -> None:
+        self._pending_edits.setdefault(task_id, {}).update(fields)  # last write wins
+
+    def _forget_edit(self, task_id: str, *fields: str) -> None:
+        pending = self._pending_edits.get(task_id)
+        if pending is None:
+            return
+        for name in fields:
+            pending.pop(name, None)
+        if not pending:
+            del self._pending_edits[task_id]
+
+    def _apply_pending_edits(self, rows: list[TaskRow]) -> list[TaskRow]:
+        """Re-apply locally-edited fields the server hasn't confirmed yet, and
+        forget a field once the snapshot matches it — or the task leaves the
+        view — so an edit isn't held forever."""
+        present = {str(row.id) for row in rows}
+        self._pending_edits = {
+            tid: fields for tid, fields in self._pending_edits.items() if tid in present
+        }
+        result: list[TaskRow] = []
+        for row in rows:
+            pending = self._pending_edits.get(str(row.id))
+            if not pending:
+                result.append(row)
+                continue
+            unconfirmed = {
+                name: value
+                for name, value in pending.items()
+                if getattr(row, name) != value
+            }
+            if unconfirmed:
+                self._pending_edits[str(row.id)] = unconfirmed
+                row = replace(row, **unconfirmed)
+            else:
+                del self._pending_edits[str(row.id)]
+            result.append(row)
+        return result
 
     def _drop_closed(self, rows: list[TaskRow]) -> list[TaskRow]:
         """Hide locally-closed tasks the server hasn't confirmed yet, and forget

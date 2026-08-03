@@ -839,6 +839,193 @@ async def test_set_priority_failure_is_surfaced_and_resyncs() -> None:
         assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""
 
 
+class LaggingEditRepository(FakeRepository):
+    """Todoist eventual consistency: an edit is accepted but the sync snapshot
+    keeps returning the old field value until the server catches up."""
+
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
+        self.priorities.append((task_id, priority))  # recorded, not yet reflected
+
+    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+        self.dues.append((task_id, due))
+
+    async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
+        self.deadlines.append((task_id, deadline))
+
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        self.moves.append((task_id, project_id, section_id))
+
+    def catch_up(self) -> None:
+        for tid, priority in self.priorities:
+            self._tasks = [
+                replace(t, priority=priority) if t.id == tid else t for t in self._tasks
+            ]
+        for tid, due in self.dues:
+            self._tasks = [
+                replace(t, due=due) if t.id == tid else t for t in self._tasks
+            ]
+        for tid, deadline in self.deadlines:
+            self._tasks = [
+                replace(t, deadline=deadline) if t.id == tid else t for t in self._tasks
+            ]
+        for tid, project_id, section_id in self.moves:
+            self._tasks = [
+                replace(t, project_id=project_id, section_id=section_id)
+                if t.id == tid
+                else t
+                for t in self._tasks
+            ]
+
+
+@pytest.mark.anyio
+async def test_priority_survives_a_lagging_sync() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        await pilot.press("1")
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()  # the success sync lands, still lists P4
+
+        # optimistic P1 must not be reverted by the lagging snapshot
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+
+        repo.catch_up()  # server finally reflects the change
+        await pilot.press("r")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+
+
+@pytest.mark.anyio
+async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        await pilot.press("1")
+        await pilot.press("2")  # second set before the first's sync settles
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"  # P2
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [
+            (TaskId("6X4"), Priority.P1),
+            (TaskId("6X4"), Priority.P2),
+        ]
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"  # holds P2
+
+        repo.catch_up()
+        await pilot.press("r")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"
+
+
+@pytest.mark.anyio
+async def test_due_survives_a_lagging_sync() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+    )
+    repo = LaggingEditRepository([task], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # open the Work project view (keeps=project)
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow: 2026-07-29
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
+        # the lagging snapshot still says 21 Jul; the optimistic due must hold
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Tomorrow"
+
+
+@pytest.mark.anyio
+async def test_deadline_survives_a_lagging_sync() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Ship it",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),  # stays in Today regardless of the deadline
+        project_id="220",
+    )
+    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        # the lagging snapshot has no deadline; the optimistic one must hold
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
+
+
+@pytest.mark.anyio
+async def test_move_survives_a_lagging_sync() -> None:
+    repo = LaggingEditRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "9", None)]
+        # the lagging snapshot still lists Errands; the optimistic project must hold
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
+
+
 @pytest.mark.anyio
 async def test_pressing_u_undoes_last_complete() -> None:
     task = Task(
