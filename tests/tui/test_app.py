@@ -13,7 +13,12 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.tui.app import InMemoryArrangements, TaskTable, TodoistApp
+from todoist_tui.tui.app import (
+    InMemoryArrangements,
+    InMemoryHome,
+    TaskTable,
+    TodoistApp,
+)
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
@@ -2237,3 +2242,102 @@ async def test_arrangement_is_restored_per_view() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert any("──" in c for c in _content_col(app.query_one(DataTable[object])))
+
+
+@pytest.mark.anyio
+async def test_pressing_m_sets_current_view_as_home() -> None:
+    home = InMemoryHome()
+    repo = FakeRepository(
+        [_row("w1", "9")],
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+        ],
+    )
+    app = TodoistApp(repo, home=home)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")  # browse into the Work project
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        await pilot.press("m")  # pin it as home
+        await pilot.pause()
+        assert await home.get() == "project:9"
+        assert "Home set to Work" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_startup_opens_the_stored_home_view() -> None:
+    home = InMemoryHome()
+    await home.save("inbox")
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        inbox=[_row("i1", "220")],
+    )
+    app = TodoistApp(repo, home=home)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        assert str(table.get_row_at(0)[3]) == "i1"
+        assert "Inbox" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_startup_falls_back_to_today_when_home_target_gone() -> None:
+    home = InMemoryHome()
+    await home.save("project:999")  # a project that no longer exists
+    repo = FakeRepository([_row("t1", "220")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, home=home)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "Today" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_pressing_H_returns_to_the_home_view() -> None:
+    home = InMemoryHome()
+    await home.save("inbox")
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        inbox=[_row("i1", "220")],
+    )
+    app = TodoistApp(repo, home=home)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(".")  # go to Today
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "Today" in str(app.query_one("#status", Static).render())
+
+        await pilot.press("H")  # jump home
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "Inbox" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_home_filter_view_refreshes_live() -> None:
+    home = InMemoryHome()
+    await home.save("filter:f1")
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
+    )
+    app = TodoistApp(repo, home=home)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(".")  # leave for Today
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        repo.refresh_filtered_queries.clear()
+
+        await pilot.press("H")  # back to the filter home
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "My Filter" in str(app.query_one("#status", Static).render())
+        assert "p1" in repo.refresh_filtered_queries  # live-refreshed as a filter

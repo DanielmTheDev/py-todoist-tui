@@ -10,6 +10,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    view_from_key,
 )
 from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.deadline import Deadline
@@ -324,6 +325,47 @@ async def test_filter_view_titled_by_name_fetches_via_query() -> None:
     assert view.title == "Work P1"
     assert repo.queries == ["@work & p1"]
     assert [str(t.id) for t in tasks] == ["hit"]
+
+
+_PROJECTS = [Project(id="9", name="Work"), Project(id="220", name="Errands")]
+_FILTERS = [Filter(id="f1", name="Work P1", query="@work & p1", order=1)]
+
+
+def test_view_from_key_resolves_today() -> None:
+    view = view_from_key("today", _PROJECTS, _FILTERS)
+    assert view is TODAY
+
+
+def test_view_from_key_resolves_inbox() -> None:
+    view = view_from_key("inbox", _PROJECTS, _FILTERS)
+    assert view is INBOX
+
+
+def test_view_from_key_resolves_project() -> None:
+    view = view_from_key("project:9", _PROJECTS, _FILTERS)
+    assert view is not None
+    assert view.key == "project:9"
+    assert view.title == "Work"
+
+
+def test_view_from_key_resolves_filter() -> None:
+    view = view_from_key("filter:f1", _PROJECTS, _FILTERS)
+    assert view is not None
+    assert view.key == "filter:f1"
+    assert view.title == "Work P1"
+
+
+def test_view_from_key_unknown_project_is_none() -> None:
+    assert view_from_key("project:999", _PROJECTS, _FILTERS) is None
+
+
+def test_view_from_key_unknown_filter_is_none() -> None:
+    assert view_from_key("filter:gone", _PROJECTS, _FILTERS) is None
+
+
+@pytest.mark.parametrize("key", ["", "garbage", "project:", "unknown:9"])
+def test_view_from_key_malformed_is_none(key: str) -> None:
+    assert view_from_key(key, _PROJECTS, _FILTERS) is None
 
 
 class BarrierRepository:

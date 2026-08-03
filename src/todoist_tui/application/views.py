@@ -75,6 +75,29 @@ def project_view(p: Project) -> View:
     )
 
 
+def view_from_key(
+    key: str, projects: list[Project], filters: list[Filter]
+) -> View | None:
+    """Rebuild the View a stored key names, or None if its target is gone.
+
+    Inverse of the `View.key` the factories above emit. `None` lets the caller
+    fall back (e.g. to TODAY) when a saved project/filter has since vanished.
+    """
+    if key == TODAY.key:
+        return TODAY
+    if key == INBOX.key:
+        return INBOX
+    if key.startswith("project:"):
+        target = key[len("project:") :]
+        project = next((p for p in projects if p.id == target), None)
+        return project_view(project) if project is not None else None
+    if key.startswith("filter:"):
+        target = key[len("filter:") :]
+        found = next((f for f in filters if f.id == target), None)
+        return filter_view(found) if found is not None else None
+    return None
+
+
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
     tasks, projects, sections = await asyncio.gather(
         view.fetch(repo), repo.projects(), repo.sections()

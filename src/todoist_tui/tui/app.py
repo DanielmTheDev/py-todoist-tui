@@ -23,6 +23,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    view_from_key,
 )
 from todoist_tui.domain.arrange import (
     Arrangement,
@@ -38,7 +39,11 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.repository import ArrangementStore, TaskRepository
+from todoist_tui.domain.repository import (
+    ArrangementStore,
+    HomeViewStore,
+    TaskRepository,
+)
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import format_deadline, format_due, render_links
@@ -95,6 +100,19 @@ class InMemoryArrangements:
         self._by_key[view_key] = arrangement
 
 
+class InMemoryHome:
+    """Session-only home-view store (the default when none is injected)."""
+
+    def __init__(self) -> None:
+        self._key: str | None = None
+
+    async def get(self) -> str | None:
+        return self._key
+
+    async def save(self, view_key: str) -> None:
+        self._key = view_key
+
+
 class TaskTable(DataTable[object]):
     """DataTable with vim j/k row nav and h/l subtask collapse/expand.
 
@@ -147,7 +165,8 @@ class TaskTable(DataTable[object]):
 
 
 class TodoistApp(App[None]):
-    """Row-highlighted task table; switch between the Today and Inbox views."""
+    """Row-highlighted task table over Today, Inbox, project, and filter views,
+    opening on a persisted home view."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("question_mark", "help", "Help"),  # the only footer entry
@@ -157,6 +176,8 @@ class TodoistApp(App[None]):
         Binding("i", "view_inbox", "Inbox", show=False),
         Binding("f", "view_filters", "Filters", show=False),
         Binding("p", "view_project_list", "Projects", show=False),
+        Binding("H", "go_home", "Home", show=False),
+        Binding("m", "set_home", "Set home", show=False),
         Binding("g", "arrange_group", "Group", show=False),
         Binding("s", "arrange_sort", "Sort", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -177,10 +198,12 @@ class TodoistApp(App[None]):
         arrangements: ArrangementStore | None = None,
         clock: Clock | None = None,
         link_opener: LinkOpener | None = None,
+        home: HomeViewStore | None = None,
     ) -> None:
         super().__init__()
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
+        self._home = home or InMemoryHome()
         self._clock = clock or SystemClock()
         self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
@@ -204,8 +227,9 @@ class TodoistApp(App[None]):
         table = self.query_one(TaskTable)
         table.cursor_type = "row"
         table.add_columns(*_COLUMNS)
+        self._view, self._active_filter_query = await self._resolve_home()
         await self._reload(self._view)  # instant: served from cache when present
-        self._sync_now()
+        self._sync_now()  # for a filter home, this also refreshes it live
         self.set_interval(self.SYNC_INTERVAL, self._sync_now)
 
     @work(exclusive=True, group="reload")
@@ -242,6 +266,36 @@ class TodoistApp(App[None]):
         await self._arrangements.save(view.key, arrangement)
         if self._view is view:  # user may have switched away before this ran
             await self._reload(view)  # picks the saved arrangement back up
+
+    async def action_set_home(self) -> None:
+        await self._home.save(self._view.key)
+        self._set_status(f"Home set to {self._view.title}")
+
+    async def action_go_home(self) -> None:
+        view, query = await self._resolve_home()
+        self._active_filter_query = query
+        if query is not None:  # a filter home: revalidate it live like the picker
+            self._view = view
+            self._open_filter(view, query)
+        else:
+            self._switch_to(view)
+
+    async def _resolve_home(self) -> tuple[View, str | None]:
+        """The startup/home view and its filter query (None unless a filter),
+        falling back to Today when unset or its target no longer exists."""
+        key = await self._home.get()
+        if key is None:
+            return TODAY, None
+        try:
+            projects = await self._repo.projects()
+            filters = await self._repo.filters()
+        except Exception:  # offline before the first sync: open Today
+            return TODAY, None
+        view = view_from_key(key, projects, filters)
+        if view is None:  # the saved project/filter is gone
+            return TODAY, None
+        query = next((f.query for f in filters if f"filter:{f.id}" == key), None)
+        return view, query
 
     def action_view_today(self) -> None:
         self._active_filter_query = None

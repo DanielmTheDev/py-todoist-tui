@@ -178,6 +178,47 @@ class SqliteArrangementStore:
             conn.commit()
 
 
+_HOME_SCHEMA = """
+CREATE TABLE IF NOT EXISTS home (
+    id INTEGER PRIMARY KEY CHECK (id = 1), view_key TEXT NOT NULL
+);
+"""
+
+
+class SqliteHomeViewStore:
+    """Persists the single startup view key in SQLite (a one-row table)."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def get(self) -> str | None:
+        return await asyncio.to_thread(self._get)
+
+    async def save(self, view_key: str) -> None:
+        await asyncio.to_thread(self._save, view_key)
+
+    def _get(self) -> str | None:
+        if not self._path.is_file():
+            return None
+        with closing(sqlite3.connect(self._path)) as conn:
+            try:
+                row = conn.execute("SELECT view_key FROM home WHERE id = 1").fetchone()
+            except sqlite3.OperationalError:  # table not created yet
+                return None
+        return row[0] if row is not None else None
+
+    def _save(self, view_key: str) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.executescript(_HOME_SCHEMA)
+            conn.execute(
+                "INSERT INTO home (id, view_key) VALUES (1, ?)"
+                " ON CONFLICT(id) DO UPDATE SET view_key = excluded.view_key",
+                (view_key,),
+            )
+            conn.commit()
+
+
 def _task_to_row(
     task: Task,
 ) -> tuple[
