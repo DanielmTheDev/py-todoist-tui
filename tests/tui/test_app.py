@@ -519,6 +519,44 @@ async def test_all_day_task_shows_date_without_time() -> None:
 
 
 @pytest.mark.anyio
+async def test_recurring_task_marks_due_cell() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Water plants",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 8, 5), is_recurring=True, string="every day"),
+        project_id="220",
+    )
+    app = TodoistApp(
+        FakeRepository([task], [Project(id="220", name="Errands")]),
+        clock=FakeClock(_TODAY),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "↻" in str(_cell(app.query_one(DataTable[object]), 0, "Due"))
+
+
+@pytest.mark.anyio
+async def test_non_recurring_task_due_cell_has_no_marker() -> None:
+    task = Task(
+        id=TaskId("1"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 8, 5)),
+        project_id="220",
+    )
+    app = TodoistApp(
+        FakeRepository([task], [Project(id="220", name="Errands")]),
+        clock=FakeClock(_TODAY),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "↻" not in str(_cell(app.query_one(DataTable[object]), 0, "Due"))
+
+
+@pytest.mark.anyio
 async def test_task_without_due_has_blank_due_cell() -> None:
     task = Task(
         id=TaskId("1"),

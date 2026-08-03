@@ -803,10 +803,16 @@ def _count_status(title: str, count: int) -> str:
     return f"{title} · no tasks" if count == 0 else f"{title} · {count} task(s)"
 
 
+_RECURRING_GLYPH = " ↻"
+
+
 def _due_cell(due: Due | None, today: datetime.date) -> Text | str:
     if due is None:
         return ""
-    return styled_date(format_due(due, today), due.date, today)
+    label = format_due(due, today)
+    if due.is_recurring:  # detail card shows the full rule; here just a quiet mark
+        label += _RECURRING_GLYPH
+    return styled_date(label, due.date, today)
 
 
 def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | str:
