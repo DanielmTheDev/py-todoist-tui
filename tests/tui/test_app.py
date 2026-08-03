@@ -981,6 +981,47 @@ async def test_recurring_completion_reappears_with_its_next_due() -> None:
         assert str(table.get_row_at(0)[3]) == "Water plants"
 
 
+@pytest.mark.anyio
+async def test_completing_moves_cursor_to_the_task_below() -> None:
+    repo = FakeRepository(
+        [_row("A"), _row("B"), _row("C")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("j")  # cursor: A -> B
+        await pilot.press("e")  # complete B
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 2
+        assert str(table.get_row_at(table.cursor_row)[3]) == "C"  # not back up to A
+
+
+@pytest.mark.anyio
+async def test_completing_the_last_task_moves_cursor_up() -> None:
+    repo = FakeRepository(
+        [_row("A"), _row("B"), _row("C")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("j")
+        await pilot.press("j")  # cursor: A -> B -> C (last)
+        await pilot.press("e")  # complete C
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 2
+        assert str(table.get_row_at(table.cursor_row)[3]) == "B"  # up to the one above
+
+
 class FailingUncompleteRepository(FakeRepository):
     async def uncomplete(self, task_id: TaskId) -> None:
         raise RuntimeError("boom")

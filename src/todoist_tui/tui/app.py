@@ -383,11 +383,13 @@ class TodoistApp(App[None]):
         if task_id is None:  # cursor is on a group header: nothing to complete
             return
         cells = table.get_row(row_key)  # kept to restore the row on undo
+        cursor_row = table.cursor_row  # follow the highlight down to the neighbour
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         self._pending_close[task_id] = row.due if row is not None else None
         # optimistic: drop it from the model and repaint, sync in the background
         self._rows = [r for r in self._rows if str(r.id) != task_id]
         self._render(self._arrange(self._rows), self._view)
+        self._focus_task_at(table, cursor_row)
         self._complete(TaskId(task_id), cells)
 
     @work
@@ -734,6 +736,20 @@ class TodoistApp(App[None]):
         elif first_task_row is not None:
             table.move_cursor(row=first_task_row)  # never rest on a leading header
         self._set_status(_count_status(view.title, len(task_ids)))
+
+    def _focus_task_at(self, table: TaskTable, row: int) -> None:
+        """Put the cursor on the task at or after `row`, else the last task —
+        so completing a task follows the highlight down to its neighbour rather
+        than jumping to the top."""
+
+        def is_task(r: int) -> bool:
+            key = table.coordinate_to_cell_key(Coordinate(r, 0)).row_key
+            return _task_id_of(str(key.value)) is not None
+
+        task_rows = [r for r in range(table.row_count) if is_task(r)]
+        if task_rows:
+            target = next((r for r in task_rows if r >= row), task_rows[-1])
+            table.move_cursor(row=target)
 
     def _cursor_task_id(self, table: TaskTable) -> str | None:
         if table.row_count == 0:
