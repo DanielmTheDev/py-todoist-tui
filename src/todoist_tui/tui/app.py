@@ -213,6 +213,9 @@ class TodoistApp(App[None]):
         self._syncing = False
         self._status_base = ""
         self._last_undo: tuple[TaskId, list[object]] | None = None
+        # tasks closed locally, kept hidden across reloads until the server's
+        # snapshot reflects the change (gone, or a recurring task's new due)
+        self._pending_close: dict[str, Due | None] = {}
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_project_list = False  # guards against stacking the project list
@@ -380,15 +383,19 @@ class TodoistApp(App[None]):
         if task_id is None:  # cursor is on a group header: nothing to complete
             return
         cells = table.get_row(row_key)  # kept to restore the row on undo
-        table.remove_row(row_key)  # optimistic: drop it now, sync in the background
-        self._set_status(_count_status(self._view.title, _visible_task_count(table)))
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        self._pending_close[task_id] = row.due if row is not None else None
+        # optimistic: drop it from the model and repaint, sync in the background
+        self._rows = [r for r in self._rows if str(r.id) != task_id]
+        self._render(self._arrange(self._rows), self._view)
         self._complete(TaskId(task_id), cells)
 
     @work
     async def _complete(self, task_id: TaskId, cells: list[object]) -> None:
         try:
             await complete_task(self._repo, task_id)
-        except Exception as error:  # command rejected: resync, then report
+        except Exception as error:  # command rejected: unhide it, resync, report
+            self._pending_close.pop(str(task_id), None)
             await self._reload(self._view)
             self._set_status(f"Failed to complete task: {error}")
             return
@@ -400,6 +407,7 @@ class TodoistApp(App[None]):
             return
         task_id, cells = self._last_undo
         self._last_undo = None  # single-level: each undo reverses one close
+        self._pending_close.pop(str(task_id), None)  # reopened: no longer filter it out
         table = self.query_one(TaskTable)
         table.add_row(*cells, key=_task_key(table.row_count, task_id))  # lands at end
         self._set_status(_count_status(self._view.title, _visible_task_count(table)))
@@ -633,8 +641,21 @@ class TodoistApp(App[None]):
         self._arrangement = await self._arrangements.get(
             view.key, view.default_arrangement
         )
+        rows = self._drop_closed(rows)
         self._rows = rows  # retained so a priority keypress can re-arrange locally
         self._render(self._arrange(rows), view)
+
+    def _drop_closed(self, rows: list[TaskRow]) -> list[TaskRow]:
+        """Hide locally-closed tasks the server hasn't confirmed yet, and forget
+        a closed task once the snapshot reflects it — gone, or (recurring) with a
+        changed due — so it isn't hidden forever."""
+        present = {str(row.id): row.due for row in rows}
+        self._pending_close = {
+            tid: due
+            for tid, due in self._pending_close.items()
+            if tid in present and present[tid] == due
+        }
+        return [row for row in rows if str(row.id) not in self._pending_close]
 
     def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
         return arrange(rows, self._arrangement, frozenset(self._expanded))

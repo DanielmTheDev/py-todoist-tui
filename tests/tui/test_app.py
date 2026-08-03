@@ -848,6 +848,139 @@ async def test_complete_failure_is_surfaced() -> None:
         assert app.query_one(DataTable[object]).row_count == 1
 
 
+class LaggingCompleteRepository(FakeRepository):
+    """Todoist eventual consistency: a closed task keeps coming back from
+    today()/by_project() until the server catches up."""
+
+    async def complete(self, task_id: TaskId) -> None:
+        self.completed.append(task_id)  # recorded, but it still syncs back
+
+    def catch_up(self) -> None:
+        self._tasks = [t for t in self._tasks if t.id not in self.completed]
+
+
+@pytest.mark.anyio
+async def test_completed_task_stays_gone_while_server_lags() -> None:
+    repo = LaggingCompleteRepository(
+        [_row("Buy milk")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()  # a sync that still lists the closed task landed
+
+        assert repo.completed == [TaskId("Buy milk")]
+        assert app.query_one(DataTable[object]).row_count == 0  # must not flash back
+
+        repo.catch_up()  # server finally drops it
+        await pilot.press("r")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 0
+
+
+@pytest.mark.anyio
+async def test_rapid_completes_do_not_reappear() -> None:
+    repo = LaggingCompleteRepository(
+        [_row("First"), _row("Second")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert app.query_one(DataTable[object]).row_count == 2
+        await pilot.press("e")
+        await pilot.press("e")  # second close before the first's sync settles
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert set(repo.completed) == {TaskId("First"), TaskId("Second")}
+        assert app.query_one(DataTable[object]).row_count == 0  # neither reappears
+
+
+@pytest.mark.anyio
+async def test_undo_restores_a_completed_task_even_while_server_lags() -> None:
+    repo = LaggingCompleteRepository(
+        [_row("Buy milk")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        await pilot.press("z")  # reopen: it must not stay filtered out
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.uncompleted == [TaskId("Buy milk")]
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert str(table.get_row_at(0)[3]) == "Buy milk"
+
+
+class RecurringCompleteRepository(FakeRepository):
+    """Todoist recurring task: complete() reschedules it (new due) and keeps it."""
+
+    def __init__(
+        self,
+        tasks: list[Task],
+        projects: list[Project],
+        *,
+        next_due: Due,
+    ) -> None:
+        super().__init__(tasks, projects)
+        self._next_due = next_due
+
+    async def complete(self, task_id: TaskId) -> None:
+        self.completed.append(task_id)
+        self._tasks = [
+            replace(t, due=self._next_due) if t.id == task_id else t
+            for t in self._tasks
+        ]
+
+
+@pytest.mark.anyio
+async def test_recurring_completion_reappears_with_its_next_due() -> None:
+    repo = RecurringCompleteRepository(
+        [_row("Water plants", project_id="9")],
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+        ],
+        next_due=Due(date=datetime.date(2026, 7, 22)),
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # open the Work project view
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 1
+
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        # its next occurrence has a new due: it must come back, not stay hidden
+        table = app.query_one(DataTable[object])
+        assert table.row_count == 1
+        assert str(table.get_row_at(0)[3]) == "Water plants"
+
+
 class FailingUncompleteRepository(FakeRepository):
     async def uncomplete(self, task_id: TaskId) -> None:
         raise RuntimeError("boom")
