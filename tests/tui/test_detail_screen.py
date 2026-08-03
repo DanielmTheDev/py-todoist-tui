@@ -1,7 +1,9 @@
 import datetime
+from typing import cast
 
 import pytest
 from textual.app import App
+from textual.content import Content
 from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
@@ -11,6 +13,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 
+_TODAY = datetime.date(2026, 7, 28)
 _DUE = Due(date=datetime.date(2026, 7, 29), time=datetime.time(9, 0))
 
 
@@ -47,16 +50,21 @@ class _FakeOpener:
 
 class _Host(App[None]):
     def __init__(
-        self, row: TaskRow, dismissed: list[bool], opener: _FakeOpener | None = None
+        self,
+        row: TaskRow,
+        dismissed: list[bool],
+        opener: _FakeOpener | None = None,
+        today: datetime.date = _TODAY,
     ) -> None:
         super().__init__()
         self._row = row
         self._dismissed = dismissed
         self._opener = opener or _FakeOpener()
+        self._today = today
 
     def on_mount(self) -> None:
         self.push_screen(
-            TaskDetailScreen(self._row, self._opener),
+            TaskDetailScreen(self._row, self._opener, self._today),
             lambda _result: self._dismissed.append(True),
         )
 
@@ -66,6 +74,16 @@ async def _shown(row: TaskRow) -> str:
     async with host.run_test() as pilot:
         await pilot.pause()
         return str(host.screen.query_one("#detail", Static).render())
+
+
+async def _red_segments(row: TaskRow) -> list[str]:
+    host = _Host(row, [])
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        content = cast(Content, host.screen.query_one("#detail", Static).render())
+    return [
+        content.plain[s.start : s.end] for s in content.spans if "red" in str(s.style)
+    ]
 
 
 async def _dismisses_on(row: TaskRow, key: str) -> bool:
@@ -94,7 +112,7 @@ async def test_renders_title_and_all_fields() -> None:
     shown = await _shown(_row())
 
     assert "Buy milk" in shown
-    assert "2026-07-29 09:00" in shown
+    assert "Tomorrow 09:00" in shown
     assert "P1" in shown
     assert "Errands" in shown
     assert "Planning" in shown
@@ -108,7 +126,19 @@ async def test_renders_deadline_when_set() -> None:
     shown = await _shown(_row(deadline=Deadline(date=datetime.date(2026, 8, 15))))
 
     assert "Deadline" in shown
-    assert "2026-08-15" in shown
+    assert "15 Aug" in shown
+
+
+@pytest.mark.anyio
+async def test_overdue_due_and_deadline_render_red() -> None:
+    row = _row(
+        due=Due(date=datetime.date(2026, 7, 27)),  # yesterday vs _TODAY
+        deadline=Deadline(date=datetime.date(2026, 7, 20)),  # overdue
+    )
+    red = await _red_segments(row)
+
+    assert any("Yesterday" in seg for seg in red)
+    assert any("20 Jul" in seg for seg in red)
 
 
 @pytest.mark.anyio

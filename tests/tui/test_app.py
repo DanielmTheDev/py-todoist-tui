@@ -402,7 +402,10 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         due=Due(date=datetime.date(2026, 7, 21), time=datetime.time(9, 30)),
         project_id="220",
     )
-    app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
+    app = TodoistApp(
+        FakeRepository([task], [Project(id="220", name="Errands")]),
+        clock=FakeClock(_TODAY),
+    )
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -410,7 +413,7 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         assert table.row_count == 1
         row = table.get_row_at(0)
         assert row[0] == "🔴"
-        assert row[1] == "2026-07-21 09:30"
+        assert str(row[1]) == "21 Jul 09:30"  # overdue relative to _TODAY
         assert str(row[3]) == "Buy milk"
         assert str(row[4]) == "Errands"
 
@@ -459,11 +462,14 @@ async def test_all_day_task_shows_date_without_time() -> None:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id="220",
     )
-    app = TodoistApp(FakeRepository([task], [Project(id="220", name="Errands")]))
+    app = TodoistApp(
+        FakeRepository([task], [Project(id="220", name="Errands")]),
+        clock=FakeClock(_TODAY),
+    )
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-21"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "21 Jul"
 
 
 @pytest.mark.anyio
@@ -1177,7 +1183,7 @@ async def test_pressing_d_sets_a_deadline_and_shows_it() -> None:
             (TaskId("6X4"), Deadline(date=datetime.date(2026, 7, 29)))
         ]
         table = app.query_one(DataTable[object])
-        assert table.get_row_at(0)[2] == "2026-07-29"  # Deadline column
+        assert str(table.get_row_at(0)[2]) == "Tomorrow"  # Deadline column
 
 
 @pytest.mark.anyio
@@ -1196,7 +1202,7 @@ async def test_pressing_d_clear_removes_the_deadline() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert app.query_one(DataTable[object]).get_row_at(0)[2] == "2026-07-29"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[2]) == "Tomorrow"
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("x")  # clear
@@ -1260,7 +1266,7 @@ async def test_d_then_today_keeps_task_in_today_with_date() -> None:
         await pilot.press("t")  # today: it stays, now dated
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert table.get_row_at(0)[1] == "2026-07-28"
+        assert str(table.get_row_at(0)[1]) == "Today"
 
 
 @pytest.mark.anyio
@@ -1279,7 +1285,7 @@ async def test_d_then_clear_removes_due() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-28"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "Today"
         repo.release.clear()  # block the sync that follows the change
 
         await pilot.press("t")
@@ -1388,7 +1394,7 @@ async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
         await pilot.press("m")  # a due change must not remove it from Inbox
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
-        assert table.get_row_at(0)[1] == "2026-07-29"
+        assert str(table.get_row_at(0)[1]) == "Tomorrow"
 
 
 @pytest.mark.anyio
@@ -1441,7 +1447,7 @@ async def test_d_then_escape_changes_nothing() -> None:
 
         assert not isinstance(app.screen, ScheduleScreen)
         assert repo.dues == []
-        assert app.query_one(DataTable[object]).get_row_at(0)[1] == "2026-07-28"
+        assert str(app.query_one(DataTable[object]).get_row_at(0)[1]) == "Today"
 
 
 @pytest.mark.anyio
@@ -1832,6 +1838,32 @@ async def test_grouping_renders_headers_and_tasks() -> None:
         assert any(c.strip() == "w1" for c in col2)
         # Home group sorts before Work; its header leads, with a task count
         assert col2[0].lstrip().startswith("──") and "Home (1)" in col2[0]
+
+
+@pytest.mark.anyio
+async def test_due_date_group_headers_show_humanized_labels() -> None:
+    def _due(content: str, date: datetime.date) -> Task:
+        return Task(
+            id=TaskId(content),
+            content=content,
+            priority=Priority.P4,
+            due=Due(date=date),
+            project_id="220",
+        )
+
+    repo = FakeRepository(
+        [_due("today-task", _TODAY), _due("old-task", datetime.date(2026, 7, 21))],
+        [Project(id="220", name="Work")],
+    )
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.DUE_DATE,)))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        col2 = _content_col(app.query_one(DataTable[object]))
+        assert any("──" in c and "Today (1)" in c for c in col2)
+        assert any("──" in c and "21 Jul (1)" in c for c in col2)
 
 
 @pytest.mark.anyio

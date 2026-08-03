@@ -1,3 +1,5 @@
+import datetime
+
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -6,7 +8,7 @@ from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.links import Link, LinkOpener, XdgOpenLinkOpener, annotate
-from todoist_tui.tui.format import format_deadline, format_due
+from todoist_tui.tui.format import format_deadline, format_due, styled_date
 
 _DASH = "—"  # stands in for an unset field
 
@@ -28,10 +30,16 @@ class TaskDetailScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, row: TaskRow, opener: LinkOpener | None = None) -> None:
+    def __init__(
+        self,
+        row: TaskRow,
+        opener: LinkOpener | None = None,
+        today: datetime.date | None = None,
+    ) -> None:
         super().__init__()
         self._row = row
         self._opener = opener or XdgOpenLinkOpener()
+        self._today = today or datetime.date.today()
         content, content_links = annotate(row.content, 1)
         description, description_links = annotate(
             row.description, len(content_links) + 1
@@ -60,9 +68,11 @@ class TaskDetailScreen(ModalScreen[None]):
         row = self._row
         text = Text()
         text.append(f"{self._content_text}\n\n", style="bold")
-        text.append(f"Due       {self._due_line()}\n")
-        text.append(f"Deadline  {format_deadline(row.deadline) or _DASH}\n")
-        text.append(f"Priority  {row.priority.label}\n")
+        text.append("Due       ")
+        self._append_due(text)
+        text.append("\nDeadline  ")
+        self._append_deadline(text)
+        text.append(f"\nPriority  {row.priority.label}\n")
         text.append(f"Project   {row.project_name or _DASH}\n")
         text.append(f"Section   {row.section_name or _DASH}\n")
         text.append(f"Labels    {self._labels_line()}\n\n")
@@ -80,14 +90,24 @@ class TaskDetailScreen(ModalScreen[None]):
         text.append(f"\n{hint}", style="dim")
         return text
 
-    def _due_line(self) -> str:
+    def _append_due(self, text: Text) -> None:
         due = self._row.due
         if due is None:
-            return _DASH
-        formatted = format_due(due)
+            text.append(_DASH)
+            return
+        text.append_text(
+            styled_date(format_due(due, self._today), due.date, self._today)
+        )
         if due.string:  # recurring: show the rule alongside the next date
-            return f"{formatted} ({due.string})"
-        return formatted
+            text.append(f" ({due.string})")
+
+    def _append_deadline(self, text: Text) -> None:
+        deadline = self._row.deadline
+        if deadline is None:
+            text.append(_DASH)
+            return
+        label = format_deadline(deadline, self._today)
+        text.append_text(styled_date(label, deadline.date, self._today))
 
     def _labels_line(self) -> str:
         if not self._row.labels:

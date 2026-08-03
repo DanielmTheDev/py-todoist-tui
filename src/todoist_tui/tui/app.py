@@ -1,3 +1,5 @@
+import contextlib
+import datetime
 from dataclasses import replace
 from typing import ClassVar
 
@@ -27,6 +29,7 @@ from todoist_tui.application.views import (
 )
 from todoist_tui.domain.arrange import (
     Arrangement,
+    Field,
     GroupHeader,
     RenderRow,
     TaskLine,
@@ -36,6 +39,7 @@ from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
@@ -46,7 +50,12 @@ from todoist_tui.domain.repository import (
 )
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.format import format_deadline, format_due, render_links
+from todoist_tui.tui.format import (
+    format_deadline,
+    format_due,
+    render_links,
+    styled_date,
+)
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
@@ -508,7 +517,7 @@ class TodoistApp(App[None]):
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         if row is None:
             return
-        self.push_screen(TaskDetailScreen(row, self._link_opener))
+        self.push_screen(TaskDetailScreen(row, self._link_opener, self._clock.today()))
 
     def _on_scheduled(self, task_id: TaskId, result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
@@ -705,14 +714,15 @@ class TodoistApp(App[None]):
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
         prior = self._cursor_task_id(table)  # survive the clear+rebuild below
-        table.clear()
+        today = self._clock.today()
         first_row_of: dict[str, int] = {}
         first_task_row: int | None = None
         task_ids: set[str] = set()
+        table.clear()
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
                 table.add_row(
-                    "", "", "", _header_text(item), "", key=_header_key(index)
+                    "", "", "", _header_text(item, today), "", key=_header_key(index)
                 )
                 continue
             row = item.row
@@ -721,8 +731,8 @@ class TodoistApp(App[None]):
             content.append_text(render_links(row.content))
             table.add_row(
                 _priority_dot(row.priority),
-                format_due(row.due),
-                format_deadline(row.deadline),
+                _due_cell(row.due, today),
+                _deadline_cell(row.deadline, today),
                 content,
                 Text(row.project_name, style="dim") if row.project_name else "",
                 key=_task_key(index, row.id),
@@ -779,9 +789,26 @@ def _count_status(title: str, count: int) -> str:
     return f"{title} · no tasks" if count == 0 else f"{title} · {count} task(s)"
 
 
-def _header_text(header: GroupHeader) -> Text:
+def _due_cell(due: Due | None, today: datetime.date) -> Text | str:
+    if due is None:
+        return ""
+    return styled_date(format_due(due, today), due.date, today)
+
+
+def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | str:
+    if deadline is None:
+        return ""
+    return styled_date(format_deadline(deadline, today), deadline.date, today)
+
+
+def _header_text(header: GroupHeader, today: datetime.date) -> Text:
     indent = _indent(header.level)
-    label = f"{header.label} ({header.count})"
+    label = header.label
+    if header.field is Field.DUE_DATE:
+        # the bucket label is ISO (a stable grouping key) except "No due date"
+        with contextlib.suppress(ValueError):
+            label = humanize_date(datetime.date.fromisoformat(label), today)
+    label = f"{label} ({header.count})"
     lead = f"{indent}── {label} "
     fill = "─" * max(3, _HEADER_WIDTH - len(lead))
     # deeper levels recede a little; top level is the boldest divider

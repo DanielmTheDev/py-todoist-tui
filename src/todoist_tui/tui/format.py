@@ -1,25 +1,37 @@
+import datetime
+
 from rich.text import Text
 
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import parse
 
 _LINK_STYLE = "underline #89ddff"  # cyan; readable on the dark and blue-selection rows
 
 
-def format_due(due: Due | None) -> str:
-    """Date as ISO, plus HH:MM when the due carries a time. Blank when unset."""
+def format_due(due: Due | None, today: datetime.date) -> str:
+    """Relative label for the due date, plus HH:MM when it carries a time.
+    Blank when unset."""
     if due is None:
         return ""
-    text = due.date.isoformat()
+    text = humanize_date(due.date, today)
     if due.time is not None:
         text += " " + due.time.strftime("%H:%M")
     return text
 
 
-def format_deadline(deadline: Deadline | None) -> str:
-    """Deadline date as ISO. Blank when unset."""
-    return deadline.date.isoformat() if deadline is not None else ""
+def format_deadline(deadline: Deadline | None, today: datetime.date) -> str:
+    """Relative label for the deadline date. Blank when unset."""
+    return humanize_date(deadline.date, today) if deadline is not None else ""
+
+
+def styled_date(label: str, d: datetime.date, today: datetime.date) -> Text:
+    """`label` as red when `d` is overdue (before `today`), else plain.
+
+    Overdue is date-granular: the clock exposes only `today()`, so a timed task
+    earlier today is not flagged."""
+    return Text(label, style="red" if d < today else "")
 
 
 def render_links(text: str) -> Text:
