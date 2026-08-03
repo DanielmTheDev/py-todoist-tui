@@ -53,6 +53,7 @@ from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import (
     format_deadline,
     format_due,
+    format_labels,
     render_links,
     styled_date,
 )
@@ -784,10 +785,13 @@ class TodoistApp(App[None]):
         # drop metadata columns empty for every visible task, so short lists don't
         # strand three near-blank columns beside the titles
         tasks = [item.row for item in render_rows if isinstance(item, TaskLine)]
+        show_labels = any(t.labels for t in tasks)
         show_due = any(t.due for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
         show_project = any(t.project_name for t in tasks)
         columns = ["", "Task"]
+        if show_labels:
+            columns.append("Labels")
         if show_due:
             columns.append("Due")
         if show_deadline:
@@ -807,6 +811,8 @@ class TodoistApp(App[None]):
             content.append(_expand_marker(item))
             content.append_text(render_links(row.content))
             cells: list[Text | str] = [_priority_dot(row.priority), content]
+            if show_labels:
+                cells.append(_labels_cell(row.labels))
             if show_due:
                 cells.append(_due_cell(row.due, today))
             if show_deadline:
@@ -886,6 +892,11 @@ def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | st
 
 def _project_cell(project_name: str | None) -> Text | str:
     return Text(project_name, style="dim") if project_name else ""
+
+
+def _labels_cell(labels: tuple[str, ...]) -> Text | str:
+    line = format_labels(labels)
+    return Text(line, style="dim") if line else ""
 
 
 def _header_text(header: GroupHeader, today: datetime.date) -> Text:

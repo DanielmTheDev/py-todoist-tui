@@ -439,6 +439,46 @@ async def test_all_empty_metadata_columns_are_hidden() -> None:
 
 
 @pytest.mark.anyio
+async def test_labels_render_in_own_dim_column() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=None,
+        project_id="220",
+        labels=("errand", "home"),
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        columns = [str(c.label) for c in table.ordered_columns]
+        assert columns == ["", "Task", "Labels"]  # Labels sits right after the title
+        cell = _cell(table, 0, "Labels")
+        assert isinstance(cell, Text) and cell.style == "dim"  # recedes behind title
+        assert str(cell) == "@errand @home"
+
+
+@pytest.mark.anyio
+async def test_labels_column_hidden_when_no_task_has_labels() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=None,
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        columns = [str(c.label) for c in table.ordered_columns]
+        assert "Labels" not in columns
+
+
+@pytest.mark.anyio
 async def test_title_is_bold_and_dates_dimmed() -> None:
     task = Task(
         id=TaskId("6X4"),

@@ -8,7 +8,12 @@ from textual.widgets import Static
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.links import Link, LinkOpener, XdgOpenLinkOpener, annotate
-from todoist_tui.tui.format import format_deadline, format_due, styled_date
+from todoist_tui.tui.format import (
+    format_deadline,
+    format_due,
+    format_labels,
+    styled_date,
+)
 
 _DASH = "—"  # stands in for an unset field
 
@@ -110,6 +115,4 @@ class TaskDetailScreen(ModalScreen[None]):
         text.append_text(styled_date(label, deadline.date, self._today))
 
     def _labels_line(self) -> str:
-        if not self._row.labels:
-            return _DASH
-        return " ".join(f"@{label}" for label in self._row.labels)
+        return format_labels(self._row.labels) or _DASH

@@ -35,6 +35,11 @@ def styled_date(label: str, d: datetime.date, today: datetime.date) -> Text:
     return Text(label, style="red" if d < today else "dim")
 
 
+def format_labels(labels: tuple[str, ...]) -> str:
+    """`@`-prefixed label names joined by spaces; blank when none."""
+    return " ".join(f"@{label}" for label in labels)
+
+
 def render_links(text: str) -> Text:
     """Task text with links shown as their label (markdown) or full URL (bare),
     coloured/underlined and click-openable; the raw markdown syntax is hidden."""

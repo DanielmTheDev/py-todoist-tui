@@ -7,6 +7,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.tui.format import (
     format_deadline,
     format_due,
+    format_labels,
     render_links,
     styled_date,
 )
@@ -74,6 +75,14 @@ def test_bare_url_keeps_full_url_and_styles_it() -> None:
     style = _styled(result, "https://example.com/x")
     assert style is not None
     assert "underline" in style
+
+
+def test_format_labels_prefixes_and_joins() -> None:
+    assert format_labels(("errand", "home")) == "@errand @home"
+
+
+def test_format_labels_blank_when_empty() -> None:
+    assert format_labels(()) == ""
 
 
 def test_plain_text_has_no_styled_spans() -> None:
