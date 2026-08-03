@@ -13,6 +13,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.delete import delete_task
 from todoist_tui.application.move_task import move_task
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
@@ -58,6 +59,7 @@ from todoist_tui.tui.format import (
     styled_date,
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
+from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
@@ -180,6 +182,7 @@ class TodoistApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("question_mark", "help", "Help"),  # the only footer entry
         Binding("e", "complete", "Complete", show=False),
+        Binding("delete", "delete", "Delete", show=False),
         Binding("z", "undo", "Undo", show=False),
         Binding(".", "view_today", "Today", show=False),
         Binding("i", "view_inbox", "Inbox", show=False),
@@ -437,6 +440,47 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to undo: {error}")
             return
         self._sync_now()  # pull server delta so the view reflects the reopen
+
+    def action_delete(self) -> None:
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        if row is None:
+            return
+        cursor_row = table.cursor_row  # follow the highlight down after the delete
+        self.push_screen(
+            ConfirmScreen(f"Delete “{row.content}”?"),
+            lambda confirmed: self._on_delete_confirmed(
+                TaskId(task_id), row.due, cursor_row, confirmed
+            ),
+        )
+
+    def _on_delete_confirmed(
+        self, task_id: TaskId, due: Due | None, cursor_row: int, confirmed: bool | None
+    ) -> None:
+        if not confirmed:  # dialog cancelled: leave the task untouched
+            return
+        table = self.query_one(TaskTable)
+        # optimistic: hide it (delete is permanent — no undo) and sync in the bg;
+        # keep it hidden across reloads until the server confirms it's gone
+        self._pending_close[str(task_id)] = due
+        self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        self._render(self._arrange(self._rows), self._view)
+        self._focus_task_at(table, cursor_row)
+        self._delete(task_id)
+
+    @work
+    async def _delete(self, task_id: TaskId) -> None:
+        try:
+            await delete_task(self._repo, task_id)
+        except Exception as error:  # command rejected: unhide it, resync, report
+            self._pending_close.pop(str(task_id), None)
+            await self._reload(self._view)
+            self._set_status(f"Failed to delete task: {error}")
+            return
+        self._sync_now()  # pull server delta so the view reflects the delete
 
     def action_set_priority(self, name: str) -> None:
         table = self.query_one(TaskTable)

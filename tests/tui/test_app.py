@@ -21,6 +21,7 @@ from todoist_tui.tui.app import (
     TodoistApp,
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen
+from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
@@ -44,6 +45,7 @@ class FakeRepository:
         self._sections = sections or []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
+        self.deleted: list[TaskId] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
@@ -89,6 +91,10 @@ class FakeRepository:
         restored = self._removed.pop(task_id, None)
         if restored is not None:
             self._tasks = [*self._tasks, restored]
+
+    async def delete(self, task_id: TaskId) -> None:
+        self.deleted.append(task_id)
+        self._tasks = [t for t in self._tasks if t.id != task_id]
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
@@ -662,6 +668,59 @@ async def test_pressing_e_completes_optimistically() -> None:
         assert repo.today_calls > reloads  # and re-renders the current view
 
 
+@pytest.mark.anyio
+async def test_pressing_delete_cancelled_keeps_the_task() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("delete")
+        assert isinstance(app.screen, ConfirmScreen)  # confirm before deleting
+        await pilot.press("n")  # cancel
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ConfirmScreen)  # dialog dismissed
+        assert repo.deleted == []  # nothing deleted
+        assert app.query_one(DataTable[object]).row_count == 1  # row still there
+
+
+@pytest.mark.anyio
+async def test_pressing_delete_confirmed_deletes_optimistically() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.press("y")  # confirm
+        # optimistic: row is gone before the network command resolves
+        assert app.query_one(DataTable[object]).row_count == 0
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.deleted == [TaskId("6X4")]
+        assert app.query_one(DataTable[object]).row_count == 0
+
+
 class GatedRefreshRepository(FakeRepository):
     """refresh() blocks until released, so the syncing state is observable."""
 
@@ -1165,6 +1224,35 @@ async def test_complete_failure_is_surfaced() -> None:
             app.query_one("#status", Static).render()
         )
         assert app.query_one(DataTable[object]).row_count == 1
+
+
+class FailingDeleteRepository(FakeRepository):
+    async def delete(self, task_id: TaskId) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_delete_failure_is_surfaced_and_unhides() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+    )
+    app = TodoistApp(FailingDeleteRepository([task], [Project(id="220", name="X")]))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.press("y")  # confirm
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to delete task: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        assert app.query_one(DataTable[object]).row_count == 1  # unhidden
 
 
 class LaggingCompleteRepository(FakeRepository):

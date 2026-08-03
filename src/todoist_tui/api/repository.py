@@ -62,6 +62,9 @@ class ApiTaskRepository:
     async def uncomplete(self, task_id: TaskId) -> None:
         await self._client.reopen_item(str(task_id))
 
+    async def delete(self, task_id: TaskId) -> None:
+        await self._client.delete_item(str(task_id))
+
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._client.update_item(str(task_id), priority.to_api)
 

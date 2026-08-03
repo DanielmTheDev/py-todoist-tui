@@ -14,6 +14,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
+        self.deleted: list[TaskId] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -44,6 +45,9 @@ class FakeRepository:
 
     async def uncomplete(self, task_id: TaskId) -> None:
         self.uncompleted.append(task_id)
+
+    async def delete(self, task_id: TaskId) -> None:
+        self.deleted.append(task_id)
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
