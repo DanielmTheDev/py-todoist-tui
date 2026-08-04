@@ -72,7 +72,7 @@ class TodoistClient:
             data={
                 "sync_token": sync_token,
                 "resource_types": json.dumps(
-                    ["items", "projects", "filters", "sections"]
+                    ["items", "projects", "filters", "sections", "labels"]
                 ),
             },
         )
@@ -101,6 +101,30 @@ class TodoistClient:
         # `deadline=None` clears it; otherwise a Sync `deadline` object (date-only).
         await self._command("item_update", {"id": task_id, "deadline": deadline})
 
+    async def update_item_labels(
+        self, task_id: str, labels: list[str], create: list[str] | None = None
+    ) -> None:
+        # `labels` replaces the task's whole set. Names in `create` don't yet
+        # exist as personal labels (item_update alone won't register them), so a
+        # label_add precedes the update in the same trip.
+        commands: list[dict[str, Any]] = [
+            {
+                "type": "label_add",
+                "uuid": self._uuid(),
+                "temp_id": self._uuid(),
+                "args": {"name": name},
+            }
+            for name in create or []
+        ]
+        commands.append(
+            {
+                "type": "item_update",
+                "uuid": self._uuid(),
+                "args": {"id": task_id, "labels": labels},
+            }
+        )
+        await self._run(commands)
+
     async def move_item(
         self, task_id: str, project_id: str, section_id: str | None = None
     ) -> None:
@@ -114,15 +138,18 @@ class TodoistClient:
         await self._command("item_move", args)
 
     async def _command(self, kind: str, args: dict[str, Any]) -> None:
-        command_uuid = self._uuid()
-        command = {"type": kind, "uuid": command_uuid, "args": args}
+        await self._run([{"type": kind, "uuid": self._uuid(), "args": args}])
+
+    async def _run(self, commands: list[dict[str, Any]]) -> None:
         response = await self._http.post(
-            "/sync", data={"commands": json.dumps([command])}
+            "/sync", data={"commands": json.dumps(commands)}
         )
         response.raise_for_status()
-        status = cast("dict[str, Any]", response.json())["sync_status"][command_uuid]
-        if status != "ok":
-            raise SyncCommandError(str(status.get("error", status)))
+        sync_status = cast("dict[str, Any]", response.json())["sync_status"]
+        for command in commands:
+            status = sync_status[command["uuid"]]
+            if status != "ok":
+                raise SyncCommandError(str(status.get("error", status)))
 
     async def _paginate(
         self, path: str, params: dict[str, str]

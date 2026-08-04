@@ -2,6 +2,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
@@ -26,6 +27,8 @@ class SyncDelta:
     deleted_filter_ids: frozenset[str] = frozenset()
     sections: list[Section] = field(default_factory=list[Section])
     deleted_section_ids: frozenset[str] = frozenset()
+    labels: list[Label] = field(default_factory=list[Label])
+    deleted_label_ids: frozenset[str] = frozenset()
 
 
 def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
@@ -37,6 +40,7 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
             sync_token=delta.sync_token,
             filters=delta.filters,
             sections=delta.sections,
+            labels=delta.labels,
         )
     return Snapshot(
         projects=_apply(
@@ -51,6 +55,9 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
         ),
         sections=_apply(
             prior.sections, delta.sections, delta.deleted_section_ids, lambda s: s.id
+        ),
+        labels=_apply(
+            prior.labels, delta.labels, delta.deleted_label_ids, lambda label: label.id
         ),
     )
 

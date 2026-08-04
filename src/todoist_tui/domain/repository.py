@@ -5,6 +5,7 @@ from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
@@ -33,6 +34,8 @@ class TaskRepository(Protocol):
 
     async def filters(self) -> list[Filter]: ...
 
+    async def labels(self) -> list[Label]: ...
+
     async def complete(self, task_id: TaskId) -> None: ...
 
     async def uncomplete(self, task_id: TaskId) -> None: ...
@@ -51,6 +54,10 @@ class TaskRepository(Protocol):
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None: ...
 
+    async def set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
+    ) -> None: ...
+
     async def refresh(self) -> None: ...
 
 
@@ -63,6 +70,7 @@ class Snapshot:
     sync_token: str
     filters: list[Filter] = field(default_factory=list[Filter])
     sections: list[Section] = field(default_factory=list[Section])
+    labels: list[Label] = field(default_factory=list[Label])
 
 
 class SnapshotSource(Protocol):

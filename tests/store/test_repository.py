@@ -6,6 +6,7 @@ import pytest
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -62,6 +63,7 @@ class FakeInner:
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -95,6 +97,9 @@ class FakeInner:
     async def filters(self) -> list[Filter]:  # pragma: no cover
         raise AssertionError("filters() must be served from the snapshot")
 
+    async def labels(self) -> list[Label]:  # pragma: no cover
+        raise AssertionError("labels() must be served from the snapshot")
+
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
 
@@ -117,6 +122,11 @@ class FakeInner:
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
         self.moves.append((task_id, project_id, section_id))
+
+    async def set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
+    ) -> None:
+        self.label_edits.append((task_id, labels, create))
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -339,6 +349,22 @@ async def test_set_project_delegates_then_invalidates_filter_cache() -> None:
     await repo.filtered("a")
 
     assert inner.moves == [(TaskId("x"), "9", None)]
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_set_labels_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.set_labels(TaskId("x"), ("home",), ("home",))  # mutation invalidates
+    await repo.filtered("a")
+
+    assert inner.label_edits == [(TaskId("x"), ("home",), ("home",))]
     assert inner.filtered_queries == ["a", "a"]
 
 

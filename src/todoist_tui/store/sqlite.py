@@ -9,6 +9,7 @@ from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -23,6 +24,7 @@ DROP TABLE IF EXISTS projects;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS filters;
 DROP TABLE IF EXISTS sections;
+DROP TABLE IF EXISTS labels;
 CREATE TABLE meta (sync_token TEXT NOT NULL);
 CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER, child_order INTEGER);
 CREATE TABLE tasks (
@@ -37,6 +39,9 @@ CREATE TABLE filters (
 );
 CREATE TABLE sections (
     id TEXT, project_id TEXT, name TEXT, section_order INTEGER
+);
+CREATE TABLE labels (
+    id TEXT, name TEXT, item_order INTEGER
 );
 """
 
@@ -90,6 +95,12 @@ class SqliteSnapshotCache:
                         "SELECT id, project_id, name, section_order FROM sections"
                     )
                 ]
+                labels = [
+                    Label(id=lid, name=name, order=order)
+                    for lid, name, order in conn.execute(
+                        "SELECT id, name, item_order FROM labels"
+                    )
+                ]
             except sqlite3.OperationalError:  # missing/legacy schema: treat as cold
                 return None
         return Snapshot(
@@ -98,6 +109,7 @@ class SqliteSnapshotCache:
             sync_token=token_row[0],
             filters=filters,
             sections=sections,
+            labels=labels,
         )
 
     def _save(self, snapshot: Snapshot) -> None:
@@ -124,6 +136,10 @@ class SqliteSnapshotCache:
                 "INSERT INTO sections (id, project_id, name, section_order)"
                 " VALUES (?, ?, ?, ?)",
                 [(s.id, s.project_id, s.name, s.order) for s in snapshot.sections],
+            )
+            conn.executemany(
+                "INSERT INTO labels (id, name, item_order) VALUES (?, ?, ?)",
+                [(label.id, label.name, label.order) for label in snapshot.labels],
             )
             conn.commit()
 

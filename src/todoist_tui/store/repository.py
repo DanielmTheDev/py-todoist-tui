@@ -5,6 +5,7 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.filter_query import FilterQuery
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import (
@@ -106,6 +107,9 @@ class SnapshotTaskRepository:
     async def filters(self) -> list[Filter]:
         return (await self._snapshot_now()).filters
 
+    async def labels(self) -> list[Label]:
+        return (await self._snapshot_now()).labels
+
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
         await self._invalidate()
@@ -134,6 +138,12 @@ class SnapshotTaskRepository:
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
         await self._inner.set_project(task_id, project_id, section_id)
+        await self._invalidate()
+
+    async def set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
+    ) -> None:
+        await self._inner.set_labels(task_id, labels, create)
         await self._invalidate()
 
     async def _invalidate(self) -> None:

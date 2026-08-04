@@ -17,6 +17,7 @@ from todoist_tui.application.delete import delete_task
 from todoist_tui.application.move_task import move_task
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
+from todoist_tui.application.set_labels import set_labels
 from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.views import (
     INBOX,
@@ -67,6 +68,7 @@ from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
+from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
@@ -201,6 +203,7 @@ class TodoistApp(App[None]):
         Binding("t", "set_due", "Due", show=False),
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
+        Binding("at", "set_labels", "Labels", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
         Binding("1", "set_priority('P1')", "P1", show=False),
         Binding("2", "set_priority('P2')", "P2", show=False),
@@ -239,6 +242,7 @@ class TodoistApp(App[None]):
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_project_list = False  # guards against stacking the project list
+        self._picking_labels = False  # guards against stacking the labels editor
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
         self._active_server_query: str | None = None
@@ -734,6 +738,68 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to move task: {error}")
             return
         self._sync_now()  # pull server delta; re-arranges if grouped by project
+
+    async def action_set_labels(self) -> None:
+        if self._picking_labels:  # already loading or editor already open
+            return
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        if row is None:
+            return
+        self._picking_labels = True
+        try:
+            catalog = await self._repo.labels()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load labels: {error}")
+            self._picking_labels = False
+            return
+        names = {label.name for label in catalog}
+        self.push_screen(
+            LabelsScreen(sorted(names), row.labels),
+            lambda chosen: self._on_labels(TaskId(task_id), row.labels, names, chosen),
+        )
+
+    def _on_labels(
+        self,
+        task_id: TaskId,
+        previous: tuple[str, ...],
+        catalog: set[str],
+        chosen: tuple[str, ...] | None,
+    ) -> None:
+        self._picking_labels = False
+        if chosen is None or chosen == previous:  # cancelled or unchanged
+            return
+        create = tuple(name for name in chosen if name not in catalog)
+        self._record_edit(str(task_id), labels=chosen)
+        self._rows = [  # optimistic: repaint the labels cell now
+            replace(row, labels=chosen) if str(row.id) == str(task_id) else row
+            for row in self._rows
+        ]
+        if self._view.keeps is not None:  # membership is decidable here and now
+            today = self._clock.today()
+            self._rows = [r for r in self._rows if self._view.keeps(r, today)]
+        elif self._active_server_query is not None:
+            # a filter/search's membership needs the server; assume the label edit
+            # drops it and let the background refresh restore it if it still matches
+            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        self._render(self._arrange(self._rows), self._view)
+        self._set_labels(task_id, chosen, create)
+
+    @work
+    async def _set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...]
+    ) -> None:
+        try:
+            await set_labels(self._repo, task_id, labels, create)
+        except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(str(task_id), "labels")
+            await self._reload(self._view)
+            self._set_status(f"Failed to set labels: {error}")
+            return
+        self._sync_now()  # pull server delta; re-runs a live filter/search view
 
     async def _reload(self, view: View) -> None:
         try:

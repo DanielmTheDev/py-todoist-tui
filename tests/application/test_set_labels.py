@@ -1,6 +1,6 @@
 import pytest
 
-from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.set_labels import set_labels
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -13,9 +13,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.completed: list[TaskId] = []
-        self.uncompleted: list[TaskId] = []
-        self.deleted: list[TaskId] = []
+        self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -44,14 +42,11 @@ class FakeRepository:
     async def labels(self) -> list[Label]:
         return []
 
-    async def complete(self, task_id: TaskId) -> None:
-        self.completed.append(task_id)
+    async def complete(self, task_id: TaskId) -> None: ...
 
-    async def uncomplete(self, task_id: TaskId) -> None:
-        self.uncompleted.append(task_id)
+    async def uncomplete(self, task_id: TaskId) -> None: ...
 
-    async def delete(self, task_id: TaskId) -> None:
-        self.deleted.append(task_id)
+    async def delete(self, task_id: TaskId) -> None: ...
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
@@ -67,24 +62,16 @@ class FakeRepository:
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
-    ) -> None: ...
+    ) -> None:
+        self.label_edits.append((task_id, labels, create))
 
     async def refresh(self) -> None: ...
 
 
 @pytest.mark.anyio
-async def test_complete_task_delegates_to_repo() -> None:
+async def test_set_labels_delegates_to_repo() -> None:
     repo = FakeRepository()
 
-    await complete_task(repo, TaskId("6X4"))
+    await set_labels(repo, TaskId("6X4"), ("home", "urgent"), create=("urgent",))
 
-    assert repo.completed == [TaskId("6X4")]
-
-
-@pytest.mark.anyio
-async def test_uncomplete_task_delegates_to_repo() -> None:
-    repo = FakeRepository()
-
-    await uncomplete_task(repo, TaskId("6X4"))
-
-    assert repo.uncompleted == [TaskId("6X4")]
+    assert repo.label_edits == [(TaskId("6X4"), ("home", "urgent"), ("urgent",))]

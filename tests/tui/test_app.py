@@ -10,6 +10,7 @@ from todoist_tui.domain.arrange import Arrangement, Field, SortKey
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
@@ -24,6 +25,7 @@ from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
@@ -37,12 +39,15 @@ class FakeRepository:
         inbox: list[Task] | None = None,
         filters: list[Filter] | None = None,
         sections: list[Section] | None = None,
+        labels: list[Label] | None = None,
     ) -> None:
         self._tasks = tasks
         self._projects = projects
         self._inbox = inbox or []
         self._filters = filters or []
         self._sections = sections or []
+        self._labels = labels or []
+        self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.deleted: list[TaskId] = []
@@ -80,6 +85,17 @@ class FakeRepository:
 
     async def filters(self) -> list[Filter]:
         return list(self._filters)
+
+    async def labels(self) -> list[Label]:
+        return list(self._labels)
+
+    async def set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
+    ) -> None:
+        self.label_edits.append((task_id, labels, create))
+        self._tasks = [
+            replace(t, labels=labels) if t.id == task_id else t for t in self._tasks
+        ]
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -2139,6 +2155,122 @@ async def test_move_failure_is_surfaced_and_resyncs() -> None:
         )
         # failed command resyncs to server truth: the project cell reverts
         assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Errands"
+
+
+def _labeled(content: str, labels: tuple[str, ...]) -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+        labels=labels,
+    )
+
+
+@pytest.mark.anyio
+async def test_at_opens_labels_editor() -> None:
+    repo = FakeRepository(
+        [_labeled("t1", ())], [], labels=[Label(id="l1", name="home")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("at")
+        await pilot.pause()
+        assert isinstance(app.screen, LabelsScreen)
+
+
+@pytest.mark.anyio
+async def test_at_toggle_and_confirm_updates_cell_and_records() -> None:
+    repo = FakeRepository(
+        [_labeled("t1", ("work",))],
+        [],
+        labels=[Label(id="l1", name="home"), Label(id="l2", name="work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("at")
+        await pilot.pause()
+        await pilot.press("space")  # toggle "home" on ("work" already checked)
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.label_edits == [(TaskId("t1"), ("home", "work"), ())]
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Labels")) == (
+            "@home @work"
+        )
+
+
+@pytest.mark.anyio
+async def test_at_create_new_label_passes_it_as_a_creation() -> None:
+    repo = FakeRepository(
+        [_labeled("t1", ())], [], labels=[Label(id="l1", name="home")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("at")
+        await pilot.pause()
+        await pilot.press("f", "r", "e", "s", "h")  # no existing match
+        await pilot.press("space")  # create + select "fresh"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.label_edits == [(TaskId("t1"), ("fresh",), ("fresh",))]
+
+
+@pytest.mark.anyio
+async def test_at_unchanged_selection_is_a_noop() -> None:
+    repo = FakeRepository(
+        [_labeled("t1", ("work",))], [], labels=[Label(id="l2", name="work")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("at")
+        await pilot.pause()
+        await pilot.press("enter")  # confirm without toggling anything
+        await pilot.pause()
+
+        assert repo.label_edits == []
+
+
+class FailingSetLabelsRepository(FakeRepository):
+    async def set_labels(
+        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
+    ) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_set_labels_failure_is_surfaced_and_resyncs() -> None:
+    repo = FailingSetLabelsRepository(
+        [_labeled("t1", ("work",))], [], labels=[Label(id="l1", name="home")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("at")
+        await pilot.pause()
+        await pilot.press("space")  # toggle "home" on
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to set labels: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        # failed command resyncs to server truth: the cell reverts to just "@work"
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Labels")) == "@work"
 
 
 def _row(content: str, project_id: str = "220", parent_id: str | None = None) -> Task:

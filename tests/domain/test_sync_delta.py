@@ -1,4 +1,5 @@
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -13,6 +14,10 @@ def _filter(fid: str, name: str | None = None) -> Filter:
 
 def _section(sid: str, name: str | None = None) -> Section:
     return Section(id=sid, project_id="9", name=name or sid, order=0)
+
+
+def _label(lid: str, name: str | None = None) -> Label:
+    return Label(id=lid, name=name or lid, order=0)
 
 
 def _task(task_id: str, project_id: str = "9", content: str | None = None) -> Task:
@@ -167,6 +172,44 @@ def test_incremental_upserts_and_deletes_sections() -> None:
     merged = merge(prior, delta)
 
     assert [(s.id, s.name) for s in merged.sections] == [("b", "B renamed")]
+
+
+def test_full_sync_replaces_labels() -> None:
+    prior = Snapshot(projects=[], tasks=[], sync_token="old", labels=[_label("x")])
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=True,
+        labels=[_label("y")],
+    )
+
+    assert [label.id for label in merge(prior, delta).labels] == ["y"]
+
+
+def test_incremental_upserts_and_deletes_labels() -> None:
+    prior = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="old",
+        labels=[_label("a", "A"), _label("b", "B")],
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        labels=[_label("b", "B renamed")],
+        deleted_label_ids=frozenset({"a"}),
+    )
+
+    merged = merge(prior, delta)
+
+    assert [(label.id, label.name) for label in merged.labels] == [("b", "B renamed")]
 
 
 def test_incremental_removes_deleted_project() -> None:

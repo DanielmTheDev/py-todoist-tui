@@ -7,6 +7,7 @@ import pytest
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
+from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import Snapshot
@@ -20,6 +21,10 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
         filters=[
             Filter(id="f1", name="Priority 1", query="p1 & overdue", order=1),
             Filter(id="f2", name="Work today", query="#Work & today", order=2),
+        ],
+        labels=[
+            Label(id="l1", name="home", order=1),
+            Label(id="l2", name="urgent", order=2),
         ],
         projects=[
             Project(id="220", name="Eingang", is_inbox=True, order=0),
@@ -131,6 +136,35 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
         ("s1", "Planning", 1),
         ("s2", "In progress", 2),
     ]
+    assert [(label.id, label.name, label.order) for label in loaded.labels] == [
+        ("l1", "home", 1),
+        ("l2", "urgent", 2),
+    ]
+
+
+@pytest.mark.anyio
+async def test_load_returns_none_when_labels_table_missing(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # cache written before the labels catalog
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "CREATE TABLE meta (sync_token TEXT NOT NULL);"
+            "CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER,"
+            " child_order INTEGER);"
+            "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
+            " due_date TEXT, due_time TEXT, due_recurring INTEGER, due_string TEXT,"
+            " due_lang TEXT, project_id TEXT, section_id TEXT, labels TEXT,"
+            " description TEXT, deadline_date TEXT, parent_id TEXT);"
+            "CREATE TABLE filters (id TEXT, name TEXT, query TEXT, item_order INTEGER);"
+            "CREATE TABLE sections (id TEXT, project_id TEXT, name TEXT,"
+            " section_order INTEGER);"
+            "INSERT INTO meta (sync_token) VALUES ('tok');"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await SqliteSnapshotCache(path).load() is None
 
 
 @pytest.mark.anyio

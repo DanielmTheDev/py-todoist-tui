@@ -607,6 +607,81 @@ async def test_delta_tolerates_missing_sections_key() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_delta_parses_and_splits_labels() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "labels": [
+                    {"id": "l1", "name": "work", "item_order": 1},
+                    {"id": "l2", "name": "gone", "item_order": 2, "is_deleted": True},
+                ],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert [(label.id, label.name, label.order) for label in delta.labels] == [
+        ("l1", "work", 1)
+    ]
+    assert delta.deleted_label_ids == frozenset({"l2"})
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_tolerates_missing_labels_key() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "sync_token": "abc",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert delta.labels == []
+    assert delta.deleted_label_ids == frozenset()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_labels_reads_via_sync() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "labels": [
+                    {"id": "l1", "name": "work", "item_order": 1},
+                    {"id": "l2", "name": "gone", "item_order": 2, "is_deleted": True},
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (label,) = await repo.labels()
+
+    assert (label.id, label.name, label.order) == ("l1", "work", 1)
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_sections_reads_via_sync() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(
@@ -834,6 +909,43 @@ async def test_set_project_with_section_moves_into_section() -> None:
     )
     assert commands[0]["type"] == "item_move"
     assert commands[0]["args"] == {"id": "6X4", "section_id": "77"}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_labels_updates_the_task() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_labels(TaskId("6X4"), ("home", "urgent"))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_update"
+    assert commands[0]["args"] == {"id": "6X4", "labels": ["home", "urgent"]}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_labels_creates_unknown_labels_first() -> None:
+    ids = iter(["a", "b", "c"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"a": "ok", "c": "ok"}})
+    )
+    repo = ApiTaskRepository(
+        TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+    )
+
+    await repo.set_labels(TaskId("6X4"), ("fresh",), create=("fresh",))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert [c["type"] for c in commands] == ["label_add", "item_update"]
+    assert commands[0]["args"] == {"name": "fresh"}
 
 
 @pytest.mark.anyio
