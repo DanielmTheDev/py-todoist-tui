@@ -66,11 +66,16 @@ def filter_view(f: Filter) -> View:
 
 
 def search_view(term: SearchTerm) -> View:
-    """A view of every task matching free text, evaluated server-side."""
+    """A view of every task matching free text, evaluated server-side.
+
+    Unlike a saved filter, membership *is* reproducible locally, so an edit that
+    cannot change what the term matches keeps its row instead of flickering out.
+    """
     return View(
         f"Search: {term.text}",
         f"search:{term.text}",
         lambda repo: repo.filtered(term.query),
+        keeps=lambda row, _today: term.matches(row.content, row.description),
     )
 
 

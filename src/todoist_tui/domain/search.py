@@ -21,6 +21,12 @@ class SearchTerm:
     def query(self) -> str:
         return f"search: {self.text}"
 
+    def matches(self, content: str, description: str) -> bool:
+        """Whether a task matches, judged as `search:` does — so the UI can tell
+        locally that an edit it just made cannot have changed membership."""
+        needle = self.text.casefold()
+        return needle in content.casefold() or needle in description.casefold()
+
 
 @dataclass(frozen=True, slots=True)
 class Unsearchable:

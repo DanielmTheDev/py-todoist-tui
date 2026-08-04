@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from textual.widgets import DataTable, Input, Static
 
@@ -24,13 +26,21 @@ def _task(content: str) -> Task:
 class SearchingRepository(FakeRepository):
     """Records the queries served from cache, alongside the refreshed ones."""
 
-    def __init__(self, tasks: list[Task]) -> None:
-        super().__init__(tasks, _PROJECTS)
+    def __init__(
+        self, tasks: list[Task], projects: list[Project] | None = None
+    ) -> None:
+        super().__init__(tasks, projects or _PROJECTS)
         self.filtered_queries: list[str] = []
+        self.release = asyncio.Event()  # held open so a resync can be blocked
+        self.release.set()
 
     async def filtered(self, query: str) -> list[Task]:
         self.filtered_queries.append(query)
         return list(self._tasks)
+
+    async def refresh(self) -> None:
+        await self.release.wait()
+        await super().refresh()
 
 
 def _status(app: TodoistApp) -> str:
@@ -142,6 +152,52 @@ async def test_tasks_stay_interactive_in_a_search_view() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         assert repo.completed == [TaskId("Buy milk")]
+
+
+@pytest.mark.anyio
+async def test_rescheduling_keeps_a_still_matching_row_in_place() -> None:
+    # unlike a saved filter, a due date cannot change what `search:` matches
+    repo = SearchingRepository([_task("Buy milk")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press("m", "i", "l", "k")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        repo.release.clear()  # block the resync that would mask a wrong drop
+        await pilot.press("t")  # schedule
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow
+        await pilot.pause()
+        assert _contents(app) == ["Buy milk"]
+
+
+@pytest.mark.anyio
+async def test_moving_keeps_a_still_matching_row_in_place() -> None:
+    repo = SearchingRepository(
+        [_task("Buy milk")], [*_PROJECTS, Project(id="9", name="Work")]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press("m", "i", "l", "k")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        repo.release.clear()  # block the resync that would mask a wrong drop
+        await pilot.press("v")  # move
+        await pilot.pause()
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _contents(app) == ["Buy milk"]
 
 
 @pytest.mark.anyio

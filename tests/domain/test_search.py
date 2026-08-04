@@ -18,6 +18,19 @@ def test_inner_whitespace_and_case_are_preserved() -> None:
     assert parse_search("Test Task") == SearchTerm("Test Task")
 
 
+def test_term_matches_a_title_case_insensitively() -> None:
+    # mirrors what Todoist's `search:` does, so the UI can judge a row locally
+    assert SearchTerm("milk").matches("Buy MILK", "")
+
+
+def test_term_matches_a_description() -> None:
+    assert SearchTerm("milk").matches("Groceries", "oat milk, 2x")
+
+
+def test_term_matches_neither_field() -> None:
+    assert not SearchTerm("milk").matches("Buy bread", "at the bakery")
+
+
 @pytest.mark.parametrize("text", ["", "   ", "m", " m "])
 def test_too_short_is_unsearchable_without_a_reason(text: str) -> None:
     assert parse_search(text) == Unsearchable("")

@@ -705,6 +705,9 @@ class TodoistApp(App[None]):
         ]
         if self._view.key == "inbox":  # moved out of Inbox: it no longer lists the task
             self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        elif self._view.keeps is not None:  # membership is decidable here and now
+            today = self._clock.today()
+            self._rows = [r for r in self._rows if self._view.keeps(r, today)]
         elif self._active_filter_query is not None:
             # a filter's membership needs the server; assume the move drops it and
             # let the background refresh restore it if it still matches
