@@ -315,6 +315,45 @@ async def test_undo_restores_the_whole_completed_batch() -> None:
         assert set(_content_col(table)) == {"A", "B", "C"}
 
 
+class FailingOnCompleteRepository(FakeRepository):
+    """complete() raises for one specific id, succeeds for the rest."""
+
+    def __init__(self, *args: object, fail_id: TaskId, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self._fail_id = fail_id
+
+    async def complete(self, task_id: TaskId) -> None:
+        if task_id == self._fail_id:
+            raise RuntimeError("boom")
+        await super().complete(task_id)
+
+
+@pytest.mark.anyio
+async def test_partial_batch_complete_undoes_only_the_successes() -> None:
+    repo = FailingOnCompleteRepository(
+        [_row("A"), _row("B"), _row("C")], [], fail_id=TaskId("C")
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("j")  # cursor -> B
+        await pilot.press("e")  # a prior single completion sets an earlier undo (B)
+        await app.workers.wait_for_complete()
+        # now a batch where C fails but A succeeds
+        await pilot.press("x")  # select the current task (C)
+        await pilot.press("k")  # -> A
+        await pilot.press("x")  # select A
+        await pilot.press("e")  # batch complete {A, C}; C rejected
+        await app.workers.wait_for_complete()
+        await pilot.press("z")  # undo must reverse A (the success), not the prior B
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert TaskId("A") in repo.uncompleted  # the confirmed close is undoable
+        assert TaskId("B") not in repo.uncompleted  # the stale prior undo is gone
+
+
 @pytest.mark.anyio
 async def test_deleting_a_selection_confirms_with_the_count() -> None:
     repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])

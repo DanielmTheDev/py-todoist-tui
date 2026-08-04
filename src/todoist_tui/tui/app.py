@@ -442,15 +442,20 @@ class TodoistApp(App[None]):
     async def _complete(
         self, task_ids: list[TaskId], undo: list[tuple[TaskId, TaskRow]]
     ) -> None:
+        undo_of = {str(task_id): (task_id, row) for task_id, row in undo}
+        done: list[tuple[TaskId, TaskRow]] = []  # confirmed closes, reversible by z
         for task_id in task_ids:
             try:
                 await complete_task(self._repo, task_id)
             except Exception as error:  # command rejected: unhide it, resync, report
                 self._pending_close.pop(str(task_id), None)
+                self._last_undo = done  # only what actually closed stays undoable
                 await self._reload(self._view)
                 self._set_status(f"Failed to complete task: {error}")
                 return
-        self._last_undo = undo  # the whole confirmed batch reverses as one undo
+            if str(task_id) in undo_of:
+                done.append(undo_of[str(task_id)])
+        self._last_undo = done  # the whole confirmed batch reverses as one undo
         self._sync_now()  # pull server delta so the view reflects the close
 
     def action_undo(self) -> None:
