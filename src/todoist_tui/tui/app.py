@@ -802,11 +802,12 @@ class TodoistApp(App[None]):
         if self._picking_labels:  # already loading or editor already open
             return
         table = self.query_one(TaskTable)
-        task_id = self._cursor_task_id(table)
-        if task_id is None:  # empty table or cursor on a group header
-            return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
+        rows = [
+            row
+            for task_id in self._targets(table)
+            if (row := next((r for r in self._rows if str(r.id) == task_id), None))
+        ]
+        if not rows:  # empty table or cursor on a group header
             return
         self._picking_labels = True
         try:
@@ -816,48 +817,74 @@ class TodoistApp(App[None]):
             self._picking_labels = False
             return
         names = {label.name for label in catalog}
+        task_ids = [row.id for row in rows]
+        # one task: edit its labels in place (replace). A selection: the editor
+        # opens blank and its result is *added* to each task's own labels.
+        add = len(rows) > 1
+        seed: tuple[str, ...] = () if add else rows[0].labels
         self.push_screen(
-            LabelsScreen(sorted(names), row.labels),
-            lambda chosen: self._on_labels(TaskId(task_id), row.labels, names, chosen),
+            LabelsScreen(sorted(names), seed),
+            lambda chosen: self._on_labels(task_ids, names, chosen, add),
         )
 
     def _on_labels(
         self,
-        task_id: TaskId,
-        previous: tuple[str, ...],
+        task_ids: list[TaskId],
         catalog: set[str],
         chosen: tuple[str, ...] | None,
+        add: bool,
     ) -> None:
         self._picking_labels = False
-        if chosen is None or chosen == previous:  # cancelled or unchanged
+        if chosen is None:  # cancelled
+            return
+        targets = {str(t) for t in task_ids}
+        new_labels: dict[str, tuple[str, ...]] = {}
+        for row in self._rows:
+            if str(row.id) not in targets:
+                continue
+            merged = (
+                row.labels + tuple(n for n in chosen if n not in row.labels)
+                if add
+                else tuple(chosen)
+            )
+            if merged != row.labels:  # skip tasks the edit leaves unchanged
+                new_labels[str(row.id)] = merged
+        if not new_labels:  # nothing to add / unchanged
             return
         create = tuple(name for name in chosen if name not in catalog)
-        self._record_edit(str(task_id), labels=chosen)
-        self._rows = [  # optimistic: repaint the labels cell now
-            replace(row, labels=chosen) if str(row.id) == str(task_id) else row
+        for task_id, labels in new_labels.items():
+            self._record_edit(task_id, labels=labels)
+        self._rows = [  # optimistic: repaint the labels cells now
+            replace(row, labels=new_labels[str(row.id)])
+            if str(row.id) in new_labels
+            else row
             for row in self._rows
         ]
         if self._view.keeps is not None:  # membership is decidable here and now
             today = self._clock.today()
             self._rows = [r for r in self._rows if self._view.keeps(r, today)]
         elif self._active_server_query is not None:
-            # a filter/search's membership needs the server; assume the label edit
-            # drops it and let the background refresh restore it if it still matches
-            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+            # a filter/search's membership needs the server; assume the edits drop
+            # them and let the background refresh restore any that still match
+            self._rows = [r for r in self._rows if str(r.id) not in new_labels]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
-        self._set_labels(task_id, chosen, create)
+        self._set_labels(list(new_labels.items()), create)
 
     @work
     async def _set_labels(
-        self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...]
+        self, edits: list[tuple[str, tuple[str, ...]]], create: tuple[str, ...]
     ) -> None:
-        try:
-            await set_labels(self._repo, task_id, labels, create)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(str(task_id), "labels")
-            await self._reload(self._view)
-            self._set_status(f"Failed to set labels: {error}")
-            return
+        for index, (task_id, labels) in enumerate(edits):
+            try:  # create any new labels once, on the first command
+                await set_labels(
+                    self._repo, TaskId(task_id), labels, create if index == 0 else ()
+                )
+            except Exception as error:  # command rejected: resync, then report
+                self._forget_edit(task_id, "labels")
+                await self._reload(self._view)
+                self._set_status(f"Failed to set labels: {error}")
+                return
         self._sync_now()  # pull server delta; re-runs a live filter/search view
 
     async def _reload(self, view: View) -> None:

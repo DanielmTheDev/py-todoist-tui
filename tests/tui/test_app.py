@@ -447,6 +447,41 @@ async def test_moving_applies_to_the_whole_selection() -> None:
 
 
 @pytest.mark.anyio
+async def test_labels_over_a_selection_add_to_each_task() -> None:
+    repo = FakeRepository(
+        [_labeled("A", ("home",)), _labeled("B", ()), _labeled("C", ("work",))],
+        [],
+        labels=[
+            Label(id="l1", name="home"),
+            Label(id="l2", name="urgent"),
+            Label(id="l3", name="work"),
+        ],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("at")  # one label editor for the selection
+        await pilot.pause()
+        assert isinstance(app.screen, LabelsScreen)
+        await pilot.press("down")  # highlight "urgent" (sorted: home, urgent, work)
+        await pilot.press("space")  # add it
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        added = {task_id: labels for task_id, labels, _ in repo.label_edits}
+        assert added == {  # existing labels kept, "urgent" unioned in
+            TaskId("A"): ("home", "urgent"),
+            TaskId("C"): ("work", "urgent"),
+        }
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),
