@@ -1,4 +1,4 @@
-from todoist_tui.domain.links import Link, annotate
+from todoist_tui.domain.links import Link, annotate, plain
 
 
 def test_markdown_link_becomes_label_with_marker() -> None:
@@ -67,3 +67,24 @@ def test_balanced_parens_inside_a_url_are_kept() -> None:
     assert bare_links == [Link(label=url, url=url)]
     assert md == "wiki [1]"
     assert md_links == [Link(label="wiki", url=url)]
+
+
+def test_plain_drops_bold_markers() -> None:
+    assert plain("**Klaus-Peter Schicketanz**") == "Klaus-Peter Schicketanz"
+
+
+def test_plain_drops_code_ticks() -> None:
+    assert plain("run `uv sync` first") == "run uv sync first"
+
+
+def test_plain_reduces_a_markdown_link_to_its_label() -> None:
+    assert plain("see [the docs](https://example.com/x)") == "see the docs"
+
+
+def test_plain_keeps_a_bare_url_whole() -> None:
+    assert plain("see https://example.com/x now") == "see https://example.com/x now"
+
+
+def test_plain_leaves_lone_asterisks_and_underscores_alone() -> None:
+    # Todoist text legitimately contains these; only paired markers are markup
+    assert plain("Birthdays _ Presents 2*3") == "Birthdays _ Presents 2*3"

@@ -12,6 +12,8 @@ _LINK = re.compile(
     r"|(?P<url>https?://\S+)"
 )
 _TRAILING = "].,;:!?\"'"  # sentence punctuation that clings to a bare URL
+# only *paired* markers are markup: a lone * or _ is ordinary Todoist text
+_EMPHASIS = re.compile(r"\*\*(?P<bold>[^*]+)\*\*|`(?P<code>[^`]+)`")
 
 
 def _trim(url: str) -> str:
@@ -47,6 +49,16 @@ def parse(text: str) -> Iterator[tuple[str, Link | None, str]]:
         yield text[pos : match.start()], link, trailing
         pos = match.end()
     yield text[pos:], None, ""
+
+
+def plain(text: str) -> str:
+    """Todoist text as the writer meant it to read: links reduced to their label,
+    paired `**bold**` and `` `code` `` markers dropped."""
+    unlinked = "".join(
+        before + (link.label if link is not None else "") + trailing
+        for before, link, trailing in parse(text)
+    )
+    return _EMPHASIS.sub(lambda m: m.group("bold") or m.group("code"), unlinked)
 
 
 def annotate(text: str, first_number: int) -> tuple[str, list[Link]]:

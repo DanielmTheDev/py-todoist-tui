@@ -3,10 +3,12 @@ import datetime
 from collections.abc import Callable
 
 import pytest
+from rich.rule import Rule
 from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import OptionList, Static
+from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.due import Due
@@ -14,7 +16,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.search import InvalidSearchQuery, SearchTerm
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import MATCH_STYLE
-from todoist_tui.tui.screens.search import Find, SearchScreen
+from todoist_tui.tui.screens.search import PREVIEW_LIMIT, Find, SearchScreen
 
 _TODAY = datetime.date(2026, 8, 3)
 
@@ -220,9 +222,10 @@ async def test_long_result_sets_are_capped_with_a_remainder_line() -> None:
         await pilot.press("t", "a")
         await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-        labels = _labels(host)
-        assert len(labels) == 51  # 50 tasks plus the remainder line
-        assert labels[-1] == "…and 1 more"
+        options = _options(host)
+        tasks = [o for o in options if not o.disabled]
+        assert len(tasks) == PREVIEW_LIMIT
+        assert str(options[-1].prompt) == "…and 1 more"
         assert "51 matches" in _hint(host)
 
 
@@ -368,3 +371,63 @@ async def test_rows_clip_instead_of_wrapping() -> None:
         styles = host.screen.query_one(OptionList).styles
         assert styles.text_wrap == "nowrap"
         assert styles.text_overflow == "ellipsis"
+
+
+def _options(host: _Host) -> list[Option]:
+    options = host.screen.query_one(OptionList)
+    return [options.get_option_at_index(i) for i in range(options.option_count)]
+
+
+@pytest.mark.anyio
+async def test_a_dim_rule_sits_between_tasks_but_not_around_them() -> None:
+    rows = [_row("Schuhe putzen"), _row("Schlaf Maske"), _row("Schach")]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test(size=(80, 24)) as pilot:
+        await _search_for(host, pilot, "s", "c", "h")
+        kinds = ["rule" if option.disabled else "task" for option in _options(host)]
+        assert kinds == ["task", "rule", "task", "rule", "task"]
+
+
+@pytest.mark.anyio
+async def test_the_rule_sizes_itself_rather_than_clipping() -> None:
+    # a fixed-width string would overrun the row's padding and end in an ellipsis
+    host = _Host(_Fixed([_row("Schuhe"), _row("Schach")]), lambda _t: None)
+    async with host.run_test(size=(80, 24)) as pilot:
+        await _search_for(host, pilot, "s", "c", "h")
+        rule = next(o for o in _options(host) if o.disabled)
+        assert isinstance(rule.prompt, Rule)
+        assert rule.prompt.style == "dim"
+
+
+@pytest.mark.anyio
+async def test_a_single_match_gets_no_rule() -> None:
+    host = _Host(_Fixed([_row("Schuhe")]), lambda _t: None)
+    async with host.run_test(size=(80, 24)) as pilot:
+        await _search_for(host, pilot, "s", "c", "h")
+        assert [o.disabled for o in _options(host)] == [False]
+
+
+@pytest.mark.anyio
+async def test_markdown_is_stripped_from_the_title_and_the_snippet() -> None:
+    rows = [
+        _row("**Schuhe** putzen"),
+        _row("Zahnarzt", description="**Klaus-Peter Schicketanz**"),
+    ]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test(size=(80, 24)) as pilot:
+        await _search_for(host, pilot, "s", "c", "h")
+        painted = " ".join(str(o.prompt) for o in _options(host))
+        assert "**" not in painted
+        assert "Schuhe putzen" in painted
+        assert "Klaus-Peter Schicketanz" in painted
+
+
+@pytest.mark.anyio
+async def test_a_link_in_a_title_shows_its_label() -> None:
+    rows = [_row("Schuhe [bestellen](https://example.com/shoes)")]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test(size=(80, 24)) as pilot:
+        await _search_for(host, pilot, "s", "c", "h")
+        prompt = str(_options(host)[0].prompt)
+        assert "Schuhe bestellen" in prompt
+        assert "example.com" not in prompt

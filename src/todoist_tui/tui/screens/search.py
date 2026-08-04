@@ -3,6 +3,7 @@ import datetime
 from collections.abc import Awaitable, Callable
 from typing import ClassVar
 
+from rich.rule import Rule
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -12,6 +13,7 @@ from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.links import plain
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.search import (
     InvalidSearchQuery,
@@ -26,9 +28,10 @@ from todoist_tui.tui.format import (
     priority_dot,
 )
 
-_PREVIEW_LIMIT = 50  # the promoted view shows everything; this is just a peek
-_SNIPPET_WIDTH = 44  # of description context around the match
-_SNIPPET_INDENT = "     "  # aligns the snippet under its title
+PREVIEW_LIMIT = 50  # the promoted view shows everything; this is just a peek
+_SNIPPET_WIDTH = 32  # of description context: a hint, not a sentence
+_SNIPPET_INDENT = "      "  # sets the snippet under, not beside, its title
+_RULE_CHAR = "─"
 
 Find = Callable[[SearchTerm], Awaitable[list[TaskRow]]]
 
@@ -114,10 +117,11 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
 
     def _paint(self, rows: list[TaskRow], term: SearchTerm) -> None:
         options = self._reset(_count_hint(len(rows)))
-        options.add_options(
-            [Option(_preview(row, term, self._today)) for row in rows[:_PREVIEW_LIMIT]]
-        )
-        remainder = len(rows) - _PREVIEW_LIMIT
+        for index, row in enumerate(rows[:PREVIEW_LIMIT]):
+            if index:  # between tasks only: none above the first or below the last
+                options.add_option(_separator())
+            options.add_option(Option(_preview(row, term, self._today)))
+        remainder = len(rows) - PREVIEW_LIMIT
         if remainder > 0:
             options.add_option(Option(f"…and {remainder} more", disabled=True))
 
@@ -133,20 +137,28 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
 
 def _preview(row: TaskRow, term: SearchTerm, today: datetime.date) -> Text:
     """One task as it reads in the preview: what it is, why it matched, where."""
-    in_title = term.find_in(row.content)
+    title = plain(row.content)
+    in_title = term.find_in(title)
     line = Text.assemble(
         _dot(row.priority),
-        highlight_match(row.content, in_title),
+        highlight_match(title, in_title),
         _context(row, today),
     )
     if in_title is not None:
         return line
-    in_description = term.find_in(row.description)
+    description = plain(row.description)
+    in_description = term.find_in(description)
     if in_description is None:  # matched somewhere only the server can see
         return line
-    snippet = match_snippet(row.description, in_description, _SNIPPET_WIDTH)
+    snippet = match_snippet(description, in_description, _SNIPPET_WIDTH)
     snippet.style = "dim"  # the accent still carries; the rest recedes
     return Text.assemble(line, "\n", _SNIPPET_INDENT, snippet)
+
+
+def _separator() -> Option:
+    """A dim rule between tasks. `Rule` sizes itself to the row, so it can never
+    clip to an ellipsis the way a fixed-width string does."""
+    return Option(Rule(characters=_RULE_CHAR, style="dim"), disabled=True)
 
 
 def _dot(priority: Priority) -> str:
