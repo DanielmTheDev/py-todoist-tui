@@ -31,6 +31,7 @@ uv run todoist-tui
 |-----|--------|
 | `t` / `i` | Today / Inbox view |
 | `f` | Pick a saved filter (server-side, cached; ↑/↓ or `j`/`k`, `Enter` select, `Esc` cancel) |
+| `/` | Search every task by title or description; matches preview as you type, `Enter` opens them as a view |
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |

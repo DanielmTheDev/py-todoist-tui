@@ -112,6 +112,17 @@ def view_from_key(
     return None
 
 
+def query_for_key(key: str, filters: list[Filter]) -> str | None:
+    """The server-side query a stored key's view re-runs to stay live, if any.
+
+    Companion to `view_from_key`, so knowledge of the key format stays here.
+    """
+    if key.startswith("search:"):
+        term = parse_search(key[len("search:") :])
+        return term.query if isinstance(term, SearchTerm) else None
+    return next((f.query for f in filters if f"filter:{f.id}" == key), None)
+
+
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
     tasks, projects, sections = await asyncio.gather(
         view.fetch(repo), repo.projects(), repo.sections()

@@ -10,6 +10,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    query_for_key,
     search_view,
     view_from_key,
 )
@@ -389,6 +390,19 @@ def test_view_from_key_keeps_a_colon_inside_the_search_term() -> None:
 def test_view_from_key_unsearchable_term_is_none(key: str) -> None:
     # a stale or hand-edited home key must not be able to provoke a 400
     assert view_from_key(key, _PROJECTS, _FILTERS) is None
+
+
+def test_query_for_key_reads_a_saved_filters_query() -> None:
+    assert query_for_key("filter:f1", _FILTERS) == "@work & p1"
+
+
+def test_query_for_key_rebuilds_a_search_query() -> None:
+    assert query_for_key("search:milk", _FILTERS) == "search: milk"
+
+
+@pytest.mark.parametrize("key", ["today", "inbox", "project:9", "search:a&b"])
+def test_keys_evaluated_without_the_server_have_no_query(key: str) -> None:
+    assert query_for_key(key, _FILTERS) is None
 
 
 def test_view_from_key_unknown_project_is_none() -> None:

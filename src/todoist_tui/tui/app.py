@@ -26,6 +26,8 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    query_for_key,
+    search_view,
     view_from_key,
 )
 from todoist_tui.domain.arrange import (
@@ -50,6 +52,7 @@ from todoist_tui.domain.repository import (
     TaskRepository,
 )
 from todoist_tui.domain.schedule import reschedule
+from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import (
     format_deadline,
@@ -66,6 +69,7 @@ from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
+from todoist_tui.tui.screens.search import SearchScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
@@ -187,6 +191,7 @@ class TodoistApp(App[None]):
         Binding(".", "view_today", "Today", show=False),
         Binding("i", "view_inbox", "Inbox", show=False),
         Binding("f", "view_filters", "Filters", show=False),
+        Binding("slash", "search", "Search", show=False),
         Binding("p", "view_project_list", "Projects", show=False),
         Binding("H", "go_home", "Home", show=False),
         Binding("m", "set_home", "Set home", show=False),
@@ -234,7 +239,9 @@ class TodoistApp(App[None]):
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_project_list = False  # guards against stacking the project list
-        self._active_filter_query: str | None = None  # set while a filter view shows
+        # the server query of the open view — a saved filter's, or a search's —
+        # re-run on every sync so that view stays live
+        self._active_filter_query: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
@@ -299,8 +306,8 @@ class TodoistApp(App[None]):
             self._switch_to(view)
 
     async def _resolve_home(self) -> tuple[View, str | None]:
-        """The startup/home view and its filter query (None unless a filter),
-        falling back to Today when unset or its target no longer exists."""
+        """The startup/home view and its server query (None unless a filter or a
+        search), falling back to Today when unset or its target no longer exists."""
         key = await self._home.get()
         if key is None:
             return TODAY, None
@@ -312,8 +319,7 @@ class TodoistApp(App[None]):
         view = view_from_key(key, projects, filters)
         if view is None:  # the saved project/filter is gone
             return TODAY, None
-        query = next((f.query for f in filters if f"filter:{f.id}" == key), None)
-        return view, query
+        return view, query_for_key(key, filters)
 
     def action_view_today(self) -> None:
         self._active_filter_query = None
@@ -346,6 +352,20 @@ class TodoistApp(App[None]):
         self._active_filter_query = chosen.query
         self._view = filter_view(chosen)
         self._open_filter(self._view, chosen.query)
+
+    def action_search(self) -> None:
+        self.push_screen(SearchScreen(self._search), self._on_search_term)
+
+    async def _search(self, term: SearchTerm) -> list[TaskRow]:
+        # cache-first, so promoting the term paints from what the preview loaded
+        return await load_view(self._repo, search_view(term))
+
+    def _on_search_term(self, term: SearchTerm | None) -> None:
+        if term is None:  # search was cancelled
+            return
+        self._active_filter_query = term.query
+        self._view = search_view(term)
+        self._open_filter(self._view, term.query)
 
     async def action_view_project_list(self) -> None:
         if self._picking_project_list:  # already loading or picker already open
