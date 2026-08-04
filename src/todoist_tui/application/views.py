@@ -10,6 +10,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.repository import TaskRepository
+from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.task import Task, TaskId
 
 
@@ -64,6 +65,15 @@ def filter_view(f: Filter) -> View:
     return View(f.name, f"filter:{f.id}", lambda repo: repo.filtered(f.query))
 
 
+def search_view(term: SearchTerm) -> View:
+    """A view of every task matching free text, evaluated server-side."""
+    return View(
+        f"Search: {term.text}",
+        f"search:{term.text}",
+        lambda repo: repo.filtered(term.query),
+    )
+
+
 def project_view(p: Project) -> View:
     """A view of one project's tasks; a move drops the row without a resync."""
     return View(
@@ -95,6 +105,10 @@ def view_from_key(
         target = key[len("filter:") :]
         found = next((f for f in filters if f.id == target), None)
         return filter_view(found) if found is not None else None
+    if key.startswith("search:"):
+        term = parse_search(key[len("search:") :])
+        # a hand-edited or stale key must not be able to provoke a 400
+        return search_view(term) if isinstance(term, SearchTerm) else None
     return None
 
 

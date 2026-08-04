@@ -10,6 +10,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    search_view,
     view_from_key,
 )
 from todoist_tui.domain.arrange import Arrangement, Field
@@ -18,6 +19,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
@@ -329,6 +331,19 @@ async def test_filter_view_titled_by_name_fetches_via_query() -> None:
     assert [str(t.id) for t in tasks] == ["hit"]
 
 
+@pytest.mark.anyio
+async def test_search_view_titled_by_term_fetches_via_search_query() -> None:
+    repo = RecordingRepository([_task("hit", "220")])
+    view = search_view(SearchTerm("milk"))
+
+    tasks = await view.fetch(repo)
+
+    assert view.title == "Search: milk"
+    assert view.key == "search:milk"
+    assert repo.queries == ["search: milk"]
+    assert [str(t.id) for t in tasks] == ["hit"]
+
+
 _PROJECTS = [Project(id="9", name="Work"), Project(id="220", name="Errands")]
 _FILTERS = [Filter(id="f1", name="Work P1", query="@work & p1", order=1)]
 
@@ -355,6 +370,25 @@ def test_view_from_key_resolves_filter() -> None:
     assert view is not None
     assert view.key == "filter:f1"
     assert view.title == "Work P1"
+
+
+def test_view_from_key_resolves_search() -> None:
+    view = view_from_key("search:milk", _PROJECTS, _FILTERS)
+    assert view is not None
+    assert view.key == "search:milk"
+    assert view.title == "Search: milk"
+
+
+def test_view_from_key_keeps_a_colon_inside_the_search_term() -> None:
+    view = view_from_key("search:a:b", _PROJECTS, _FILTERS)
+    assert view is not None
+    assert view.title == "Search: a:b"
+
+
+@pytest.mark.parametrize("key", ["search:", "search:m", "search:a&b"])
+def test_view_from_key_unsearchable_term_is_none(key: str) -> None:
+    # a stale or hand-edited home key must not be able to provoke a 400
+    assert view_from_key(key, _PROJECTS, _FILTERS) is None
 
 
 def test_view_from_key_unknown_project_is_none() -> None:
