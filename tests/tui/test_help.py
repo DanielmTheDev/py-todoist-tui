@@ -1,6 +1,6 @@
 import pytest
 from textual.binding import Binding
-from textual.widgets import Static
+from textual.widgets import Input, Static
 
 from tests.tui.test_app import FakeRepository
 from todoist_tui.tui.app import TodoistApp, as_binding, shortcut_rows
@@ -35,6 +35,49 @@ async def test_question_mark_opens_help_listing_all_shortcuts() -> None:
         assert "Complete" in shown  # visible app action
         assert "Down" in shown  # table nav, hidden from the footer
         assert "P1" in shown  # priority binding, hidden from the footer
+
+
+@pytest.mark.anyio
+async def test_typing_filters_the_shortcut_list() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press(*"complete")
+        await pilot.pause()
+        shown = str(app.screen.query_one("#help", Static).render())
+        assert "Complete" in shown  # matching row survives
+        assert "Down" not in shown  # non-matching row filtered out
+
+
+@pytest.mark.anyio
+async def test_filter_matches_against_the_key_too() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press("j")  # the vim-down key; "Down" label has no 'j'
+        await pilot.pause()
+        shown = str(app.screen.query_one("#help", Static).render())
+        assert "Down" in shown  # matched by key, not description
+
+
+@pytest.mark.anyio
+async def test_clearing_the_filter_restores_all_rows() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press(*"complete")
+        await pilot.pause()
+        app.screen.query_one(Input).value = ""
+        await pilot.pause()
+        shown = str(app.screen.query_one("#help", Static).render())
+        assert "Complete" in shown
+        assert "Down" in shown
 
 
 @pytest.mark.anyio
