@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from todoist_tui.api.client import BASE_URL, SyncCommandError, TodoistClient
+from todoist_tui.domain.search import InvalidSearchQuery
 
 
 @pytest.mark.anyio
@@ -24,6 +25,39 @@ async def test_today_tasks_sends_bearer_and_query() -> None:
     request = route.calls.last.request
     assert request.headers["Authorization"] == "Bearer tok"
     assert request.url.params["query"] == "today"
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_rejected_query_raises_invalid_search_query() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": "The search query is incorrect",
+                "error_code": 55,
+                "error_extra": {"retry_after": 2},
+                "error_tag": "INVALID_SEARCH_QUERY",
+                "http_code": 400,
+            },
+        )
+    )
+    client = TodoistClient.create("tok")
+
+    with pytest.raises(InvalidSearchQuery):
+        await client.filter_tasks("search: a&b")
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_other_filter_failures_stay_http_errors() -> None:
+    respx.get(f"{BASE_URL}/tasks/filter").mock(return_value=httpx.Response(500))
+    client = TodoistClient.create("tok")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.filter_tasks("today")
     await client.aclose()
 
 

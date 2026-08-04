@@ -5,6 +5,8 @@ from typing import Any, cast
 
 import httpx
 
+from todoist_tui.domain.search import InvalidSearchQuery
+
 BASE_URL = "https://api.todoist.com/api/v1"
 
 
@@ -49,7 +51,14 @@ class TodoistClient:
         return await self.filter_tasks("today")
 
     async def filter_tasks(self, query: str) -> list[dict[str, Any]]:
-        return await self._paginate("/tasks/filter", {"query": query})
+        try:
+            return await self._paginate("/tasks/filter", {"query": query})
+        except httpx.HTTPStatusError as error:
+            # this endpoint's only 400 is a malformed query; the UI can't read
+            # an httpx error, and its message would leak the whole URL
+            if error.response.status_code == 400:
+                raise InvalidSearchQuery(query) from error
+            raise
 
     async def tasks_in_project(self, project_id: str) -> list[dict[str, Any]]:
         return await self._paginate("/tasks", {"project_id": project_id})

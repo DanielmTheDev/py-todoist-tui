@@ -7,6 +7,10 @@ _OPERATORS = "&|(),!"
 _MIN_LENGTH = 2  # one character matches nearly everything, page after page
 
 
+class InvalidSearchQuery(Exception):
+    """Todoist rejected a query as malformed."""
+
+
 @dataclass(frozen=True, slots=True)
 class SearchTerm:
     """Free text Todoist can search for."""
