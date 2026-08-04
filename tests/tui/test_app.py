@@ -358,6 +358,27 @@ async def test_cancelling_a_selection_delete_keeps_all_and_the_selection() -> No
 
 
 @pytest.mark.anyio
+async def test_setting_priority_applies_to_the_whole_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("1")  # set P1 on the selection
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert set(repo.priorities) == {
+            (TaskId("A"), Priority.P1),
+            (TaskId("C"), Priority.P1),
+        }
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),

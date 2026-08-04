@@ -531,32 +531,33 @@ class TodoistApp(App[None]):
 
     def action_set_priority(self, name: str) -> None:
         table = self.query_one(TaskTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        task_id = _task_id_of(str(row_key.value))
-        if task_id is None:  # cursor is on a group header: nothing to set
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
             return
         priority = Priority[name]
-        self._record_edit(task_id, priority=priority)
-        # optimistic: re-arrange now so the task jumps to its new priority group
-        # (and its dot repaints), then sync in the background
+        targets = set(ids)
+        for task_id in ids:
+            self._record_edit(task_id, priority=priority)
+        # optimistic: re-arrange now so the tasks jump to their new priority group
+        # (and their dots repaint), then sync in the background
         self._rows = [
-            replace(row, priority=priority) if str(row.id) == task_id else row
+            replace(row, priority=priority) if str(row.id) in targets else row
             for row in self._rows
         ]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
-        self._set_priority(TaskId(task_id), priority)
+        self._set_priority([TaskId(i) for i in ids], priority)
 
     @work
-    async def _set_priority(self, task_id: TaskId, priority: Priority) -> None:
-        try:
-            await set_priority(self._repo, task_id, priority)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(str(task_id), "priority")
-            await self._reload(self._view)
-            self._set_status(f"Failed to set priority: {error}")
-            return
+    async def _set_priority(self, task_ids: list[TaskId], priority: Priority) -> None:
+        for task_id in task_ids:
+            try:
+                await set_priority(self._repo, task_id, priority)
+            except Exception as error:  # command rejected: resync, then report
+                self._forget_edit(str(task_id), "priority")
+                await self._reload(self._view)
+                self._set_status(f"Failed to set priority: {error}")
+                return
         self._sync_now()  # pull server delta; re-arranges if grouped/sorted by priority
 
     def action_set_due(self) -> None:
