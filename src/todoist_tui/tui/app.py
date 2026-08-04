@@ -715,12 +715,12 @@ class TodoistApp(App[None]):
         if self._picking_project:  # already loading or picker already open
             return
         table = self.query_one(TaskTable)
-        task_id = self._cursor_task_id(table)
-        if task_id is None:  # empty table or cursor on a group header
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
             return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
-            return
+        # one target prefills its project/section; a selection opens unanchored
+        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        single = row if len(ids) == 1 else None
         self._picking_project = True
         try:
             projects = await self._repo.projects()
@@ -733,24 +733,26 @@ class TodoistApp(App[None]):
             ProjectPickerScreen(
                 projects,
                 sections,
-                current_project=row.project_id,
-                current_section=row.section_id,
+                current_project=single.project_id if single else None,
+                current_section=single.section_id if single else None,
             ),
-            lambda target: self._on_moved(TaskId(task_id), target),
+            lambda target: self._on_moved([TaskId(i) for i in ids], target),
         )
 
-    def _on_moved(self, task_id: TaskId, target: MoveTarget | None) -> None:
+    def _on_moved(self, task_ids: list[TaskId], target: MoveTarget | None) -> None:
         self._picking_project = False
         if target is None:  # picker was cancelled
             return
-        self._record_edit(
-            str(task_id),
-            project_name=target.project_name,
-            project_id=target.project_id,
-            section_id=target.section_id,
-            section_name=target.section_name,
-        )
-        # optimistic: repaint the project cell (and re-group if grouped by project)
+        targets = {str(t) for t in task_ids}
+        for task_id in task_ids:
+            self._record_edit(
+                str(task_id),
+                project_name=target.project_name,
+                project_id=target.project_id,
+                section_id=target.section_id,
+                section_name=target.section_name,
+            )
+        # optimistic: repaint the project cells (and re-group if grouped by project)
         self._rows = [
             replace(
                 row,
@@ -759,39 +761,41 @@ class TodoistApp(App[None]):
                 section_id=target.section_id,
                 section_name=target.section_name,
             )
-            if str(row.id) == str(task_id)
+            if str(row.id) in targets
             else row
             for row in self._rows
         ]
-        if self._view.key == "inbox":  # moved out of Inbox: it no longer lists the task
-            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        if self._view.key == "inbox":  # moved out of Inbox: it no longer lists them
+            self._rows = [r for r in self._rows if str(r.id) not in targets]
         elif self._view.keeps is not None:  # membership is decidable here and now
             today = self._clock.today()
             self._rows = [r for r in self._rows if self._view.keeps(r, today)]
         elif self._active_server_query is not None:
-            # a filter's membership needs the server; assume the move drops it and
-            # let the background refresh restore it if it still matches
-            self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+            # a filter's membership needs the server; assume the move drops them and
+            # let the background refresh restore any that still match
+            self._rows = [r for r in self._rows if str(r.id) not in targets]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
-        self._move_task(task_id, target.project_id, target.section_id)
+        self._move_task(task_ids, target.project_id, target.section_id)
 
     @work
     async def _move_task(
-        self, task_id: TaskId, project_id: str, section_id: str | None
+        self, task_ids: list[TaskId], project_id: str, section_id: str | None
     ) -> None:
-        try:
-            await move_task(self._repo, task_id, project_id, section_id)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(
-                str(task_id),
-                "project_name",
-                "project_id",
-                "section_id",
-                "section_name",
-            )
-            await self._reload(self._view)
-            self._set_status(f"Failed to move task: {error}")
-            return
+        for task_id in task_ids:
+            try:
+                await move_task(self._repo, task_id, project_id, section_id)
+            except Exception as error:  # command rejected: resync, then report
+                self._forget_edit(
+                    str(task_id),
+                    "project_name",
+                    "project_id",
+                    "section_id",
+                    "section_name",
+                )
+                await self._reload(self._view)
+                self._set_status(f"Failed to move task: {error}")
+                return
         self._sync_now()  # pull server delta; re-arranges if grouped by project
 
     async def action_set_labels(self) -> None:

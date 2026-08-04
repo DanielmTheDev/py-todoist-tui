@@ -423,6 +423,30 @@ async def test_setting_deadline_applies_to_the_whole_selection() -> None:
 
 
 @pytest.mark.anyio
+async def test_moving_applies_to_the_whole_selection() -> None:
+    repo = FakeRepository(
+        [_row("A", "220"), _row("B", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("x")  # select B (cursor already on B)
+        await pilot.press("v")  # one project picker for the selection
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert set(repo.moves) == {(TaskId("A"), "9", None), (TaskId("B"), "9", None)}
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),
