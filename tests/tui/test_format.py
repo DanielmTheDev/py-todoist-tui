@@ -4,10 +4,15 @@ from rich.text import Text
 
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.priority import Priority
 from todoist_tui.tui.format import (
+    MATCH_STYLE,
     format_deadline,
     format_due,
     format_labels,
+    highlight_match,
+    match_snippet,
+    priority_dot,
     render_links,
     styled_date,
 )
@@ -90,3 +95,51 @@ def test_plain_text_has_no_styled_spans() -> None:
 
     assert result.plain == "just a normal task"
     assert result.spans == []
+
+
+def test_priority_dot_marks_the_top_three() -> None:
+    assert priority_dot(Priority.P1) == "🔴"
+    assert priority_dot(Priority.P2) == "🟠"
+    assert priority_dot(Priority.P3) == "🔵"
+
+
+def test_priority_dot_leaves_the_default_blank() -> None:
+    assert priority_dot(Priority.P4) == ""
+
+
+def _accented(text: Text) -> list[tuple[str, str]]:
+    return [(str(span.style), text.plain[span.start : span.end]) for span in text.spans]
+
+
+def test_highlight_match_accents_only_the_matched_run() -> None:
+    highlighted = highlight_match("Geschenk Manni", (0, 5))
+    assert highlighted.plain == "Geschenk Manni"
+    assert _accented(highlighted) == [(MATCH_STYLE, "Gesch")]
+
+
+def test_highlight_match_without_a_match_is_unstyled() -> None:
+    assert _accented(highlight_match("Martin Kremmel", None)) == []
+
+
+def test_match_snippet_keeps_short_text_whole() -> None:
+    snippet = match_snippet("buy a gift", (6, 10), width=40)
+    assert snippet.plain == "buy a gift"
+
+
+def test_match_snippet_windows_long_text_around_the_match() -> None:
+    text = "a" * 60 + "gift" + "b" * 60
+    snippet = match_snippet(text, (60, 64), width=20)
+    assert "gift" in snippet.plain
+    assert snippet.plain.startswith("…") and snippet.plain.endswith("…")
+    assert len(snippet.plain) <= 22  # the window plus its two ellipses
+
+
+def test_match_snippet_accents_the_match_after_windowing() -> None:
+    text = "a" * 60 + "gift" + "b" * 60
+    snippet = match_snippet(text, (60, 64), width=20)
+    assert _accented(snippet) == [(MATCH_STYLE, "gift")]
+
+
+def test_match_snippet_collapses_newlines() -> None:
+    snippet = match_snippet("first line\nthe gift here", (15, 19), width=40)
+    assert "\n" not in snippet.plain

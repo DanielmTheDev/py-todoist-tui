@@ -1,24 +1,38 @@
 import asyncio
+import datetime
 from collections.abc import Callable
 
 import pytest
+from rich.text import Text
 from textual.app import App
+from textual.pilot import Pilot
 from textual.widgets import OptionList, Static
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.search import InvalidSearchQuery, SearchTerm
 from todoist_tui.domain.task import TaskId
+from todoist_tui.tui.format import MATCH_STYLE
 from todoist_tui.tui.screens.search import Find, SearchScreen
 
+_TODAY = datetime.date(2026, 8, 3)
 
-def _row(content: str) -> TaskRow:
+
+def _row(
+    content: str,
+    description: str = "",
+    priority: Priority = Priority.P4,
+    due: Due | None = None,
+    project_name: str | None = "Work",
+) -> TaskRow:
     return TaskRow(
         id=TaskId(content),
         content=content,
-        priority=Priority.P4,
-        due=None,
-        project_name="Work",
+        priority=priority,
+        due=due,
+        project_name=project_name,
+        description=description,
     )
 
 
@@ -54,7 +68,7 @@ class _Host(App[None]):
         self._screen_type = screen
 
     def on_mount(self) -> None:
-        self.push_screen(self._screen_type(self._find), self._on_result)
+        self.push_screen(self._screen_type(self._find, _TODAY), self._on_result)
 
 
 def _labels(host: _Host) -> list[str]:
@@ -87,7 +101,7 @@ async def test_typing_paints_matches_and_their_count() -> None:
         await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         assert find.terms == ["mi"]
-        assert _labels(host) == ["hit mi"]
+        assert "hit mi" in _labels(host)[0]
         assert "1 match" in _hint(host)
 
 
@@ -251,4 +265,106 @@ async def test_a_superseded_search_never_paints() -> None:
         find.release("te", "test")
         await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-        assert _labels(host) == ["hit test"]
+        assert [label.strip() for label in _labels(host)] == ["hit test  Work"]
+
+
+def _prompts(host: _Host) -> list[Text]:
+    options = host.screen.query_one(OptionList)
+    prompts: list[Text] = []
+    for i in range(options.option_count):
+        prompt = options.get_option_at_index(i).prompt
+        assert isinstance(prompt, Text)
+        prompts.append(prompt)
+    return prompts
+
+
+def _accented(text: Text) -> list[str]:
+    return [
+        text.plain[span.start : span.end]
+        for span in text.spans
+        if str(span.style) == MATCH_STYLE
+    ]
+
+
+class _Fixed:
+    """Returns a fixed row set regardless of the term."""
+
+    def __init__(self, rows: list[TaskRow]) -> None:
+        self._rows = rows
+
+    async def __call__(self, _term: SearchTerm) -> list[TaskRow]:
+        return self._rows
+
+
+async def _search_for(host: _Host, pilot: Pilot[None], *keys: str) -> None:
+    await pilot.press(*keys)
+    await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+async def test_a_matching_title_is_accented() -> None:
+    host = _Host(_Fixed([_row("Geschenk Manni Marco")]), lambda _t: None)
+    async with host.run_test() as pilot:
+        await _search_for(host, pilot, "g", "e", "s", "c", "h")
+        assert _accented(_prompts(host)[0]) == ["Gesch"]
+
+
+@pytest.mark.anyio
+async def test_a_description_only_match_is_shown_and_accented() -> None:
+    # the row that looks like a mystery hit explains itself
+    rows = [_row("Martin Kremmel bjj", description="Geschenk noch besorgen")]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test() as pilot:
+        await _search_for(host, pilot, "g", "e", "s", "c", "h")
+        prompt = _prompts(host)[0]
+        assert "Geschenk noch besorgen" in prompt.plain
+        assert _accented(prompt) == ["Gesch"]
+
+
+@pytest.mark.anyio
+async def test_a_title_match_does_not_repeat_the_description() -> None:
+    rows = [_row("Geschenk Manni", description="wrapping paper too")]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test() as pilot:
+        await _search_for(host, pilot, "g", "e", "s", "c", "h")
+        assert "wrapping paper" not in _prompts(host)[0].plain
+
+
+@pytest.mark.anyio
+async def test_rows_carry_priority_project_and_due() -> None:
+    rows = [
+        _row(
+            "Geschenk Manni",
+            priority=Priority.P1,
+            due=Due(date=datetime.date(2026, 8, 4)),
+            project_name="Tasks",
+        )
+    ]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test() as pilot:
+        await _search_for(host, pilot, "g", "e", "s", "c", "h")
+        plain = _prompts(host)[0].plain
+        assert "🔴" in plain
+        assert "Tasks" in plain
+        assert "Tomorrow" in plain
+
+
+@pytest.mark.anyio
+async def test_a_row_without_project_or_due_carries_no_separator() -> None:
+    host = _Host(_Fixed([_row("Geschenk", project_name=None)]), lambda _t: None)
+    async with host.run_test() as pilot:
+        await _search_for(host, pilot, "g", "e", "s", "c", "h")
+        assert _prompts(host)[0].plain.rstrip().endswith("Geschenk")
+
+
+@pytest.mark.anyio
+async def test_rows_clip_instead_of_wrapping() -> None:
+    # a wrapped continuation line loses its indent and reads as another row
+    rows = [_row("A very long title " * 5, description="x" * 300)]
+    host = _Host(_Fixed(rows), lambda _t: None)
+    async with host.run_test(size=(60, 20)) as pilot:
+        await _search_for(host, pilot, "l", "o", "n", "g")
+        styles = host.screen.query_one(OptionList).styles
+        assert styles.text_wrap == "nowrap"
+        assert styles.text_overflow == "ellipsis"

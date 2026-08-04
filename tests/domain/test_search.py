@@ -18,6 +18,18 @@ def test_inner_whitespace_and_case_are_preserved() -> None:
     assert parse_search("Test Task") == SearchTerm("Test Task")
 
 
+def test_term_locates_its_match_case_insensitively() -> None:
+    assert SearchTerm("gesch").find_in("Geschenk Manni") == (0, 5)
+
+
+def test_term_locates_the_first_of_several_matches() -> None:
+    assert SearchTerm("an").find_in("Manni Marco an") == (1, 3)
+
+
+def test_term_locates_nothing_when_absent() -> None:
+    assert SearchTerm("gesch").find_in("Martin Kremmel bjj") is None
+
+
 def test_term_matches_a_title_case_insensitively() -> None:
     # mirrors what Todoist's `search:` does, so the UI can judge a row locally
     assert SearchTerm("milk").matches("Buy MILK", "")

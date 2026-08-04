@@ -58,6 +58,7 @@ from todoist_tui.tui.format import (
     format_deadline,
     format_due,
     format_labels,
+    priority_dot,
     render_links,
     styled_date,
 )
@@ -72,7 +73,6 @@ from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
-_PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _HEADER_WIDTH = 56  # target width of a group divider rule
 
@@ -354,7 +354,8 @@ class TodoistApp(App[None]):
         self._open_filter(self._view, chosen.query)
 
     def action_search(self) -> None:
-        self.push_screen(SearchScreen(self._search), self._on_search_term)
+        screen = SearchScreen(self._search, self._clock.today())
+        self.push_screen(screen, self._on_search_term)
 
     async def _search(self, term: SearchTerm) -> list[TaskRow]:
         # cache-first, so promoting the term paints from what the preview loaded
@@ -877,7 +878,7 @@ class TodoistApp(App[None]):
             content = Text(_indent(item.level), style="bold")
             content.append(_expand_marker(item))
             content.append_text(render_links(row.content))
-            cells: list[Text | str] = [_priority_dot(row.priority), content]
+            cells: list[Text | str] = [priority_dot(row.priority), content]
             if show_labels:
                 cells.append(_labels_cell(row.labels))
             if show_due:
@@ -1015,10 +1016,6 @@ def _arrangement_summary(arrangement: Arrangement) -> str:
         )
         parts.append(f"Sort: {keys}")
     return "   ·   " + "    ".join(parts) if parts else ""
-
-
-def _priority_dot(priority: Priority) -> str:
-    return _PRIORITY_DOTS.get(priority, "")  # P4 (default) stays blank
 
 
 def _expand_marker(line: TaskLine[TaskRow]) -> str:

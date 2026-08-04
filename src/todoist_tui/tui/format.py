@@ -6,8 +6,44 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import parse
+from todoist_tui.domain.priority import Priority
 
 _LINK_STYLE = "underline #89ddff"  # cyan; readable on the dark and blue-selection rows
+MATCH_STYLE = "#89ddff"  # the same accent, undecorated: points at what matched
+_PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
+_ELLIPSIS = "…"
+
+
+def priority_dot(priority: Priority) -> str:
+    """Coloured dot for the priority; blank for P4, which needs no marking."""
+    return _PRIORITY_DOTS.get(priority, "")
+
+
+def highlight_match(text: str, span: tuple[int, int] | None) -> Text:
+    """`text` with the matched run accented, so a hit is visible at a glance."""
+    result = Text(text)
+    if span is not None:
+        result.stylize(MATCH_STYLE, *span)
+    return result
+
+
+def match_snippet(text: str, span: tuple[int, int], width: int) -> Text:
+    """A one-line window of `text` around the match, accented and elided.
+
+    Lets a row whose title doesn't contain the term still show why it matched.
+    """
+    flat = text.replace("\n", " ")
+    if len(flat) <= width:
+        return highlight_match(flat, span)
+    start, end = span
+    margin = max(0, (width - (end - start)) // 2)
+    left = min(max(0, start - margin), max(0, len(flat) - width))
+    window = flat[left : left + width]
+    shifted = (start - left, end - left)
+    prefix = _ELLIPSIS if left > 0 else ""
+    suffix = _ELLIPSIS if left + width < len(flat) else ""
+    snippet = highlight_match(window, shifted)
+    return Text.assemble(prefix, snippet, suffix)
 
 
 def format_due(due: Due | None, today: datetime.date) -> str:

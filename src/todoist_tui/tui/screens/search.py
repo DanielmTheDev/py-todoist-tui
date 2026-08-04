@@ -1,7 +1,9 @@
 import asyncio
+import datetime
 from collections.abc import Awaitable, Callable
 from typing import ClassVar
 
+from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -10,14 +12,23 @@ from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.search import (
     InvalidSearchQuery,
     SearchTerm,
     Unsearchable,
     parse_search,
 )
+from todoist_tui.tui.format import (
+    format_due,
+    highlight_match,
+    match_snippet,
+    priority_dot,
+)
 
 _PREVIEW_LIMIT = 50  # the promoted view shows everything; this is just a peek
+_SNIPPET_WIDTH = 44  # of description context around the match
+_SNIPPET_INDENT = "     "  # aligns the snippet under its title
 
 Find = Callable[[SearchTerm], Awaitable[list[TaskRow]]]
 
@@ -45,6 +56,8 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
         height: auto;
         max-height: 60%;
         border: round $primary;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     SearchScreen #search-hint {
         width: 60%;
@@ -56,9 +69,10 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
 
     DEBOUNCE: ClassVar[float] = 0.25  # settle a typing burst into one request
 
-    def __init__(self, find: Find) -> None:
+    def __init__(self, find: Find, today: datetime.date) -> None:
         super().__init__()
         self._find = find
+        self._today = today
         self._term: SearchTerm | None = None  # what Enter would promote
 
     def compose(self) -> ComposeResult:
@@ -73,7 +87,7 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
         parsed = parse_search(event.value)
         if isinstance(parsed, Unsearchable):
             self._term = None
-            self._paint([], _unsearchable_hint(parsed))  # never hits the network
+            self._clear(_unsearchable_hint(parsed))  # never hits the network
             return
         self._term = parsed
         self._search(parsed)
@@ -92,20 +106,58 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
         try:
             rows = await self._find(term)
         except InvalidSearchQuery:
-            self._paint([], "Invalid search query")
+            self._clear("Invalid search query")
         except Exception as error:  # offline or the request failed
-            self._paint([], f"Search failed: {error}")
+            self._clear(f"Search failed: {error}")
         else:
-            self._paint(rows, _count_hint(len(rows)))
+            self._paint(rows, term)
 
-    def _paint(self, rows: list[TaskRow], hint: str) -> None:
-        options = self.query_one(OptionList)
-        options.clear_options()
-        options.add_options([Option(row.content) for row in rows[:_PREVIEW_LIMIT]])
+    def _paint(self, rows: list[TaskRow], term: SearchTerm) -> None:
+        options = self._reset(_count_hint(len(rows)))
+        options.add_options(
+            [Option(_preview(row, term, self._today)) for row in rows[:_PREVIEW_LIMIT]]
+        )
         remainder = len(rows) - _PREVIEW_LIMIT
         if remainder > 0:
             options.add_option(Option(f"…and {remainder} more", disabled=True))
+
+    def _clear(self, hint: str) -> None:
+        self._reset(hint)
+
+    def _reset(self, hint: str) -> OptionList:
+        options = self.query_one(OptionList)
+        options.clear_options()
         self.query_one("#search-hint", Static).update(hint)
+        return options
+
+
+def _preview(row: TaskRow, term: SearchTerm, today: datetime.date) -> Text:
+    """One task as it reads in the preview: what it is, why it matched, where."""
+    in_title = term.find_in(row.content)
+    line = Text.assemble(
+        _dot(row.priority),
+        highlight_match(row.content, in_title),
+        _context(row, today),
+    )
+    if in_title is not None:
+        return line
+    in_description = term.find_in(row.description)
+    if in_description is None:  # matched somewhere only the server can see
+        return line
+    snippet = match_snippet(row.description, in_description, _SNIPPET_WIDTH)
+    snippet.style = "dim"  # the accent still carries; the rest recedes
+    return Text.assemble(line, "\n", _SNIPPET_INDENT, snippet)
+
+
+def _dot(priority: Priority) -> str:
+    dot = priority_dot(priority)
+    return f"{dot} " if dot else "   "  # keep titles aligned across priorities
+
+
+def _context(row: TaskRow, today: datetime.date) -> Text:
+    """Project and due date, dim, so two similar titles are tellable apart."""
+    parts = [part for part in (row.project_name, format_due(row.due, today)) if part]
+    return Text(f"  {' · '.join(parts)}", style="dim") if parts else Text()
 
 
 def _unsearchable_hint(reason: Unsearchable) -> str:

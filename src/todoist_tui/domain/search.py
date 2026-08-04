@@ -24,8 +24,14 @@ class SearchTerm:
     def matches(self, content: str, description: str) -> bool:
         """Whether a task matches, judged as `search:` does — so the UI can tell
         locally that an edit it just made cannot have changed membership."""
-        needle = self.text.casefold()
-        return needle in content.casefold() or needle in description.casefold()
+        return (
+            self.find_in(content) is not None or self.find_in(description) is not None
+        )
+
+    def find_in(self, text: str) -> tuple[int, int] | None:
+        """Where the term first occurs in `text`, so a caller can point at it."""
+        start = text.casefold().find(self.text.casefold())
+        return None if start < 0 else (start, start + len(self.text))
 
 
 @dataclass(frozen=True, slots=True)
