@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 from todoist_tui.domain.arrange import Arrangement
 from todoist_tui.domain.deadline import Deadline
@@ -12,6 +13,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder, ReminderType
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
@@ -25,6 +27,7 @@ DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS filters;
 DROP TABLE IF EXISTS sections;
 DROP TABLE IF EXISTS labels;
+DROP TABLE IF EXISTS reminders;
 CREATE TABLE meta (sync_token TEXT NOT NULL);
 CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER, child_order INTEGER);
 CREATE TABLE tasks (
@@ -42,6 +45,10 @@ CREATE TABLE sections (
 );
 CREATE TABLE labels (
     id TEXT, name TEXT, item_order INTEGER
+);
+CREATE TABLE reminders (
+    id TEXT, item_id TEXT, type TEXT,
+    due_date TEXT, due_time TEXT, minute_offset INTEGER, notify_uid TEXT
 );
 """
 
@@ -101,6 +108,13 @@ class SqliteSnapshotCache:
                         "SELECT id, name, item_order FROM labels"
                     )
                 ]
+                reminders = [
+                    _row_to_reminder(row)
+                    for row in conn.execute(
+                        "SELECT id, item_id, type, due_date, due_time,"
+                        " minute_offset, notify_uid FROM reminders"
+                    )
+                ]
             except sqlite3.OperationalError:  # missing/legacy schema: treat as cold
                 return None
         return Snapshot(
@@ -110,6 +124,7 @@ class SqliteSnapshotCache:
             filters=filters,
             sections=sections,
             labels=labels,
+            reminders=reminders,
         )
 
     def _save(self, snapshot: Snapshot) -> None:
@@ -140,6 +155,11 @@ class SqliteSnapshotCache:
             conn.executemany(
                 "INSERT INTO labels (id, name, item_order) VALUES (?, ?, ?)",
                 [(label.id, label.name, label.order) for label in snapshot.labels],
+            )
+            conn.executemany(
+                "INSERT INTO reminders (id, item_id, type, due_date, due_time,"
+                " minute_offset, notify_uid) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [_reminder_to_row(r) for r in snapshot.reminders],
             )
             conn.commit()
 
@@ -233,6 +253,41 @@ class SqliteHomeViewStore:
                 (view_key,),
             )
             conn.commit()
+
+
+def _reminder_to_row(
+    reminder: Reminder,
+) -> tuple[str, str, str, str | None, str | None, int | None, str | None]:
+    due = reminder.due
+    return (
+        reminder.id,
+        reminder.item_id,
+        reminder.type,
+        due.date.isoformat() if due else None,
+        due.time.isoformat() if due and due.time else None,
+        reminder.minute_offset,
+        reminder.notify_uid,
+    )
+
+
+def _row_to_reminder(
+    row: tuple[str, str, str, str | None, str | None, int | None, str | None],
+) -> Reminder:
+    rid, item_id, rtype, due_date, due_time, minute_offset, notify_uid = row
+    due = None
+    if due_date is not None:
+        due = Due(
+            date=datetime.date.fromisoformat(due_date),
+            time=datetime.time.fromisoformat(due_time) if due_time else None,
+        )
+    return Reminder(
+        id=rid,
+        item_id=item_id,
+        type=cast("ReminderType", rtype),
+        due=due,
+        minute_offset=minute_offset,
+        notify_uid=notify_uid,
+    )
 
 
 def _task_to_row(

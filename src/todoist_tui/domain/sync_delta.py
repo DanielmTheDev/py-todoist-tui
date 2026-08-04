@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task
@@ -29,6 +30,8 @@ class SyncDelta:
     deleted_section_ids: frozenset[str] = frozenset()
     labels: list[Label] = field(default_factory=list[Label])
     deleted_label_ids: frozenset[str] = frozenset()
+    reminders: list[Reminder] = field(default_factory=list[Reminder])
+    deleted_reminder_ids: frozenset[str] = frozenset()
 
 
 def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
@@ -41,6 +44,7 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
             filters=delta.filters,
             sections=delta.sections,
             labels=delta.labels,
+            reminders=delta.reminders,
         )
     return Snapshot(
         projects=_apply(
@@ -58,6 +62,12 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
         ),
         labels=_apply(
             prior.labels, delta.labels, delta.deleted_label_ids, lambda label: label.id
+        ),
+        reminders=_apply(
+            prior.reminders,
+            delta.reminders,
+            delta.deleted_reminder_ids,
+            lambda reminder: reminder.id,
         ),
     )
 

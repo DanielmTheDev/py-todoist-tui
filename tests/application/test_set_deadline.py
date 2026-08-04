@@ -9,6 +9,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
@@ -66,6 +67,13 @@ class FakeRepository:
     ) -> None: ...
 
     async def refresh(self) -> None: ...
+
+    async def reminders(self) -> list[Reminder]:
+        return []
+
+    async def add_reminder(self, reminder: Reminder) -> None: ...
+
+    async def delete_reminder(self, reminder_id: str) -> None: ...
 
 
 @pytest.mark.anyio

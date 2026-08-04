@@ -8,6 +8,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
@@ -36,6 +37,8 @@ class TaskRepository(Protocol):
 
     async def labels(self) -> list[Label]: ...
 
+    async def reminders(self) -> list[Reminder]: ...
+
     async def complete(self, task_id: TaskId) -> None: ...
 
     async def uncomplete(self, task_id: TaskId) -> None: ...
@@ -58,6 +61,10 @@ class TaskRepository(Protocol):
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...
 
+    async def add_reminder(self, reminder: Reminder) -> None: ...
+
+    async def delete_reminder(self, reminder_id: str) -> None: ...
+
     async def refresh(self) -> None: ...
 
 
@@ -71,6 +78,7 @@ class Snapshot:
     filters: list[Filter] = field(default_factory=list[Filter])
     sections: list[Section] = field(default_factory=list[Section])
     labels: list[Label] = field(default_factory=list[Label])
+    reminders: list[Reminder] = field(default_factory=list[Reminder])
 
 
 class SnapshotSource(Protocol):

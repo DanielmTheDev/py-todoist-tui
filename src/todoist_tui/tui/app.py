@@ -12,8 +12,10 @@ from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import DataTable, Footer, Static
 
+from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_task
+from todoist_tui.application.delete_reminder import delete_reminder
 from todoist_tui.application.move_task import move_task
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
@@ -47,6 +49,7 @@ from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import (
     ArrangementStore,
     HomeViewStore,
@@ -71,6 +74,7 @@ from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
+from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
 
@@ -204,6 +208,7 @@ class TodoistApp(App[None]):
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
         Binding("at", "set_labels", "Labels", show=False),
+        Binding("R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
         Binding("x", "toggle_select", "Select", show=False),
         Binding("asterisk", "select_all", "Select all", show=False),
@@ -892,6 +897,83 @@ class TodoistApp(App[None]):
                 return
         self._sync_now()  # pull server delta; re-runs a live filter/search view
 
+    def action_reminders(self) -> None:
+        table = self.query_one(TaskTable)
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
+            return
+        if len(ids) == 1:
+            row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+            if row is None:
+                return
+            allow_relative = self._has_due_time(ids[0])
+            screen = RemindersScreen(
+                self._clock.today(), row.reminders, allow_relative, mode="manage"
+            )
+        else:  # a selection: add one reminder to each, no per-task list to show
+            screen = RemindersScreen(
+                self._clock.today(), allow_relative=True, mode="add"
+            )
+        self.push_screen(
+            screen, lambda request: self._on_reminder_request(ids, request)
+        )
+
+    def _on_reminder_request(
+        self, ids: list[str], request: ReminderRequest | None
+    ) -> None:
+        if request is None:  # cancelled
+            return
+        if request.add_absolute:  # finish by picking the date + time
+            self.push_screen(
+                ScheduleScreen(self._clock.today(), kind="due"),
+                lambda result: self._on_reminder_absolute(ids, result),
+            )
+        elif request.delete_id is not None:
+            self._delete_reminder(request.delete_id)
+        elif request.add_relative is not None:
+            # a relative reminder only fires on a task that has a due time, so drop
+            # targets without one rather than let the server reject them mid-batch
+            eligible = [task_id for task_id in ids if self._has_due_time(task_id)]
+            if not eligible:
+                self._set_status("Relative reminder needs a task with a due time")
+                return
+            template = Reminder(
+                id="", item_id="", type="relative", minute_offset=request.add_relative
+            )
+            self._add_reminders(eligible, template)
+
+    def _has_due_time(self, task_id: str) -> bool:
+        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        return row is not None and row.due is not None and row.due.time is not None
+
+    def _on_reminder_absolute(self, ids: list[str], result: DueResult | None) -> None:
+        if result is None or result.due is None:  # picker cancelled or cleared
+            return
+        template = Reminder(id="", item_id="", type="absolute", due=result.due)
+        self._add_reminders(ids, template)
+
+    @work
+    async def _add_reminders(self, ids: list[str], template: Reminder) -> None:
+        for task_id in ids:
+            try:
+                await add_reminder(self._repo, replace(template, item_id=task_id))
+            except Exception as error:  # command rejected: resync, then report
+                await self._reload(self._view)
+                self._set_status(f"Failed to add reminder: {error}")
+                return
+        self._selected.clear()
+        self._sync_now()  # pull the new reminders so the bell count updates
+
+    @work
+    async def _delete_reminder(self, reminder_id: str) -> None:
+        try:
+            await delete_reminder(self._repo, reminder_id)
+        except Exception as error:  # command rejected: resync, then report
+            await self._reload(self._view)
+            self._set_status(f"Failed to delete reminder: {error}")
+            return
+        self._sync_now()
+
     async def _reload(self, view: View) -> None:
         try:
             rows = await load_view(self._repo, view)
@@ -1012,12 +1094,15 @@ class TodoistApp(App[None]):
         # strand three near-blank columns beside the titles
         tasks = [item.row for item in render_rows if isinstance(item, TaskLine)]
         show_labels = any(t.labels for t in tasks)
+        show_reminders = any(t.reminders for t in tasks)
         show_due = any(t.due for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
         show_project = any(t.project_name for t in tasks)
         columns = ["", "Task"]
         if show_labels:
             columns.append("Labels")
+        if show_reminders:
+            columns.append("Rem")
         if show_due:
             columns.append("Due")
         if show_deadline:
@@ -1039,6 +1124,8 @@ class TodoistApp(App[None]):
             cells: list[Text | str] = [priority_dot(row.priority), content]
             if show_labels:
                 cells.append(_labels_cell(row.labels))
+            if show_reminders:
+                cells.append(_reminders_cell(row.reminders))
             if show_due:
                 cells.append(_due_cell(row.due, today))
             if show_deadline:
@@ -1143,6 +1230,13 @@ def _project_cell(project_name: str | None) -> Text | str:
 def _labels_cell(labels: tuple[str, ...]) -> Text | str:
     line = format_labels(labels)
     return Text(line, style="dim") if line else ""
+
+
+def _reminders_cell(reminders: tuple[Reminder, ...]) -> Text | str:
+    if not reminders:
+        return ""
+    count = len(reminders)
+    return Text("🔔" if count == 1 else f"🔔{count}", style="dim")
 
 
 def _header_text(header: GroupHeader, today: datetime.date) -> Text:

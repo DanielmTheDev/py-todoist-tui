@@ -443,6 +443,51 @@ async def test_sync_posts_full_sync_and_returns_body() -> None:
         "filters",
         "sections",
         "labels",
+        "reminders",
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_add_reminder_posts_reminder_add_command() -> None:
+    ids = iter(["u-1", "temp-1"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+
+    await client.add_reminder("6X4", {"type": "relative", "minute_offset": 30})
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "reminder_add",
+            "uuid": "u-1",
+            "temp_id": "temp-1",
+            "args": {"item_id": "6X4", "type": "relative", "minute_offset": 30},
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delete_reminder_posts_reminder_delete_command() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.delete_reminder("r9")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "reminder_delete", "uuid": "u-1", "args": {"id": "r9"}}
     ]
     await client.aclose()
 

@@ -2,10 +2,16 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta, merge
 from todoist_tui.domain.task import Task, TaskId
+
+
+def _reminder(rid: str, item_id: str = "t1") -> Reminder:
+    offset = int(rid) if rid.isdigit() else 0
+    return Reminder(id=rid, item_id=item_id, type="relative", minute_offset=offset)
 
 
 def _filter(fid: str, name: str | None = None) -> Filter:
@@ -210,6 +216,46 @@ def test_incremental_upserts_and_deletes_labels() -> None:
     merged = merge(prior, delta)
 
     assert [(label.id, label.name) for label in merged.labels] == [("b", "B renamed")]
+
+
+def test_full_sync_replaces_reminders() -> None:
+    prior = Snapshot(
+        projects=[], tasks=[], sync_token="old", reminders=[_reminder("r1")]
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=True,
+        reminders=[_reminder("r2")],
+    )
+
+    assert [r.id for r in merge(prior, delta).reminders] == ["r2"]
+
+
+def test_incremental_upserts_and_deletes_reminders() -> None:
+    prior = Snapshot(
+        projects=[],
+        tasks=[],
+        sync_token="old",
+        reminders=[_reminder("a"), _reminder("b")],
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        reminders=[_reminder("b", item_id="t2")],
+        deleted_reminder_ids=frozenset({"a"}),
+    )
+
+    merged = merge(prior, delta)
+
+    assert [(r.id, r.item_id) for r in merged.reminders] == [("b", "t2")]
 
 
 def test_incremental_removes_deleted_project() -> None:

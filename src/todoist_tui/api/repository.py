@@ -8,6 +8,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
@@ -63,6 +64,18 @@ class ApiTaskRepository:
         live, _deleted = _split(body.get("labels", []), _to_label)
         return live
 
+    async def reminders(self) -> list[Reminder]:
+        # No REST list endpoint used here; a full /sync is the source, like labels().
+        body = await self._client.sync("*")
+        live, _deleted = _split(body.get("reminders", []), _to_reminder)
+        return live
+
+    async def add_reminder(self, reminder: Reminder) -> None:
+        await self._client.add_reminder(reminder.item_id, reminder.to_api)
+
+    async def delete_reminder(self, reminder_id: str) -> None:
+        await self._client.delete_reminder(reminder_id)
+
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
 
@@ -110,6 +123,7 @@ class ApiSnapshotSource:
         filters, deleted_filters = _split(body.get("filters", []), _to_filter)
         sections, deleted_sections = _split(body.get("sections", []), _to_section)
         labels, deleted_labels = _split(body.get("labels", []), _to_label)
+        reminders, deleted_reminders = _split(body.get("reminders", []), _to_reminder)
         return SyncDelta(
             projects=projects,
             tasks=tasks,
@@ -123,6 +137,8 @@ class ApiSnapshotSource:
             deleted_section_ids=deleted_sections,
             labels=labels,
             deleted_label_ids=deleted_labels,
+            reminders=reminders,
+            deleted_reminder_ids=deleted_reminders,
         )
 
 
@@ -164,6 +180,10 @@ def _to_label(record: dict[str, Any]) -> Label:
         name=str(record["name"]),
         order=int(record.get("item_order", 0)),
     )
+
+
+def _to_reminder(record: dict[str, Any]) -> Reminder:
+    return Reminder.from_api(record)
 
 
 def _to_filter(record: dict[str, Any]) -> Filter:

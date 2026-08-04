@@ -72,7 +72,7 @@ class TodoistClient:
             data={
                 "sync_token": sync_token,
                 "resource_types": json.dumps(
-                    ["items", "projects", "filters", "sections", "labels"]
+                    ["items", "projects", "filters", "sections", "labels", "reminders"]
                 ),
             },
         )
@@ -124,6 +124,23 @@ class TodoistClient:
             }
         )
         await self._run(commands)
+
+    async def add_reminder(self, item_id: str, args: dict[str, Any]) -> None:
+        # `args` carries the type-specific payload (absolute due / relative
+        # minute_offset); a temp_id is required for the new reminder like label_add.
+        await self._run(
+            [
+                {
+                    "type": "reminder_add",
+                    "uuid": self._uuid(),
+                    "temp_id": self._uuid(),
+                    "args": {"item_id": item_id, **args},
+                }
+            ]
+        )
+
+    async def delete_reminder(self, reminder_id: str) -> None:
+        await self._command("reminder_delete", {"id": reminder_id})
 
     async def move_item(
         self, task_id: str, project_id: str, section_id: str | None = None

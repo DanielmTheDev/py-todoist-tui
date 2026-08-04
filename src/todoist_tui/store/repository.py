@@ -8,6 +8,7 @@ from todoist_tui.domain.filter_query import FilterQuery
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import (
     Snapshot,
     SnapshotCache,
@@ -110,6 +111,9 @@ class SnapshotTaskRepository:
     async def labels(self) -> list[Label]:
         return (await self._snapshot_now()).labels
 
+    async def reminders(self) -> list[Reminder]:
+        return (await self._snapshot_now()).reminders
+
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
         await self._invalidate()
@@ -144,6 +148,14 @@ class SnapshotTaskRepository:
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:
         await self._inner.set_labels(task_id, labels, create)
+        await self._invalidate()
+
+    async def add_reminder(self, reminder: Reminder) -> None:
+        await self._inner.add_reminder(reminder)
+        await self._invalidate()
+
+    async def delete_reminder(self, reminder_id: str) -> None:
+        await self._inner.delete_reminder(reminder_id)
         await self._invalidate()
 
     async def _invalidate(self) -> None:

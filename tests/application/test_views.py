@@ -21,6 +21,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
@@ -33,11 +34,13 @@ class FakeRepository:
         inbox: list[Task],
         projects: list[Project],
         sections: list[Section] | None = None,
+        reminders: list[Reminder] | None = None,
     ) -> None:
         self._today = today
         self._inbox = inbox
         self._projects = projects
         self._sections = sections or []
+        self._reminders = reminders or []
 
     async def today(self) -> list[Task]:
         return self._today
@@ -90,6 +93,13 @@ class FakeRepository:
 
     async def refresh(self) -> None: ...
 
+    async def reminders(self) -> list[Reminder]:
+        return self._reminders
+
+    async def add_reminder(self, reminder: Reminder) -> None: ...
+
+    async def delete_reminder(self, reminder_id: str) -> None: ...
+
 
 def _task(content: str, project_id: str) -> Task:
     return Task(
@@ -119,6 +129,25 @@ async def test_load_today_view_joins_project_name() -> None:
             project_id="220",
         )
     ]
+
+
+@pytest.mark.anyio
+async def test_load_view_joins_reminders_by_item_id() -> None:
+    repo = FakeRepository(
+        [_task("Buy milk", "220"), _task("Call", "220")],
+        [],
+        [Project(id="220", name="Errands")],
+        reminders=[
+            Reminder(id="r1", item_id="Buy milk", type="relative", minute_offset=30),
+            Reminder(id="r2", item_id="Buy milk", type="relative", minute_offset=0),
+        ],
+    )
+
+    rows = await load_view(repo, TODAY)
+
+    by_content = {row.content: row for row in rows}
+    assert [r.id for r in by_content["Buy milk"].reminders] == ["r1", "r2"]
+    assert by_content["Call"].reminders == ()
 
 
 @pytest.mark.anyio
@@ -487,6 +516,13 @@ class BarrierRepository:
     ) -> None: ...
 
     async def refresh(self) -> None: ...
+
+    async def reminders(self) -> list[Reminder]:
+        return []
+
+    async def add_reminder(self, reminder: Reminder) -> None: ...
+
+    async def delete_reminder(self, reminder_id: str) -> None: ...
 
 
 @pytest.mark.anyio

@@ -9,6 +9,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.task import Task, TaskId
@@ -31,6 +32,7 @@ class TaskRow:
     description: str = ""
     deadline: Deadline | None = None
     parent_id: str | None = None
+    reminders: tuple[Reminder, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,11 +141,14 @@ def _term_in(key: str) -> SearchTerm | None:
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
-    tasks, projects, sections = await asyncio.gather(
-        view.fetch(repo), repo.projects(), repo.sections()
+    tasks, projects, sections, reminders = await asyncio.gather(
+        view.fetch(repo), repo.projects(), repo.sections(), repo.reminders()
     )
     names = {project.id: project.name for project in projects}
     sections_by_id = {section.id: section for section in sections}
+    reminders_by_item: dict[str, list[Reminder]] = {}
+    for reminder in reminders:
+        reminders_by_item.setdefault(reminder.item_id, []).append(reminder)
     return [
         TaskRow(
             id=task.id,
@@ -167,6 +172,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             description=task.description,
             deadline=task.deadline,
             parent_id=task.parent_id,
+            reminders=tuple(reminders_by_item.get(str(task.id), ())),
         )
         for task in tasks
     ]

@@ -13,6 +13,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import (
@@ -28,6 +29,7 @@ from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
+from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 
 
@@ -40,6 +42,7 @@ class FakeRepository:
         filters: list[Filter] | None = None,
         sections: list[Section] | None = None,
         labels: list[Label] | None = None,
+        reminders: list[Reminder] | None = None,
     ) -> None:
         self._tasks = tasks
         self._projects = projects
@@ -47,6 +50,9 @@ class FakeRepository:
         self._filters = filters or []
         self._sections = sections or []
         self._labels = labels or []
+        self._reminders = reminders or []
+        self.added_reminders: list[Reminder] = []
+        self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
@@ -143,6 +149,22 @@ class FakeRepository:
         inbox_id = next((p.id for p in self._projects if p.is_inbox), None)
         if project_id != inbox_id:  # left the inbox: it no longer lists the task
             self._inbox = [t for t in self._inbox if t.id != task_id]
+
+    async def reminders(self) -> list[Reminder]:
+        return list(self._reminders)
+
+    async def add_reminder(self, reminder: Reminder) -> None:
+        self.added_reminders.append(reminder)
+        stored = (
+            reminder
+            if reminder.id
+            else replace(reminder, id=f"r{len(self._reminders) + 1}")
+        )
+        self._reminders = [*self._reminders, stored]
+
+    async def delete_reminder(self, reminder_id: str) -> None:
+        self.deleted_reminders.append(reminder_id)
+        self._reminders = [r for r in self._reminders if r.id != reminder_id]
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -437,6 +459,152 @@ async def test_scheduling_applies_to_the_whole_selection() -> None:
         tomorrow = Due(date=datetime.date(2026, 7, 29))
         assert set(repo.dues) == {(TaskId("A"), tomorrow), (TaskId("C"), tomorrow)}
         assert "selected" not in _status(app)
+
+
+def _timed(content: str) -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21), time=datetime.time(9, 0)),
+        project_id="220",
+    )
+
+
+@pytest.mark.anyio
+async def test_reminder_add_relative_to_a_task_with_due_time() -> None:
+    repo = FakeRepository([_timed("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("R")  # open the reminders manager
+        await pilot.pause()
+        assert isinstance(app.screen, RemindersScreen)
+        await pilot.press("a", "r", "3", "0", "enter")  # add relative, 30 min before
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
+            ("A", "relative", 30)
+        ]
+
+
+@pytest.mark.anyio
+async def test_reminder_delete_from_the_manager() -> None:
+    existing = Reminder(id="r1", item_id="A", type="relative", minute_offset=30)
+    repo = FakeRepository([_timed("A")], [], reminders=[existing])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("d")  # delete the highlighted reminder
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert repo.deleted_reminders == ["r1"]
+
+
+@pytest.mark.anyio
+async def test_reminder_add_over_a_selection_hits_each_task() -> None:
+    repo = FakeRepository([_timed("A"), _timed("B"), _timed("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("R")  # add-only flow for the selection
+        await pilot.pause()
+        await pilot.press("r", "h")  # relative, 1 hour before
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert {(r.item_id, r.minute_offset) for r in repo.added_reminders} == {
+            ("A", 60),
+            ("C", 60),
+        }
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_reminder_relative_over_selection_skips_tasks_without_due_time() -> None:
+    # A has a due time, B does not: a relative add reaches only A.
+    repo = FakeRepository([_timed("A"), _row("B")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("x")  # select B (cursor advanced onto B)
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("r", "h")  # relative, 1 hour before
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert {r.item_id for r in repo.added_reminders} == {"A"}
+
+
+@pytest.mark.anyio
+async def test_reminder_relative_with_no_eligible_task_reports() -> None:
+    # A selection of tasks that all lack a due time: bulk add-mode offers relative,
+    # but the request adds nothing and reports why.
+    repo = FakeRepository([_row("A"), _row("B")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("x")  # select B
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("r", "h")  # relative, 1 hour before
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert repo.added_reminders == []
+        assert "due time" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_reminder_add_absolute_picks_a_date() -> None:
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("a", "a")  # add -> absolute -> opens the date picker
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+        await pilot.press("m")  # tomorrow: 2026-07-29
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        (reminder,) = repo.added_reminders
+        assert reminder.item_id == "A"
+        assert reminder.type == "absolute"
+        assert reminder.due is not None
+        assert reminder.due.date == datetime.date(2026, 7, 29)
+
+
+@pytest.mark.anyio
+async def test_reminder_bell_shows_in_the_row() -> None:
+    existing = Reminder(id="r1", item_id="A", type="relative", minute_offset=30)
+    repo = FakeRepository([_timed("A")], [], reminders=[existing])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+
+        table = app.query_one(DataTable[object])
+        cells = [str(table.get_row_at(0)[c]) for c in range(len(table.get_row_at(0)))]
+        assert any("🔔" in cell for cell in cells)
 
 
 @pytest.mark.anyio

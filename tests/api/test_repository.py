@@ -11,6 +11,7 @@ from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
 
 
@@ -382,6 +383,119 @@ async def test_projects_maps_json_to_domain_project() -> None:
 
     assert (inbox.id, inbox.name, inbox.is_inbox) == ("220", "Inbox", True)
     assert (work.id, work.name, work.is_inbox) == ("9", "Work", False)
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_reminders_reads_via_sync_dropping_deleted() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "reminders": [
+                    {
+                        "id": "r1",
+                        "item_id": "t1",
+                        "type": "relative",
+                        "minute_offset": 30,
+                    },
+                    {
+                        "id": "r2",
+                        "item_id": "t1",
+                        "type": "absolute",
+                        "due": {"date": "2030-01-01T08:30:00"},
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (r,) = await repo.reminders()
+
+    assert (r.id, r.item_id, r.type, r.minute_offset) == ("r1", "t1", "relative", 30)
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_add_reminder_sends_reminder_add() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.add_reminder(
+        Reminder(id="", item_id="6X4", type="relative", minute_offset=30)
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "reminder_add"
+    assert commands[0]["args"] == {
+        "item_id": "6X4",
+        "type": "relative",
+        "minute_offset": 30,
+    }
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delete_reminder_sends_reminder_delete() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.delete_reminder("r9")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "reminder_delete", "uuid": "u-1", "args": {"id": "r9"}}
+    ]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_parses_reminders() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "reminders": [
+                    {
+                        "id": "r1",
+                        "item_id": "t1",
+                        "type": "relative",
+                        "minute_offset": 30,
+                    },
+                    {
+                        "id": "r2",
+                        "item_id": "t2",
+                        "type": "relative",
+                        "is_deleted": True,
+                    },
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert [r.id for r in delta.reminders] == ["r1"]
+    assert delta.deleted_reminder_ids == frozenset({"r2"})
 
 
 @pytest.mark.anyio
