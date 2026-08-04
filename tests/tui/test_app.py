@@ -2993,7 +2993,7 @@ async def test_arrangement_is_restored_per_view() -> None:
 
 
 @pytest.mark.anyio
-async def test_pressing_m_sets_current_view_as_home() -> None:
+async def test_pressing_H_sets_current_view_as_home() -> None:
     home = InMemoryHome()
     repo = FakeRepository(
         [_row("w1", "9")],
@@ -3010,7 +3010,7 @@ async def test_pressing_m_sets_current_view_as_home() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
 
-        await pilot.press("m")  # pin it as home
+        await pilot.press("H")  # pin it as home
         await pilot.pause()
         assert await home.get() == "project:9"
         assert "Home set to Work" in str(app.query_one("#status", Static).render())
@@ -3045,7 +3045,7 @@ async def test_startup_falls_back_to_today_when_home_target_gone() -> None:
 
 
 @pytest.mark.anyio
-async def test_pressing_H_returns_to_the_home_view() -> None:
+async def test_pressing_m_returns_to_the_home_view() -> None:
     home = InMemoryHome()
     await home.save("inbox")
     repo = FakeRepository(
@@ -3061,7 +3061,7 @@ async def test_pressing_H_returns_to_the_home_view() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert "Today" in str(app.query_one("#status", Static).render())
 
-        await pilot.press("H")  # jump home
+        await pilot.press("m")  # jump home
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert "Inbox" in str(app.query_one("#status", Static).render())
@@ -3084,7 +3084,7 @@ async def test_home_filter_view_refreshes_live() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         repo.refresh_filtered_queries.clear()
 
-        await pilot.press("H")  # back to the filter home
+        await pilot.press("m")  # back to the filter home
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert "My Filter" in str(app.query_one("#status", Static).render())

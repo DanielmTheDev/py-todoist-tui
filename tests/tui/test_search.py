@@ -227,7 +227,7 @@ async def test_a_search_view_can_be_set_as_home_and_reopened() -> None:
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("m")
+        await pilot.press("H")
         await pilot.pause()
     assert await home.get() == "search:milk"
 
