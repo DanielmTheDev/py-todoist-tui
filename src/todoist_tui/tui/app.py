@@ -478,43 +478,55 @@ class TodoistApp(App[None]):
 
     def action_delete(self) -> None:
         table = self.query_one(TaskTable)
-        task_id = self._cursor_task_id(table)
-        if task_id is None:  # empty table or cursor on a group header
-            return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
+        pairs = [
+            (TaskId(task_id), row)
+            for task_id in self._targets(table)
+            if (row := next((r for r in self._rows if str(r.id) == task_id), None))
+            is not None
+        ]
+        if not pairs:  # empty table or cursor on a group header
             return
         cursor_row = table.cursor_row  # follow the highlight down after the delete
+        prompt = (
+            f"Delete {len(pairs)} tasks?"
+            if len(pairs) > 1
+            else f"Delete “{pairs[0][1].content}”?"
+        )
         self.push_screen(
-            ConfirmScreen(f"Delete “{row.content}”?"),
-            lambda confirmed: self._on_delete_confirmed(
-                TaskId(task_id), row.due, cursor_row, confirmed
-            ),
+            ConfirmScreen(prompt),
+            lambda confirmed: self._on_delete_confirmed(pairs, cursor_row, confirmed),
         )
 
     def _on_delete_confirmed(
-        self, task_id: TaskId, due: Due | None, cursor_row: int, confirmed: bool | None
+        self,
+        pairs: list[tuple[TaskId, TaskRow]],
+        cursor_row: int,
+        confirmed: bool | None,
     ) -> None:
-        if not confirmed:  # dialog cancelled: leave the task untouched
+        if not confirmed:  # dialog cancelled: leave the tasks and selection untouched
             return
         table = self.query_one(TaskTable)
-        # optimistic: hide it (delete is permanent — no undo) and sync in the bg;
-        # keep it hidden across reloads until the server confirms it's gone
-        self._pending_close[str(task_id)] = due
-        self._rows = [r for r in self._rows if str(r.id) != str(task_id)]
+        # optimistic: hide them (delete is permanent — no undo) and sync in the bg;
+        # keep them hidden across reloads until the server confirms they're gone
+        dropped = {str(task_id) for task_id, _ in pairs}
+        for task_id, row in pairs:
+            self._pending_close[str(task_id)] = row.due
+        self._rows = [r for r in self._rows if str(r.id) not in dropped]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._focus_task_at(table, cursor_row)
-        self._delete(task_id)
+        self._delete([task_id for task_id, _ in pairs])
 
     @work
-    async def _delete(self, task_id: TaskId) -> None:
-        try:
-            await delete_task(self._repo, task_id)
-        except Exception as error:  # command rejected: unhide it, resync, report
-            self._pending_close.pop(str(task_id), None)
-            await self._reload(self._view)
-            self._set_status(f"Failed to delete task: {error}")
-            return
+    async def _delete(self, task_ids: list[TaskId]) -> None:
+        for task_id in task_ids:
+            try:
+                await delete_task(self._repo, task_id)
+            except Exception as error:  # command rejected: unhide it, resync, report
+                self._pending_close.pop(str(task_id), None)
+                await self._reload(self._view)
+                self._set_status(f"Failed to delete task: {error}")
+                return
         self._sync_now()  # pull server delta so the view reflects the delete
 
     def action_set_priority(self, name: str) -> None:

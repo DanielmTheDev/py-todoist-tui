@@ -316,6 +316,48 @@ async def test_undo_restores_the_whole_completed_batch() -> None:
 
 
 @pytest.mark.anyio
+async def test_deleting_a_selection_confirms_with_the_count() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("delete")
+
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "2 tasks" in str(app.screen.query_one("#confirm", Static).render())
+        await pilot.press("y")  # confirm
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert set(repo.deleted) == {TaskId("A"), TaskId("C")}
+        assert _content_col(app.query_one(DataTable[object])) == ["B"]
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_cancelling_a_selection_delete_keeps_all_and_the_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("delete")
+        await pilot.press("n")  # cancel
+        await pilot.pause()
+
+        assert repo.deleted == []
+        assert set(_content_col(app.query_one(DataTable[object]))) == {"A", "B", "C"}
+        assert "2 selected" in _status(app)  # selection survives a cancel
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),
