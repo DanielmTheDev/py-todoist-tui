@@ -562,37 +562,28 @@ class TodoistApp(App[None]):
 
     def action_set_due(self) -> None:
         table = self.query_one(TaskTable)
-        if table.row_count == 0:
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
             return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        task_id = _task_id_of(str(row_key.value))
-        if task_id is None:  # cursor is on a group header: nothing to schedule
-            return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
-            return
-        current = row.due.date if row.due is not None else None
-        current_time = row.due.time if row.due is not None else None
+        # one target keeps its date prefilled; a selection opens on a blank date
+        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        current = row.due.date if len(ids) == 1 and row and row.due else None
+        current_time = row.due.time if len(ids) == 1 and row and row.due else None
         self.push_screen(
             ScheduleScreen(self._clock.today(), current, current_time),
-            lambda result: self._on_scheduled(TaskId(task_id), result),
+            lambda result: self._on_scheduled([TaskId(i) for i in ids], result),
         )
 
     def action_set_deadline(self) -> None:
         table = self.query_one(TaskTable)
-        if table.row_count == 0:
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
             return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        task_id = _task_id_of(str(row_key.value))
-        if task_id is None:  # cursor is on a group header: nothing to set
-            return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
-            return
-        current = row.deadline.date if row.deadline is not None else None
+        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        current = row.deadline.date if len(ids) == 1 and row and row.deadline else None
         self.push_screen(
             ScheduleScreen(self._clock.today(), current, kind="deadline"),
-            lambda result: self._on_deadline(TaskId(task_id), result),
+            lambda result: self._on_deadline([TaskId(i) for i in ids], result),
         )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -645,66 +636,79 @@ class TodoistApp(App[None]):
             return
         self.push_screen(TaskDetailScreen(row, self._link_opener, self._clock.today()))
 
-    def _on_scheduled(self, task_id: TaskId, result: DueResult | None) -> None:
+    def _on_scheduled(self, task_ids: list[TaskId], result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
             return
-        # graft the picked date onto the existing rule so a recurring task keeps
+        targets = {str(t) for t in task_ids}
+        # graft the picked date onto each task's own rule so a recurring task keeps
         # recurring (moves its next occurrence) instead of losing the rule
-        original = next(
-            (row.due for row in self._rows if str(row.id) == str(task_id)), None
-        )
-        new_due = reschedule(original, result.due)
-        self._record_edit(str(task_id), due=new_due)
-        # optimistic: repaint the due cell (and re-group if grouped by due) now
+        edits: list[tuple[TaskId, Due | None]] = []
+        for task_id in task_ids:
+            original = next(
+                (row.due for row in self._rows if str(row.id) == str(task_id)), None
+            )
+            new_due = reschedule(original, result.due)
+            self._record_edit(str(task_id), due=new_due)
+            edits.append((task_id, new_due))
+        # optimistic: repaint the due cells (and re-group if grouped by due) now
+        by_id = {str(task_id): due for task_id, due in edits}
         self._rows = [
-            replace(row, due=new_due) if str(row.id) == str(task_id) else row
+            replace(row, due=by_id[str(row.id)]) if str(row.id) in targets else row
             for row in self._rows
         ]
-        if self._view.keeps is not None:  # drop it now if it left the view
+        if self._view.keeps is not None:  # drop those that left the view
             today = self._clock.today()
             self._rows = [row for row in self._rows if self._view.keeps(row, today)]
         elif self._active_server_query is not None:
             # a filter's membership needs the server; assume the reschedule drops
-            # it and let the background refresh restore it if it still matches
-            self._rows = [row for row in self._rows if str(row.id) != str(task_id)]
+            # them and let the background refresh restore any that still match
+            self._rows = [row for row in self._rows if str(row.id) not in targets]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
-        self._set_due(task_id, new_due)
+        self._set_due(edits)
 
     @work
-    async def _set_due(self, task_id: TaskId, due: Due | None) -> None:
-        try:
-            await set_due(self._repo, task_id, due)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(str(task_id), "due")
-            await self._reload(self._view)
-            self._set_status(f"Failed to set due: {error}")
-            return
+    async def _set_due(self, edits: list[tuple[TaskId, Due | None]]) -> None:
+        for task_id, due in edits:
+            try:
+                await set_due(self._repo, task_id, due)
+            except Exception as error:  # command rejected: resync, then report
+                self._forget_edit(str(task_id), "due")
+                await self._reload(self._view)
+                self._set_status(f"Failed to set due: {error}")
+                return
         self._sync_now()  # pull server delta; re-arranges if grouped/sorted by due
 
-    def _on_deadline(self, task_id: TaskId, result: DueResult | None) -> None:
+    def _on_deadline(self, task_ids: list[TaskId], result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
             return
         # the deadline screen carries a date-only Due; map it to a Deadline
         new_deadline = (
             Deadline(date=result.due.date) if result.due is not None else None
         )
-        self._record_edit(str(task_id), deadline=new_deadline)
-        self._rows = [  # optimistic: repaint the deadline cell now
-            replace(row, deadline=new_deadline) if str(row.id) == str(task_id) else row
+        targets = {str(t) for t in task_ids}
+        for task_id in task_ids:
+            self._record_edit(str(task_id), deadline=new_deadline)
+        self._rows = [  # optimistic: repaint the deadline cells now
+            replace(row, deadline=new_deadline) if str(row.id) in targets else row
             for row in self._rows
         ]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
-        self._set_deadline(task_id, new_deadline)
+        self._set_deadline(task_ids, new_deadline)
 
     @work
-    async def _set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
-        try:
-            await set_deadline(self._repo, task_id, deadline)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(str(task_id), "deadline")
-            await self._reload(self._view)
-            self._set_status(f"Failed to set deadline: {error}")
-            return
+    async def _set_deadline(
+        self, task_ids: list[TaskId], deadline: Deadline | None
+    ) -> None:
+        for task_id in task_ids:
+            try:
+                await set_deadline(self._repo, task_id, deadline)
+            except Exception as error:  # command rejected: resync, then report
+                self._forget_edit(str(task_id), "deadline")
+                await self._reload(self._view)
+                self._set_status(f"Failed to set deadline: {error}")
+                return
         self._sync_now()
 
     async def action_move_task(self) -> None:

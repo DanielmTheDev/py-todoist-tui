@@ -379,6 +379,50 @@ async def test_setting_priority_applies_to_the_whole_selection() -> None:
 
 
 @pytest.mark.anyio
+async def test_scheduling_applies_to_the_whole_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("t")  # one schedule screen for the selection
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+        await pilot.press("m")  # tomorrow: 2026-07-29
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        tomorrow = Due(date=datetime.date(2026, 7, 29))
+        assert set(repo.dues) == {(TaskId("A"), tomorrow), (TaskId("C"), tomorrow)}
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_setting_deadline_applies_to_the_whole_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("d")  # one deadline screen for the selection
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+        await pilot.press("m")  # tomorrow
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        by = Deadline(date=datetime.date(2026, 7, 29))
+        assert set(repo.deadlines) == {(TaskId("A"), by), (TaskId("C"), by)}
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),
