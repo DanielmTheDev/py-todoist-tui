@@ -236,7 +236,7 @@ class TodoistApp(App[None]):
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
-        self._last_undo: tuple[TaskId, TaskRow] | None = None
+        self._last_undo: list[tuple[TaskId, TaskRow]] = []  # last completed batch
         # tasks closed locally, kept hidden across reloads until the server's
         # snapshot reflects the change (gone, or a recurring task's new due)
         self._pending_close: dict[str, Due | None] = {}
@@ -420,54 +420,60 @@ class TodoistApp(App[None]):
 
     def action_complete(self) -> None:
         table = self.query_one(TaskTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        task_id = _task_id_of(str(row_key.value))
-        if task_id is None:  # cursor is on a group header: nothing to complete
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
             return
         cursor_row = table.cursor_row  # follow the highlight down to the neighbour
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        self._pending_close[task_id] = row.due if row is not None else None
-        # optimistic: drop it from the model and repaint, sync in the background
-        self._rows = [r for r in self._rows if str(r.id) != task_id]
+        undo: list[tuple[TaskId, TaskRow]] = []
+        for task_id in ids:
+            row = next((r for r in self._rows if str(r.id) == task_id), None)
+            self._pending_close[task_id] = row.due if row is not None else None
+            if row is not None:  # only a known row is restorable
+                undo.append((TaskId(task_id), row))
+        # optimistic: drop them from the model and repaint, sync in the background
+        dropped = set(ids)
+        self._rows = [r for r in self._rows if str(r.id) not in dropped]
+        self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._focus_task_at(table, cursor_row)
-        self._complete(TaskId(task_id), row)
+        self._complete([TaskId(i) for i in ids], undo)
 
     @work
-    async def _complete(self, task_id: TaskId, row: TaskRow | None) -> None:
-        try:
-            await complete_task(self._repo, task_id)
-        except Exception as error:  # command rejected: unhide it, resync, report
-            self._pending_close.pop(str(task_id), None)
-            await self._reload(self._view)
-            self._set_status(f"Failed to complete task: {error}")
-            return
-        if row is not None:  # only a confirmed close of a known row is undoable
-            self._last_undo = (task_id, row)
+    async def _complete(
+        self, task_ids: list[TaskId], undo: list[tuple[TaskId, TaskRow]]
+    ) -> None:
+        for task_id in task_ids:
+            try:
+                await complete_task(self._repo, task_id)
+            except Exception as error:  # command rejected: unhide it, resync, report
+                self._pending_close.pop(str(task_id), None)
+                await self._reload(self._view)
+                self._set_status(f"Failed to complete task: {error}")
+                return
+        self._last_undo = undo  # the whole confirmed batch reverses as one undo
         self._sync_now()  # pull server delta so the view reflects the close
 
     def action_undo(self) -> None:
-        if self._last_undo is None:
+        if not self._last_undo:
             return
-        task_id, row = self._last_undo
-        self._last_undo = None  # single-level: each undo reverses one close
-        self._pending_close.pop(str(task_id), None)  # reopened: no longer filter it out
-        # restore into the model and repaint; columns/placement rebuild naturally
-        if all(str(r.id) != str(task_id) for r in self._rows):
-            self._rows = [*self._rows, row]
+        batch = self._last_undo
+        self._last_undo = []  # single-level: each undo reverses the last close
+        for task_id, row in batch:
+            self._pending_close.pop(str(task_id), None)  # reopened: stop filtering it
+            if all(str(r.id) != str(task_id) for r in self._rows):
+                self._rows = [*self._rows, row]
         self._render(self._arrange(self._rows), self._view)
-        self._uncomplete(task_id)
+        self._uncomplete([task_id for task_id, _ in batch])
 
     @work
-    async def _uncomplete(self, task_id: TaskId) -> None:
-        try:
-            await uncomplete_task(self._repo, task_id)
-        except Exception as error:  # command rejected: resync, then report
-            await self._reload(self._view)
-            self._set_status(f"Failed to undo: {error}")
-            return
+    async def _uncomplete(self, task_ids: list[TaskId]) -> None:
+        for task_id in task_ids:
+            try:
+                await uncomplete_task(self._repo, task_id)
+            except Exception as error:  # command rejected: resync, then report
+                await self._reload(self._view)
+                self._set_status(f"Failed to undo: {error}")
+                return
         self._sync_now()  # pull server delta so the view reflects the reopen
 
     def action_delete(self) -> None:
@@ -1012,6 +1018,14 @@ class TodoistApp(App[None]):
         if task_rows:
             target = next((r for r in task_rows if r >= row), task_rows[-1])
             table.move_cursor(row=target)
+
+    def _targets(self, table: TaskTable) -> list[str]:
+        """The task ids an action applies to: the selection if any (in display
+        order), else the cursor row, else nothing."""
+        if self._selected:
+            return [str(r.id) for r in self._rows if str(r.id) in self._selected]
+        task_id = self._cursor_task_id(table)
+        return [task_id] if task_id is not None else []
 
     def _cursor_task_id(self, table: TaskTable) -> str | None:
         if table.row_count == 0:

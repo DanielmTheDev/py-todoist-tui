@@ -275,6 +275,47 @@ async def test_toggling_on_a_group_header_is_a_noop() -> None:
 
 
 @pytest.mark.anyio
+async def test_completing_applies_to_the_whole_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A, cursor -> B
+        await pilot.press("j")  # cursor -> C
+        await pilot.press("x")  # select C
+        await pilot.press("e")  # complete the selection {A, C}
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert set(repo.completed) == {TaskId("A"), TaskId("C")}
+        table = app.query_one(DataTable[object])
+        assert _content_col(table) == ["B"]  # only the unselected task remains
+        assert "selected" not in _status(app)  # selection cleared after the action
+
+
+@pytest.mark.anyio
+async def test_undo_restores_the_whole_completed_batch() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.press("j")
+        await pilot.press("x")  # select C
+        await pilot.press("e")  # complete {A, C}
+        await app.workers.wait_for_complete()
+        await pilot.press("z")  # undo the batch
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert set(repo.uncompleted) == {TaskId("A"), TaskId("C")}
+        table = app.query_one(DataTable[object])
+        assert set(_content_col(table)) == {"A", "B", "C"}
+
+
+@pytest.mark.anyio
 async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
     task = Task(
         id=TaskId("6X4"),
