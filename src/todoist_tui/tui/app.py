@@ -241,7 +241,7 @@ class TodoistApp(App[None]):
         self._picking_project_list = False  # guards against stacking the project list
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
-        self._active_filter_query: str | None = None
+        self._active_server_query: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("Loading…", id="status")
@@ -252,7 +252,7 @@ class TodoistApp(App[None]):
         table = self.query_one(TaskTable)
         table.cursor_type = "row"
         table.cell_padding = 2  # breathing room between columns; _render owns columns
-        self._view, self._active_filter_query = await self._resolve_home()
+        self._view, self._active_server_query = await self._resolve_home()
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
         self.set_interval(self.SYNC_INTERVAL, self._sync_now)
@@ -262,8 +262,8 @@ class TodoistApp(App[None]):
         self._set_syncing(True)
         try:
             await self._repo.refresh()
-            if self._active_filter_query is not None:  # keep the open filter live
-                await self._repo.refresh_filtered(self._active_filter_query)
+            if self._active_server_query is not None:  # keep the open filter live
+                await self._repo.refresh_filtered(self._active_server_query)
             await self._reload(self._view)
         except Exception:  # offline or sync failed: keep the cached view
             pass
@@ -298,7 +298,7 @@ class TodoistApp(App[None]):
 
     async def action_go_home(self) -> None:
         view, query = await self._resolve_home()
-        self._active_filter_query = query
+        self._active_server_query = query
         if query is not None:  # a filter home: revalidate it live like the picker
             self._view = view
             self._open_filter(view, query)
@@ -322,11 +322,11 @@ class TodoistApp(App[None]):
         return view, query_for_key(key, filters)
 
     def action_view_today(self) -> None:
-        self._active_filter_query = None
+        self._active_server_query = None
         self._switch_to(TODAY)
 
     def action_view_inbox(self) -> None:
-        self._active_filter_query = None
+        self._active_server_query = None
         self._switch_to(INBOX)
 
     async def action_view_filters(self) -> None:
@@ -349,7 +349,7 @@ class TodoistApp(App[None]):
         self._picking_filter = False
         if chosen is None:  # picker was cancelled
             return
-        self._active_filter_query = chosen.query
+        self._active_server_query = chosen.query
         self._view = filter_view(chosen)
         self._open_filter(self._view, chosen.query)
 
@@ -363,7 +363,7 @@ class TodoistApp(App[None]):
     def _on_search_term(self, term: SearchTerm | None) -> None:
         if term is None:  # search was cancelled
             return
-        self._active_filter_query = term.query
+        self._active_server_query = term.query
         self._view = search_view(term)
         self._open_filter(self._view, term.query)
 
@@ -387,7 +387,7 @@ class TodoistApp(App[None]):
         self._picking_project_list = False
         if chosen is None:  # picker was cancelled
             return
-        self._active_filter_query = None  # a project view isn't a saved filter
+        self._active_server_query = None  # a project view isn't a saved filter
         self._switch_to(project_view(chosen))
 
     @work(exclusive=True, group="reload")
@@ -607,7 +607,7 @@ class TodoistApp(App[None]):
         if self._view.keeps is not None:  # drop it now if it left the view
             today = self._clock.today()
             self._rows = [row for row in self._rows if self._view.keeps(row, today)]
-        elif self._active_filter_query is not None:
+        elif self._active_server_query is not None:
             # a filter's membership needs the server; assume the reschedule drops
             # it and let the background refresh restore it if it still matches
             self._rows = [row for row in self._rows if str(row.id) != str(task_id)]
@@ -708,7 +708,7 @@ class TodoistApp(App[None]):
         elif self._view.keeps is not None:  # membership is decidable here and now
             today = self._clock.today()
             self._rows = [r for r in self._rows if self._view.keeps(r, today)]
-        elif self._active_filter_query is not None:
+        elif self._active_server_query is not None:
             # a filter's membership needs the server; assume the move drops it and
             # let the background refresh restore it if it still matches
             self._rows = [r for r in self._rows if str(r.id) != str(task_id)]

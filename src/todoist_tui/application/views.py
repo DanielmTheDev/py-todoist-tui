@@ -56,6 +56,8 @@ def _due_today(row: TaskRow, today: datetime.date) -> bool:
     return row.due is not None and row.due.date == today
 
 
+_SEARCH_PREFIX = "search:"
+
 TODAY = View("Today", "today", lambda repo: repo.today(), keeps=_due_today)
 INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
 
@@ -73,7 +75,7 @@ def search_view(term: SearchTerm) -> View:
     """
     return View(
         f"Search: {term.text}",
-        f"search:{term.text}",
+        f"{_SEARCH_PREFIX}{term.text}",
         lambda repo: repo.filtered(term.query),
         keeps=lambda row, _today: term.matches(row.content, row.description),
     )
@@ -110,10 +112,9 @@ def view_from_key(
         target = key[len("filter:") :]
         found = next((f for f in filters if f.id == target), None)
         return filter_view(found) if found is not None else None
-    if key.startswith("search:"):
-        term = parse_search(key[len("search:") :])
-        # a hand-edited or stale key must not be able to provoke a 400
-        return search_view(term) if isinstance(term, SearchTerm) else None
+    term = _term_in(key)
+    if term is not None:
+        return search_view(term)
     return None
 
 
@@ -122,10 +123,19 @@ def query_for_key(key: str, filters: list[Filter]) -> str | None:
 
     Companion to `view_from_key`, so knowledge of the key format stays here.
     """
-    if key.startswith("search:"):
-        term = parse_search(key[len("search:") :])
-        return term.query if isinstance(term, SearchTerm) else None
+    term = _term_in(key)
+    if term is not None:
+        return term.query
     return next((f.query for f in filters if f"filter:{f.id}" == key), None)
+
+
+def _term_in(key: str) -> SearchTerm | None:
+    """The search term a key carries, or None — including when a hand-edited or
+    stale key carries one the API would reject."""
+    if not key.startswith(_SEARCH_PREFIX):
+        return None
+    term = parse_search(key[len(_SEARCH_PREFIX) :])
+    return term if isinstance(term, SearchTerm) else None
 
 
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
