@@ -171,7 +171,107 @@ async def test_footer_shows_only_the_help_hint() -> None:
             if ab.binding.show
         }
         assert "question_mark" in shown
-        assert not ({"e", "z", "t", "i", "f", "p", "r", "v"} & shown)  # all hidden
+        # all hidden, including the new multi-select keys
+        assert not ({"e", "z", "t", "i", "f", "p", "r", "v", "x", "asterisk"} & shown)
+
+
+def _status(app: TodoistApp) -> str:
+    return str(app.query_one("#status", Static).render())
+
+
+def _selected_rows(table: DataTable[object]) -> list[int]:
+    """Row indices whose title cell carries the selection accent (magenta)."""
+    marked: list[int] = []
+    for i in range(table.row_count):
+        cell = table.get_row_at(i)[1]
+        styles = str(getattr(cell, "style", "")) + " ".join(
+            str(span.style) for span in getattr(cell, "spans", [])
+        )
+        if "magenta" in styles:
+            marked.append(i)
+    return marked
+
+
+@pytest.mark.anyio
+async def test_x_selects_the_cursor_task_and_advances() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert _selected_rows(table) == [0]  # A accented, no rightward shift
+        assert _content_col(table)[0] == "A"  # title text unchanged
+        assert table.cursor_row == 1  # cursor advanced to B
+        assert "1 selected" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_x_again_deselects_the_task() -> None:
+    repo = FakeRepository([_row("A"), _row("B")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("x")  # select A, cursor -> B
+        await pilot.press("k")  # back to A
+        await pilot.press("x")  # deselect A
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert _selected_rows(table) == []
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_select_all_marks_every_task() -> None:
+    repo = FakeRepository([_row("A"), _row("B"), _row("C")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("*")
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert _selected_rows(table) == [0, 1, 2]
+        assert "3 selected" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_escape_clears_the_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("*")
+        await pilot.press("escape")
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert _selected_rows(table) == []
+        assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_toggling_on_a_group_header_is_a_noop() -> None:
+    repo = FakeRepository([_row("A")], [Project(id="220", name="Errands")])
+    app = TodoistApp(
+        repo, arrangements=await _grouped_by_project(), clock=FakeClock(_TODAY)
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        table = app.query_one(DataTable[object])
+        table.move_cursor(row=0)  # the group header
+        await pilot.press("x")
+        await pilot.pause()
+
+        assert "selected" not in _status(app)
 
 
 @pytest.mark.anyio

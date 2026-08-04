@@ -205,6 +205,9 @@ class TodoistApp(App[None]):
         Binding("v", "move_task", "Move", show=False),
         Binding("at", "set_labels", "Labels", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
+        Binding("x", "toggle_select", "Select", show=False),
+        Binding("asterisk", "select_all", "Select all", show=False),
+        Binding("escape", "clear_selection", "Clear selection", show=False),
         Binding("1", "set_priority('P1')", "P1", show=False),
         Binding("2", "set_priority('P2')", "P2", show=False),
         Binding("3", "set_priority('P3')", "P3", show=False),
@@ -229,6 +232,7 @@ class TodoistApp(App[None]):
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
         self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
+        self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
         self._syncing = False
         self._status_base = ""
@@ -578,6 +582,34 @@ class TodoistApp(App[None]):
         # stays for the footer hint).
         self.action_open_detail()
 
+    def action_toggle_select(self) -> None:
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        cursor_row = table.cursor_row
+        if task_id in self._selected:
+            self._selected.discard(task_id)
+        else:
+            self._selected.add(task_id)
+        self._render(self._arrange(self._rows), self._view)
+        self._focus_task_at(table, cursor_row + 1)  # advance for rapid marking
+
+    def action_select_all(self) -> None:
+        table = self.query_one(TaskTable)
+        for row in range(table.row_count):
+            key = table.coordinate_to_cell_key(Coordinate(row, 0)).row_key
+            task_id = _task_id_of(str(key.value))
+            if task_id is not None:  # skip group-header rows
+                self._selected.add(task_id)
+        self._render(self._arrange(self._rows), self._view)
+
+    def action_clear_selection(self) -> None:
+        if not self._selected:
+            return
+        self._selected.clear()
+        self._render(self._arrange(self._rows), self._view)
+
     def action_help(self) -> None:
         if isinstance(self.screen, HelpScreen):  # already open
             return
@@ -813,6 +845,7 @@ class TodoistApp(App[None]):
         rows = self._drop_closed(rows)
         rows = self._apply_pending_edits(rows)
         self._rows = rows  # retained so a priority keypress can re-arrange locally
+        self._selected &= {str(r.id) for r in rows}  # drop ids gone from the view
         self._render(self._arrange(rows), view)
 
     def _record_edit(self, task_id: str, **fields: object) -> None:
@@ -953,6 +986,8 @@ class TodoistApp(App[None]):
                 cells.append(_deadline_cell(row.deadline, today))
             if show_project:
                 cells.append(_project_cell(row.project_name))
+            if str(row.id) in self._selected:  # accent the whole row, no shift
+                cells = [_accent(cell) for cell in cells]
             table.add_row(*cells, key=_task_key(index, row.id))
             if first_task_row is None:
                 first_task_row = index
@@ -998,8 +1033,9 @@ class TodoistApp(App[None]):
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
         summary = _arrangement_summary(self._arrangement)
+        selected = f"  · {len(self._selected)} selected" if self._selected else ""
         marker = "  ⟳" if self._syncing else ""
-        status.update(f"{self._status_base}{summary}{marker}")
+        status.update(f"{self._status_base}{summary}{selected}{marker}")
 
 
 def _count_status(title: str, count: int) -> str:
@@ -1007,6 +1043,15 @@ def _count_status(title: str, count: int) -> str:
 
 
 _RECURRING_GLYPH = " ↻"
+_SELECT_STYLE = "bold magenta"  # accents every cell of a multi-selected row
+
+
+def _accent(cell: Text | str) -> Text:
+    """The cell recolored with the selection accent over its whole width, so a
+    selected row stands out without shifting its text."""
+    text = Text(cell) if isinstance(cell, str) else cell.copy()
+    text.stylize(_SELECT_STYLE)
+    return text
 
 
 def _due_cell(due: Due | None, today: datetime.date) -> Text | str:
