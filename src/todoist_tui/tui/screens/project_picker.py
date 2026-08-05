@@ -55,15 +55,17 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
         sections: list[Section],
         current_project: str | None = None,
         current_section: str | None = None,
+        placeholder: str = "Move to project or section…",
     ) -> None:
         super().__init__()
         self._targets = _targets(projects, sections)
         self._visible = list(self._targets)
         self._current_project = current_project
         self._current_section = current_section
+        self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="Move to project or section…")
+        yield Input(placeholder=self._placeholder)
         yield OptionList(*(_option(t) for t in self._targets))
 
     def on_mount(self) -> None:

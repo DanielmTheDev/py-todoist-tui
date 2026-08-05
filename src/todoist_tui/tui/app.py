@@ -16,6 +16,7 @@ from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
+from todoist_tui.application.duplicate import duplicate_project, duplicate_section
 from todoist_tui.application.move_task import move_task
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
@@ -77,6 +78,7 @@ from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScre
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
+from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _INDENT = "  "  # per nesting level, for group headers and their tasks
@@ -207,6 +209,7 @@ class TodoistApp(App[None]):
         Binding("t", "set_due", "Due", show=False),
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
+        Binding("Y", "duplicate", "Duplicate project/section", show=False),
         Binding("at", "set_labels", "Labels", show=False),
         Binding("R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
@@ -250,6 +253,7 @@ class TodoistApp(App[None]):
         self._pending_edits: dict[str, dict[str, object]] = {}
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
+        self._picking_duplicate = False  # guards the duplicate picker + name prompt
         self._picking_project_list = False  # guards against stacking the project list
         self._picking_labels = False  # guards against stacking the labels editor
         # the server query of the open view — a saved filter's, or a search's —
@@ -807,6 +811,58 @@ class TodoistApp(App[None]):
                 self._set_status(f"Failed to move task: {error}")
                 return
         self._sync_now()  # pull server delta; re-arranges if grouped by project
+
+    async def action_duplicate(self) -> None:
+        if self._picking_duplicate:  # already loading or a step already open
+            return
+        self._picking_duplicate = True
+        try:
+            projects = await self._repo.projects()
+            sections = await self._repo.sections()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load projects: {error}")
+            self._picking_duplicate = False
+            return
+        self.push_screen(
+            ProjectPickerScreen(
+                projects, sections, placeholder="Duplicate project or section…"
+            ),
+            self._on_duplicate_target,
+        )
+
+    def _on_duplicate_target(self, target: MoveTarget | None) -> None:
+        if target is None:  # picker cancelled
+            self._picking_duplicate = False
+            return
+        source = target.section_name or target.project_name
+        self.push_screen(
+            TextPromptScreen("Name the copy", f"{source} (copy)"),
+            lambda name: self._on_duplicate_named(target, name),
+        )
+
+    def _on_duplicate_named(self, target: MoveTarget, name: str | None) -> None:
+        self._picking_duplicate = False
+        if name is None:  # naming cancelled
+            return
+        source = target.section_name or target.project_name
+        self._set_status(f"Duplicating {source}…")
+        self._duplicate(target, name)
+
+    @work
+    async def _duplicate(self, target: MoveTarget, name: str) -> None:
+        try:
+            if target.section_id is not None:
+                sections = await self._repo.sections()
+                section = next((s for s in sections if s.id == target.section_id), None)
+                if section is None:
+                    raise LookupError(f"section {target.section_id} not found")
+                await duplicate_section(self._repo, section, name)
+            else:
+                await duplicate_project(self._repo, target.project_id, name)
+        except Exception as error:  # command rejected: report, keep the view
+            self._set_status(f"Failed to duplicate: {error}")
+            return
+        self._sync_now()  # pull the real new entities into the view
 
     async def action_set_labels(self) -> None:
         if self._picking_labels:  # already loading or editor already open

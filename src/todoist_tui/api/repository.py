@@ -4,6 +4,7 @@ from typing import Any
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.duplication import DuplicationPlan, NewTask
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -106,6 +107,26 @@ class ApiTaskRepository:
     ) -> None:
         await self._client.update_item_labels(str(task_id), list(labels), list(create))
 
+    async def apply_creation(self, plan: DuplicationPlan) -> None:
+        specs: list[tuple[str, str, dict[str, Any]]] = []
+        for project in plan.projects:
+            specs.append(("project_add", project.temp_id, {"name": project.name}))
+        for section in plan.sections:
+            specs.append(
+                (
+                    "section_add",
+                    section.temp_id,
+                    {
+                        "name": section.name,
+                        "project_id": section.project_ref,
+                        "section_order": section.order,
+                    },
+                )
+            )
+        for task in plan.tasks:
+            specs.append(("item_add", task.temp_id, _item_add_args(task)))
+        await self._client.create_entities(specs)
+
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""
 
@@ -154,6 +175,29 @@ def _split[T](
     live = [to_domain(r) for r in records if not gone(r)]
     deleted = frozenset(str(r["id"]) for r in records if gone(r))
     return live, deleted
+
+
+def _item_add_args(task: NewTask) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "content": task.content,
+        "project_id": task.project_ref,
+        "priority": task.priority.to_api,
+        "child_order": task.child_order,
+    }
+    if task.parent_ref is not None:
+        # a subtask inherits its parent's section; sending section_id is redundant
+        args["parent_id"] = task.parent_ref
+    elif task.section_ref is not None:
+        args["section_id"] = task.section_ref
+    if task.labels:
+        args["labels"] = list(task.labels)
+    if task.description:
+        args["description"] = task.description
+    if task.due is not None:
+        args["due"] = task.due.to_api
+    if task.deadline is not None:
+        args["deadline"] = task.deadline.to_api
+    return args
 
 
 def _to_project(record: dict[str, Any]) -> Project:

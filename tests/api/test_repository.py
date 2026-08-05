@@ -1067,3 +1067,106 @@ async def test_refresh_is_a_noop() -> None:
     repo = ApiTaskRepository(TodoistClient.create("tok"))
 
     assert await repo.refresh() is None  # no cache to invalidate, no network trip
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_apply_creation_maps_plan_to_sync_commands() -> None:
+    from todoist_tui.domain.duplication import (
+        DuplicationPlan,
+        NewProject,
+        NewSection,
+        NewTask,
+    )
+
+    ids = iter(["u-1", "u-2", "u-3", "u-4"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={"sync_status": {u: "ok" for u in ["u-1", "u-2", "u-3", "u-4"]}},
+        )
+    )
+    repo = ApiTaskRepository(
+        TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+    )
+
+    plan = DuplicationPlan(
+        projects=(NewProject(temp_id="tp", name="Work (copy)"),),
+        sections=(NewSection(temp_id="ts", name="Now", order=2, project_ref="tp"),),
+        tasks=(
+            NewTask(
+                temp_id="t1",
+                content="parent",
+                priority=Priority.P1,
+                due=Due(date=datetime.date(2026, 7, 21)),
+                deadline=Deadline(date=datetime.date(2026, 8, 1)),
+                labels=("home",),
+                description="notes",
+                child_order=0,
+                project_ref="tp",
+                section_ref="ts",
+                parent_ref=None,
+            ),
+            NewTask(
+                temp_id="t2",
+                content="child",
+                priority=Priority.P4,
+                due=None,
+                deadline=None,
+                labels=(),
+                description="",
+                child_order=1,
+                project_ref="tp",
+                section_ref="ts",
+                parent_ref="t1",
+            ),
+        ),
+    )
+
+    await repo.apply_creation(plan)
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "project_add",
+            "uuid": "u-1",
+            "temp_id": "tp",
+            "args": {"name": "Work (copy)"},
+        },
+        {
+            "type": "section_add",
+            "uuid": "u-2",
+            "temp_id": "ts",
+            "args": {"name": "Now", "project_id": "tp", "section_order": 2},
+        },
+        {
+            "type": "item_add",
+            "uuid": "u-3",
+            "temp_id": "t1",
+            "args": {
+                "content": "parent",
+                "project_id": "tp",
+                "priority": 4,
+                "child_order": 0,
+                "section_id": "ts",
+                "labels": ["home"],
+                "description": "notes",
+                "due": {"date": "2026-07-21"},
+                "deadline": {"date": "2026-08-01"},
+            },
+        },
+        {
+            "type": "item_add",
+            "uuid": "u-4",
+            "temp_id": "t2",
+            "args": {
+                "content": "child",
+                "project_id": "tp",
+                "priority": 1,
+                "child_order": 1,
+                "parent_id": "t1",
+            },
+        },
+    ]

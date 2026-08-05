@@ -5,6 +5,7 @@ import pytest
 
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.duplication import DuplicationPlan, NewProject
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -65,6 +66,7 @@ class FakeInner:
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
+        self.applied: list[DuplicationPlan] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -128,6 +130,9 @@ class FakeInner:
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:
         self.label_edits.append((task_id, labels, create))
+
+    async def apply_creation(self, plan: DuplicationPlan) -> None:
+        self.applied.append(plan)
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -373,6 +378,25 @@ async def test_set_labels_delegates_then_invalidates_filter_cache() -> None:
     await repo.filtered("a")
 
     assert inner.label_edits == [(TaskId("x"), ("home",), ("home",))]
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_apply_creation_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+    plan = DuplicationPlan(
+        projects=(NewProject(temp_id="tp", name="Work (copy)"),), sections=(), tasks=()
+    )
+
+    await repo.filtered("a")
+    await repo.apply_creation(plan)  # a new project invalidates cached results
+    await repo.filtered("a")
+
+    assert inner.applied == [plan]
     assert inner.filtered_queries == ["a", "a"]
 
 

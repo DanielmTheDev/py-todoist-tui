@@ -8,6 +8,10 @@ import httpx
 from todoist_tui.domain.search import InvalidSearchQuery
 
 BASE_URL = "https://api.todoist.com/api/v1"
+# httpx defaults to 5s; a large batched duplicate create can exceed that
+# server-side, and a read timeout there leaves the write committed but reports
+# a failure. 30s gives ample headroom for the biggest project/section copies.
+_TIMEOUT_SECONDS = 30.0
 
 
 def _random_uuid() -> str:
@@ -34,7 +38,9 @@ class TodoistClient:
         cls, token: str, uuid_factory: Callable[[], str] = _random_uuid
     ) -> "TodoistClient":
         http = httpx.AsyncClient(
-            base_url=BASE_URL, headers={"Authorization": f"Bearer {token}"}
+            base_url=BASE_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_TIMEOUT_SECONDS,
         )
         return cls(http, uuid_factory)
 
@@ -153,6 +159,19 @@ class TodoistClient:
             else {"id": task_id, "project_id": project_id}
         )
         await self._command("item_move", args)
+
+    async def create_entities(
+        self, specs: list[tuple[str, str, dict[str, Any]]]
+    ) -> None:
+        """Batch-create resources in one trip. Each spec is
+        `(command_type, temp_id, args)`; args may reference another spec's
+        `temp_id` (as project_id/section_id/parent_id) — Todoist resolves those
+        within the batch."""
+        commands = [
+            {"type": kind, "uuid": self._uuid(), "temp_id": temp_id, "args": args}
+            for kind, temp_id, args in specs
+        ]
+        await self._run(commands)
 
     async def _command(self, kind: str, args: dict[str, Any]) -> None:
         await self._run([{"type": kind, "uuid": self._uuid(), "args": args}])

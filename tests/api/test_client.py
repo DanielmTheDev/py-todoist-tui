@@ -558,3 +558,57 @@ async def test_delete_item_raises_on_command_error() -> None:
     with pytest.raises(SyncCommandError, match="not found"):
         await client.delete_item("nope")
     await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_create_entities_wraps_specs_in_temp_id_commands() -> None:
+    ids = iter(["u-1", "u-2"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200, json={"sync_status": {"u-1": "ok", "u-2": "ok"}}
+        )
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+
+    await client.create_entities(
+        [
+            ("project_add", "tp", {"name": "Work (copy)"}),
+            ("section_add", "ts", {"name": "Now", "project_id": "tp"}),
+        ]
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "project_add",
+            "uuid": "u-1",
+            "temp_id": "tp",
+            "args": {"name": "Work (copy)"},
+        },
+        {
+            "type": "section_add",
+            "uuid": "u-2",
+            "temp_id": "ts",
+            "args": {"name": "Now", "project_id": "tp"},
+        },
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_requests_use_a_generous_timeout() -> None:
+    # a big batched duplicate create can take >5s server-side; httpx's 5s
+    # default would ReadTimeout after the server already committed
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.create_entities([("project_add", "tp", {"name": "x"})])
+
+    assert route.calls.last.request.extensions["timeout"]["read"] == 30.0
+    await client.aclose()

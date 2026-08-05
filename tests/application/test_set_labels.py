@@ -3,6 +3,7 @@ import pytest
 from todoist_tui.application.set_labels import set_labels
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.duplication import DuplicationPlan
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -67,6 +68,8 @@ class FakeRepository:
         self.label_edits.append((task_id, labels, create))
 
     async def refresh(self) -> None: ...
+
+    async def apply_creation(self, plan: DuplicationPlan) -> None: ...
 
     async def reminders(self) -> list[Reminder]:
         return []

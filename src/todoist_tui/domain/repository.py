@@ -13,6 +13,7 @@ from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
 if TYPE_CHECKING:
+    from todoist_tui.domain.duplication import DuplicationPlan
     from todoist_tui.domain.sync_delta import SyncDelta
 
 
@@ -64,6 +65,8 @@ class TaskRepository(Protocol):
     async def add_reminder(self, reminder: Reminder) -> None: ...
 
     async def delete_reminder(self, reminder_id: str) -> None: ...
+
+    async def apply_creation(self, plan: "DuplicationPlan") -> None: ...
 
     async def refresh(self) -> None: ...
 

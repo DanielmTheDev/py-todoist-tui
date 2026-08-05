@@ -9,6 +9,7 @@ from textual.widgets import DataTable, Footer, Static
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
+from todoist_tui.domain.duplication import DuplicationPlan
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -31,6 +32,7 @@ from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
+from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 
 
 class FakeRepository:
@@ -61,6 +63,7 @@ class FakeRepository:
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.applied: list[DuplicationPlan] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -165,6 +168,9 @@ class FakeRepository:
     async def delete_reminder(self, reminder_id: str) -> None:
         self.deleted_reminders.append(reminder_id)
         self._reminders = [r for r in self._reminders if r.id != reminder_id]
+
+    async def apply_creation(self, plan: DuplicationPlan) -> None:
+        self.applied.append(plan)
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -651,6 +657,69 @@ async def test_moving_applies_to_the_whole_selection() -> None:
 
         assert set(repo.moves) == {(TaskId("A"), "9", None), (TaskId("B"), "9", None)}
         assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_duplicate_project_copies_it_under_a_new_name() -> None:
+    repo = FakeRepository(
+        [_row("A", "9"), _row("B", "9")],
+        [Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("Y")  # open the duplicate picker
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+        await pilot.press("enter")  # highlight + choose "Work"
+        await pilot.pause()
+        assert isinstance(app.screen, TextPromptScreen)
+        await pilot.press("enter")  # accept the "Work (copy)" default
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert len(repo.applied) == 1
+        plan = repo.applied[0]
+        assert plan.projects[0].name == "Work (copy)"
+        assert {t.content for t in plan.tasks} == {"A", "B"}
+
+
+@pytest.mark.anyio
+async def test_duplicate_section_copies_its_tasks_into_the_project() -> None:
+    task = Task(
+        id=TaskId("A"),
+        content="A",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+        section_id="s1",
+    )
+    repo = FakeRepository(
+        [task],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("Y")
+        await pilot.pause()
+        await pilot.press("down")  # Work -> Work / Planning
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TextPromptScreen)
+        await pilot.press("enter")  # accept "Planning (copy)"
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert len(repo.applied) == 1
+        plan = repo.applied[0]
+        assert plan.projects == ()
+        assert plan.sections[0].name == "Planning (copy)"
+        assert plan.sections[0].project_ref == "9"
+        assert {t.content for t in plan.tasks} == {"A"}
 
 
 @pytest.mark.anyio
