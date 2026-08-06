@@ -447,6 +447,108 @@ def test_group_header_counts_only_visible_lines_when_collapsed() -> None:
     assert header.count == 1  # only the visible parent line
 
 
+# --- group fold/collapse ---
+
+
+def test_group_header_carries_its_label_path() -> None:
+    rows = [Row("1", "w-top", Priority.P1, project_name="Work")]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
+        collapsed=frozenset(),
+    )
+
+    headers = [r for r in result if isinstance(r, GroupHeader)]
+    assert [h.path for h in headers] == [("Work",), ("Work", Priority.P1.label)]
+    assert all(h.collapsed is False for h in headers)
+
+
+def test_collapsed_group_shows_its_header_alone() -> None:
+    rows = [Row("1", "w1", project_name="Work"), Row("2", "h1", project_name="Home")]
+
+    result = arrange(
+        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Work",)})
+    )
+
+    assert _shape(result) == [("H", 0, "Home"), ("T", 1, "h1"), ("H", 0, "Work")]
+    work = next(r for r in result if isinstance(r, GroupHeader) and r.label == "Work")
+    assert work.collapsed is True
+
+
+def test_collapsed_group_header_still_counts_its_hidden_tasks() -> None:
+    rows = [Row("1", "w1", project_name="Work"), Row("2", "w2", project_name="Work")]
+
+    result = arrange(
+        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Work",)})
+    )
+
+    header = next(r for r in result if isinstance(r, GroupHeader))
+    assert header.count == 2  # the fold hides the lines, not the tally
+
+
+def test_collapsing_an_outer_group_hides_its_inner_headers() -> None:
+    rows = [Row("1", "w-top", Priority.P1, project_name="Work")]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
+        collapsed=frozenset({("Work",)}),
+    )
+
+    assert _shape(result) == [("H", 0, "Work")]
+
+
+def test_collapsing_an_inner_group_keeps_its_siblings_visible() -> None:
+    rows = [
+        Row("1", "w-top", Priority.P1, project_name="Work"),
+        Row("2", "w-low", Priority.P4, project_name="Work"),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
+        collapsed=frozenset({("Work", Priority.P1.label)}),
+    )
+
+    assert _shape(result) == [
+        ("H", 0, "Work"),
+        ("H", 1, Priority.P1.label),
+        ("H", 1, Priority.P4.label),
+        ("T", 2, "w-low"),
+    ]
+
+
+def test_headerless_section_tasks_cannot_be_folded_away() -> None:
+    rows = [
+        Row("1", "loose", section_name=None),
+        Row("2", "in-sec", section_name="Planning", section_order=1),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        # the loose bucket's label names no header, so it stays put
+        collapsed=frozenset({("(no section)",)}),
+    )
+
+    assert _shape(result) == [
+        ("T", 0, "loose"),
+        ("H", 0, "Planning"),
+        ("T", 1, "in-sec"),
+    ]
+
+
+def test_a_collapsed_path_matching_no_group_changes_nothing() -> None:
+    rows = [Row("1", "w1", project_name="Work")]
+
+    result = arrange(
+        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Gone",)})
+    )
+
+    assert _shape(result) == [("H", 0, "Work"), ("T", 1, "w1")]
+
+
 # --- Arrangement invariants + serde ---
 
 

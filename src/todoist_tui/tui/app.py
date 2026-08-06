@@ -39,6 +39,7 @@ from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
     GroupHeader,
+    GroupPath,
     RenderRow,
     TaskLine,
     arrange,
@@ -85,6 +86,8 @@ from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _HEADER_WIDTH = 56  # target width of a group divider rule
+_FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
+_FOLD_SHUT = "▸ "  # subtree folded away
 
 
 def as_binding(entry: BindingType) -> Binding:
@@ -139,54 +142,31 @@ class InMemoryHome:
 
 
 class TaskTable(DataTable[object]):
-    """DataTable with vim j/k row nav and h/l subtask collapse/expand.
+    """DataTable with vim j/k row nav and h/l collapse/expand.
 
-    The cursor skips group headers. h/l don't move the column cursor (the table
-    is row-mode); they ask the app to collapse/expand the subtasks of the row
-    under the cursor.
+    The cursor rests on group headers too, since they fold. h/l don't move the
+    column cursor (the table is row-mode); they ask the app to collapse/expand
+    whatever the cursor sits on — a task's subtasks, or a group.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("h", "collapse", "Collapse", show=False),
-        Binding("l", "expand", "Expand", show=False),
+        Binding("h", "collapse", "Collapse task/group", show=False),
+        Binding("l", "expand", "Expand task/group", show=False),
     ]
 
     class Expand(Message):
-        """Reveal the subtasks of the row under the cursor."""
+        """Reveal the subtasks, or the folded group, under the cursor."""
 
     class Collapse(Message):
-        """Hide the subtasks of the row under the cursor, or jump to its parent."""
-
-    def action_cursor_down(self) -> None:
-        self._skip_to_task(step=1)
-
-    def action_cursor_up(self) -> None:
-        self._skip_to_task(step=-1)
+        """Fold the subtasks or group under the cursor, else step out to its parent."""
 
     def action_expand(self) -> None:
         self.post_message(self.Expand())
 
     def action_collapse(self) -> None:
         self.post_message(self.Collapse())
-
-    def _skip_to_task(self, step: int) -> None:
-        target = self._task_row_after(self.cursor_row, step)
-        if target is not None:  # None => no task that way: stay put
-            self.move_cursor(row=target)
-
-    def _task_row_after(self, start: int, step: int) -> int | None:
-        row = start + step
-        while 0 <= row < self.row_count:
-            if self._is_task_row(row):
-                return row
-            row += step  # traverse consecutive headers (nested grouping)
-        return None
-
-    def _is_task_row(self, row: int) -> bool:
-        key = self.coordinate_to_cell_key(Coordinate(row, 0)).row_key
-        return _task_id_of(str(key.value)) is not None
 
 
 class TodoistApp(App[None]):
@@ -242,6 +222,8 @@ class TodoistApp(App[None]):
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
         self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
+        self._collapsed: set[GroupPath] = set()  # groups folded to their header
+        self._header_paths: dict[int, GroupPath] = {}  # header row index → its group
         self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
         self._syncing = False
@@ -1021,9 +1003,10 @@ class TodoistApp(App[None]):
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
             return
-        self._arrangement = await self._arrangements.get(
-            view.key, view.default_arrangement
-        )
+        arrangement = await self._arrangements.get(view.key, view.default_arrangement)
+        if arrangement != self._arrangement:
+            self._collapsed.clear()  # regrouping makes the folded label paths stale
+        self._arrangement = arrangement
         rows = self._drop_closed(rows)
         rows = self._apply_pending_edits(rows)
         self._rows = rows  # retained so a priority keypress can re-arrange locally
@@ -1082,10 +1065,21 @@ class TodoistApp(App[None]):
         return prune(rows, lambda row: str(row.id) in self._pending_close)
 
     def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
-        return arrange(rows, self._arrangement, frozenset(self._expanded))
+        return arrange(
+            rows,
+            self._arrangement,
+            frozenset(self._expanded),
+            frozenset(self._collapsed),
+        )
 
     def on_task_table_expand(self, _message: TaskTable.Expand) -> None:
         table = self.query_one(TaskTable)
+        group = self._cursor_group_path(table)
+        if group is not None:  # on a group header: unfold it
+            if group in self._collapsed:
+                self._collapsed.discard(group)
+                self._render(self._arrange(self._rows), self._view)
+            return
         task_id = self._cursor_task_id(table)
         if task_id is None or task_id in self._expanded:
             return
@@ -1096,6 +1090,14 @@ class TodoistApp(App[None]):
 
     def on_task_table_collapse(self, _message: TaskTable.Collapse) -> None:
         table = self.query_one(TaskTable)
+        group = self._cursor_group_path(table)
+        if group is not None:
+            if group not in self._collapsed:  # an open group: fold it away
+                self._collapsed.add(group)
+                self._render(self._arrange(self._rows), self._view)
+            elif len(group) > 1:  # already folded: step out to the enclosing group
+                self._move_cursor_to_group(table, group[:-1])
+            return
         task_id = self._cursor_task_id(table)
         if task_id is None:
             return
@@ -1128,6 +1130,12 @@ class TodoistApp(App[None]):
         row = next((r for r in self._rows if str(r.id) == task_id), None)
         return row.parent_id if row is not None else None
 
+    def _move_cursor_to_group(self, table: TaskTable, path: GroupPath) -> None:
+        for row, group in self._header_paths.items():
+            if group == path:
+                table.move_cursor(row=row)
+                return
+
     def _move_cursor_to_task(self, table: TaskTable, task_id: str) -> None:
         for row in range(table.row_count):
             key = table.coordinate_to_cell_key(Coordinate(row, 0)).row_key
@@ -1141,8 +1149,10 @@ class TodoistApp(App[None]):
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
         prior = self._cursor_task_id(table)  # survive the clear+rebuild below
+        prior_group = self._cursor_group_path(table)
         today = self._clock.today()
         first_row_of: dict[str, int] = {}
+        header_row_of: dict[GroupPath, int] = {}
         first_task_row: int | None = None
         # drop metadata columns empty for every visible task, so short lists don't
         # strand three near-blank columns beside the titles
@@ -1163,10 +1173,13 @@ class TodoistApp(App[None]):
             columns.append("Project")
         table.clear(columns=True)
         table.add_columns(*columns)
+        self._header_paths = {}
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
                 header = ["", _header_text(item, today)] + [""] * (len(columns) - 2)
                 table.add_row(*header, key=_header_key(index))
+                self._header_paths[index] = item.path
+                header_row_of[item.path] = index
                 continue
             row = item.row
             # bold (no color) so the title leads on any theme; dim metadata recedes
@@ -1188,7 +1201,9 @@ class TodoistApp(App[None]):
             if first_task_row is None:
                 first_task_row = index
             first_row_of.setdefault(str(row.id), index)
-        if prior is not None and prior in first_row_of:
+        if prior_group is not None and prior_group in header_row_of:
+            table.move_cursor(row=header_row_of[prior_group])  # keep it on the group
+        elif prior is not None and prior in first_row_of:
             table.move_cursor(row=first_row_of[prior])  # keep highlight on the task
         elif first_task_row is not None:
             table.move_cursor(row=first_task_row)  # never rest on a leading header
@@ -1224,6 +1239,12 @@ class TodoistApp(App[None]):
             return None
         key = str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
         return _task_id_of(key)
+
+    def _cursor_group_path(self, table: TaskTable) -> GroupPath | None:
+        """The group whose header the cursor sits on, or None on a task row."""
+        if table.row_count == 0:
+            return None
+        return self._header_paths.get(table.cursor_row)
 
     def _set_status(self, message: str) -> None:
         self._status_base = message
@@ -1299,7 +1320,8 @@ def _header_text(header: GroupHeader, today: datetime.date) -> Text:
         with contextlib.suppress(ValueError):
             label = humanize_date(datetime.date.fromisoformat(label), today)
     label = f"{label} ({header.count})"
-    lead = f"{indent}── {label} "
+    marker = _FOLD_SHUT if header.collapsed else _FOLD_OPEN
+    lead = f"{indent}{marker}── {label} "  # marker counted, so the rules stay aligned
     fill = "─" * max(3, _HEADER_WIDTH - len(lead))
     # deeper levels recede a little; top level is the boldest divider
     style = "bold cyan" if header.level == 0 else "bold blue"
@@ -1345,4 +1367,4 @@ def _arrangement_summary(arrangement: Arrangement) -> str:
 def _expand_marker(line: TaskLine[TaskRow]) -> str:
     if not line.has_children:
         return ""  # leaves carry no marker (and don't shift childless lists)
-    return "▾ " if line.expanded else "▸ "
+    return _FOLD_OPEN if line.expanded else _FOLD_SHUT

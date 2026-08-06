@@ -205,12 +205,21 @@ class Arrangement:
         )
 
 
+type GroupPath = tuple[str, ...]
+"""A group's identity: its bucket labels from the outermost level inward.
+
+Stable across a re-render (unlike a row index), so it is what fold state keys on.
+"""
+
+
 @dataclass(frozen=True)
 class GroupHeader:
     level: int
     label: str
     field: Field
     count: int  # task lines in this group's subtree (duplicates counted per membership)
+    path: GroupPath
+    collapsed: bool  # its subtree is folded away
 
 
 @dataclass(frozen=True)
@@ -224,8 +233,21 @@ class TaskLine[T: ArrangeRow]:
 type RenderRow[T: ArrangeRow] = GroupHeader | TaskLine[T]
 
 
+@dataclass(frozen=True, slots=True)
+class _Ctx[T: ArrangeRow]:
+    """The state every emit level carries: the arrangement plus the fold sets."""
+
+    arrangement: Arrangement
+    children: dict[Any, list[T]]
+    expanded: frozenset[Any]
+    collapsed: frozenset[GroupPath]
+
+
 def arrange[T: ArrangeRow](
-    rows: list[T], arrangement: Arrangement, expanded: frozenset[Any] = frozenset()
+    rows: list[T],
+    arrangement: Arrangement,
+    expanded: frozenset[Any] = frozenset(),
+    collapsed: frozenset[GroupPath] = frozenset(),
 ) -> list[RenderRow[T]]:
     """Group/sort the *root* tasks; nest each task's subtasks directly beneath it.
 
@@ -233,6 +255,9 @@ def arrange[T: ArrangeRow](
     orphan whose parent is absent renders flat). Only roots are grouped/sorted;
     a task's children always follow it, indented one level deeper, and appear
     only when the task's id is in `expanded`.
+
+    A group whose path is in `collapsed` renders as its header alone; the header
+    still reports the count it would have shown open.
     """
     present = {row.id for row in rows}
     children: dict[Any, list[T]] = {}
@@ -244,24 +269,24 @@ def arrange[T: ArrangeRow](
         else:
             roots.append(row)
     out: list[RenderRow[T]] = []
-    _emit(roots, arrangement, 0, out, children, expanded)
+    _emit(roots, 0, (), out, _Ctx(arrangement, children, expanded, collapsed))
     return out
 
 
 def _emit[T: ArrangeRow](
     rows: list[T],
-    arrangement: Arrangement,
     level: int,
+    path: GroupPath,
     out: list[RenderRow[T]],
-    children: dict[Any, list[T]],
-    expanded: frozenset[Any],
+    ctx: _Ctx[T],
 ) -> int:
     """Append this level's rows to `out`; return the task-line count emitted."""
+    arrangement = ctx.arrangement
     group_by = arrangement.group_by[level:]
     if not group_by:
         total = 0
         for row in _sorted(rows, arrangement.sort_by):
-            total += _emit_subtree(row, arrangement, level, out, children, expanded)
+            total += _emit_subtree(row, level, out, ctx)
         return total
     field = group_by[0]
     ascending = arrangement.group_ascending(field)
@@ -283,36 +308,33 @@ def _emit[T: ArrangeRow](
             # level: no header, and no further subgrouping — mirroring how Todoist
             # shows a project's un-sectioned tasks above the first section.
             for row in _sorted(members[label], arrangement.sort_by):
-                total += _emit_subtree(row, arrangement, level, out, children, expanded)
+                total += _emit_subtree(row, level, out, ctx)
             continue
+        group_path = (*path, label)
         subtree: list[RenderRow[T]] = []  # emit children first to know the count
-        count = _emit(
-            members[label], arrangement, level + 1, subtree, children, expanded
-        )
-        out.append(GroupHeader(level, label, field, count))
-        out.extend(subtree)
+        count = _emit(members[label], level + 1, group_path, subtree, ctx)
+        collapsed = group_path in ctx.collapsed
+        out.append(GroupHeader(level, label, field, count, group_path, collapsed))
+        if not collapsed:  # folded: the count stands in for the whole subtree
+            out.extend(subtree)
         total += count
     return total
 
 
 def _emit_subtree[T: ArrangeRow](
     row: T,
-    arrangement: Arrangement,
     level: int,
     out: list[RenderRow[T]],
-    children: dict[Any, list[T]],
-    expanded: frozenset[Any],
+    ctx: _Ctx[T],
 ) -> int:
     """Emit `row` then, if expanded, its subtask subtree; return lines emitted."""
-    kids = children.get(row.id, [])
-    is_expanded = bool(kids) and row.id in expanded
+    kids = ctx.children.get(row.id, [])
+    is_expanded = bool(kids) and row.id in ctx.expanded
     out.append(TaskLine(level, row, has_children=bool(kids), expanded=is_expanded))
     count = 1
     if is_expanded:
-        for child in _sorted(kids, arrangement.sort_by):
-            count += _emit_subtree(
-                child, arrangement, level + 1, out, children, expanded
-            )
+        for child in _sorted(kids, ctx.arrangement.sort_by):
+            count += _emit_subtree(child, level + 1, out, ctx)
     return count
 
 

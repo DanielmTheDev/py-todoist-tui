@@ -3012,7 +3012,7 @@ async def test_grouping_renders_headers_and_tasks() -> None:
         assert any(c.strip() == "h1" for c in col2)
         assert any(c.strip() == "w1" for c in col2)
         # Home group sorts before Work; its header leads, with a task count
-        assert col2[0].lstrip().startswith("──") and "Home (1)" in col2[0]
+        assert col2[0].lstrip().startswith("▾ ──") and "Home (1)" in col2[0]
 
 
 @pytest.mark.anyio
@@ -3367,7 +3367,7 @@ async def test_initial_cursor_lands_on_first_task_not_header() -> None:
 
 
 @pytest.mark.anyio
-async def test_j_skips_a_single_group_header_downward() -> None:
+async def test_j_moves_onto_a_group_header() -> None:
     repo = FakeRepository(
         [_row("w1", "220"), _row("h1", "9")],
         [Project(id="220", name="Work"), Project(id="9", name="Home")],
@@ -3378,49 +3378,13 @@ async def test_j_skips_a_single_group_header_downward() -> None:
         await pilot.pause()
         table = app.query_one(TaskTable)
         assert table.cursor_row == 1  # h1, under the Home header
-        await pilot.press("j")  # skip the Work header at row 2
-        assert table.cursor_row == 3
-        assert _content_col(table)[3].strip() == "w1"
+        await pilot.press("j")  # headers are foldable, so the cursor rests on them
+        assert table.cursor_row == 2
+        assert "Work (1)" in _cursor_content(table)
 
 
 @pytest.mark.anyio
-async def test_j_skips_multiple_consecutive_headers_downward() -> None:
-    home = Task(
-        id=TaskId("home"),
-        content="home",
-        priority=Priority.P4,
-        due=Due(date=datetime.date(2026, 7, 21)),
-        project_id="9",
-        labels=("a",),
-    )
-    work = Task(
-        id=TaskId("work"),
-        content="work",
-        priority=Priority.P4,
-        due=Due(date=datetime.date(2026, 7, 21)),
-        project_id="220",
-        labels=("b",),
-    )
-    store = InMemoryArrangements()
-    await store.save("today", Arrangement(group_by=(Field.PROJECT, Field.LABELS)))
-    repo = FakeRepository(
-        [work, home],
-        [Project(id="220", name="Work"), Project(id="9", name="Home")],
-    )
-    app = TodoistApp(repo, arrangements=store)
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        table = app.query_one(TaskTable)
-        first = table.cursor_row
-        assert "──" not in _cursor_content(table)  # starts on a task
-        await pilot.press("j")  # cross project + label headers to the next task
-        assert table.cursor_row > first + 1
-        assert "──" not in _cursor_content(table)  # skipped both headers
-
-
-@pytest.mark.anyio
-async def test_k_skips_a_group_header_upward() -> None:
+async def test_k_moves_onto_a_group_header() -> None:
     repo = FakeRepository(
         [_row("w1", "220"), _row("h1", "9")],
         [Project(id="220", name="Work"), Project(id="9", name="Home")],
@@ -3430,24 +3394,207 @@ async def test_k_skips_a_group_header_upward() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("j")  # onto w1 at row 3
-        assert table.cursor_row == 3
-        await pilot.press("k")  # skip the Work header at row 2
-        assert table.cursor_row == 1
-        assert _content_col(table)[1].strip() == "h1"
+        await pilot.press("k")
+        assert table.cursor_row == 0
+        assert "Home (1)" in _cursor_content(table)
+
+
+# --- group fold/collapse ---
+
+
+async def _grouped_by_project_and_priority() -> InMemoryArrangements:
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)))
+    return store
 
 
 @pytest.mark.anyio
-async def test_k_at_first_task_stays_put() -> None:
+async def test_group_headers_carry_a_fold_marker() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert _content_col(app.query_one(TaskTable))[0].startswith("▾ ──")
+
+
+@pytest.mark.anyio
+async def test_h_folds_the_group_under_the_cursor() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("k")  # onto the Home header
+        await pilot.press("h")
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert "h1" not in contents  # its task is folded away
+        assert contents[0].startswith("▸ ──") and "Home (1)" in contents[0]
+        assert table.cursor_row == 0  # cursor stays on the header it folded
+        assert "w1" in contents  # the other group is untouched
+
+
+@pytest.mark.anyio
+async def test_l_reopens_a_folded_group() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("k")
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert contents[0].startswith("▾ ──")
+        assert "h1" in contents
+        assert table.cursor_row == 0
+
+
+@pytest.mark.anyio
+async def test_folding_a_group_keeps_the_view_count() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one("#status", Static)
+        assert "Today · 2 task(s)" in str(status.render())
+        await pilot.press("k")
+        await pilot.press("h")
+        await pilot.pause()
+        assert "Today · 2 task(s)" in str(status.render())
+
+
+@pytest.mark.anyio
+async def test_folding_an_outer_group_hides_its_inner_headers() -> None:
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project_and_priority()
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("k")  # onto the Home header at row 0
+        await pilot.press("k")
+        await pilot.press("h")
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert contents[0].startswith("▸ ──") and "Home (1)" in contents[0]
+        # only Work's priority header survives; Home's went with its subtree
+        assert sum(Priority.P4.label in c for c in contents) == 1
+        assert "h1" not in contents
+
+
+@pytest.mark.anyio
+async def test_folding_an_inner_group_leaves_its_outer_header_open() -> None:
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project_and_priority()
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        table.move_cursor(row=1)  # the priority header under Home
+        await pilot.press("h")
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert contents[0].startswith("▾ ──") and "Home (1)" in contents[0]
+        assert contents[1].startswith("▸ ──")
+        assert "h1" not in contents
+
+
+@pytest.mark.anyio
+async def test_h_on_a_folded_header_jumps_to_its_outer_header() -> None:
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project_and_priority()
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        table.move_cursor(row=1)
+        await pilot.press("h")  # fold the inner group
+        await pilot.pause()
+        await pilot.press("h")  # already folded: step out to the outer header
+        await pilot.pause()
+        assert table.cursor_row == 0
+        assert "Home (1)" in _cursor_content(table)
+
+
+@pytest.mark.anyio
+async def test_h_on_a_top_level_folded_header_stays_put() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("k")
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("h")  # no outer group to step out to
+        await pilot.pause()
+        assert table.cursor_row == 0
+
+
+@pytest.mark.anyio
+async def test_x_on_a_group_header_selects_nothing() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("k")  # onto the Home header
+        await pilot.press("x")
+        await pilot.pause()
+        assert "selected" not in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.anyio
+async def test_enter_on_a_group_header_opens_no_detail() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("k")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, TaskDetailScreen)
+
+
+@pytest.mark.anyio
+async def test_regrouping_unfolds_everything() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("k")
+        await pilot.press("h")  # fold "Home"
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("r")  # group by Priority: the old label paths are stale
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        contents = [c.strip() for c in _content_col(table)]
+        assert not any(c.startswith("▸ ──") for c in contents)
+        assert "h1" in contents and "w1" in contents
+
+
+@pytest.mark.anyio
+async def test_k_at_the_top_row_stays_put() -> None:
     repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
     app = TodoistApp(repo, arrangements=await _grouped_by_project())
 
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert table.cursor_row == 1
-        await pilot.press("k")  # only a header above; must not move onto it
-        assert table.cursor_row == 1
+        await pilot.press("k")  # onto the header
+        assert table.cursor_row == 0
+        await pilot.press("k")  # nothing above it
+        assert table.cursor_row == 0
 
 
 @pytest.mark.anyio
