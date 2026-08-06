@@ -306,6 +306,43 @@ async def test_filters_reads_saved_filters_via_sync() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_all_tasks_reads_items_via_sync_dropping_closed() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "projects": [],
+                "items": [
+                    {
+                        "id": "1",
+                        "content": "Live",
+                        "priority": 1,
+                        "due": None,
+                        "project_id": "9",
+                    },
+                    {
+                        "id": "2",
+                        "content": "Done",
+                        "priority": 1,
+                        "due": None,
+                        "project_id": "9",
+                        "checked": True,
+                    },
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.all_tasks()
+
+    assert (str(task.id), task.content) == ("1", "Live")
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_inbox_fetches_tasks_of_inbox_project() -> None:
     respx.get(f"{BASE_URL}/projects").mock(
         return_value=httpx.Response(

@@ -91,6 +91,9 @@ class FakeInner:
     ) -> list[Task]:
         raise AssertionError("by_project() must be served from the snapshot")
 
+    async def all_tasks(self) -> list[Task]:  # pragma: no cover - must not be called
+        raise AssertionError("all_tasks() must be served from the snapshot")
+
     async def projects(self) -> list[Project]:  # pragma: no cover
         raise AssertionError("projects() must be served from the snapshot")
 
@@ -207,6 +210,17 @@ async def test_by_project_served_from_snapshot() -> None:
     tasks = await repo.by_project("9")
 
     assert [str(t.id) for t in tasks] == ["b"]
+    assert source.snapshot_calls == 1
+
+
+@pytest.mark.anyio
+async def test_all_tasks_served_from_snapshot() -> None:
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(FakeInner(), source, FakeCache(), _CLOCK)
+
+    tasks = await repo.all_tasks()
+
+    assert [str(t.id) for t in tasks] == ["a", "b", "c"]
     assert source.snapshot_calls == 1
 
 

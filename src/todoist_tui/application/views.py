@@ -13,11 +13,17 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.tree import with_descendants
 
 
 @dataclass(frozen=True, slots=True)
 class TaskRow:
-    """A task ready to render: project resolved to its name."""
+    """A task ready to render: project resolved to its name.
+
+    `matched` is False for a row the view's query did not return — it is here only
+    as the subtask of one that did, so it neither counts towards the view nor is
+    subject to its membership rule.
+    """
 
     id: TaskId
     content: str
@@ -33,6 +39,7 @@ class TaskRow:
     deadline: Deadline | None = None
     parent_id: str | None = None
     reminders: tuple[Reminder, ...] = ()
+    matched: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,10 +147,31 @@ def _term_in(key: str) -> SearchTerm | None:
     return term if isinstance(term, SearchTerm) else None
 
 
+def prune(rows: list[TaskRow], leaving: Callable[[TaskRow], bool]) -> list[TaskRow]:
+    """Drop the view's own rows `leaving` marks, and the subtasks they carried.
+
+    A pulled-in row is not a member, so `leaving` never decides its fate: it stays
+    exactly as long as the task it hangs under does.
+    """
+    result = [row for row in rows if not (row.matched and leaving(row))]
+    while True:  # a departing parent takes its subtree, however deep, with it
+        present = {str(row.id) for row in result}
+        kept = [row for row in result if row.matched or row.parent_id in present]
+        if len(kept) == len(result):
+            return kept
+        result = kept
+
+
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
-    tasks, projects, sections, reminders = await asyncio.gather(
-        view.fetch(repo), repo.projects(), repo.sections(), repo.reminders()
+    matches, pool, projects, sections, reminders = await asyncio.gather(
+        view.fetch(repo),
+        repo.all_tasks(),
+        repo.projects(),
+        repo.sections(),
+        repo.reminders(),
     )
+    # a query returns only what matches it, so a match's subtasks come from the pool
+    tasks, pulled_in = with_descendants(matches, pool)
     names = {project.id: project.name for project in projects}
     sections_by_id = {section.id: section for section in sections}
     reminders_by_item: dict[str, list[Reminder]] = {}
@@ -173,6 +201,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             deadline=task.deadline,
             parent_id=task.parent_id,
             reminders=tuple(reminders_by_item.get(str(task.id), ())),
+            matched=task.id not in pulled_in,
         )
         for task in tasks
     ]

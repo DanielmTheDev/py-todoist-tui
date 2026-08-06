@@ -10,6 +10,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    prune,
     query_for_key,
     search_view,
     view_from_key,
@@ -36,15 +37,20 @@ class FakeRepository:
         projects: list[Project],
         sections: list[Section] | None = None,
         reminders: list[Reminder] | None = None,
+        all_tasks: list[Task] | None = None,
     ) -> None:
         self._today = today
         self._inbox = inbox
         self._projects = projects
         self._sections = sections or []
         self._reminders = reminders or []
+        self._all_tasks = all_tasks if all_tasks is not None else [*today, *inbox]
 
     async def today(self) -> list[Task]:
         return self._today
+
+    async def all_tasks(self) -> list[Task]:
+        return self._all_tasks
 
     async def inbox(self) -> list[Task]:
         return self._inbox
@@ -270,6 +276,110 @@ async def test_load_view_carries_parent_id() -> None:
     assert rows[0].parent_id == "p"
 
 
+def _subtask(content: str, parent_id: str, project_id: str = "220") -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P2,
+        due=None,
+        project_id=project_id,
+        parent_id=parent_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_load_view_pulls_in_subtasks_of_a_match() -> None:
+    parent = _task("Buy milk", "220")
+    child = _subtask("Find the shop", parent_id="Buy milk")
+    repo = FakeRepository(
+        [parent], [], [Project(id="220", name="Errands")], all_tasks=[parent, child]
+    )
+
+    rows = await load_view(repo, TODAY)
+
+    assert [(row.content, row.matched) for row in rows] == [
+        ("Buy milk", True),
+        ("Find the shop", False),
+    ]
+
+
+@pytest.mark.anyio
+async def test_load_view_leaves_a_matching_subtask_a_member() -> None:
+    parent = _task("Buy milk", "220")
+    child = _subtask("Find the shop", parent_id="Buy milk")
+    repo = FakeRepository(
+        [parent, child],
+        [],
+        [Project(id="220", name="Errands")],
+        all_tasks=[parent, child],
+    )
+
+    rows = await load_view(repo, TODAY)
+
+    assert all(row.matched for row in rows)
+
+
+def _pulled_in(content: str, parent_id: str) -> TaskRow:
+    return TaskRow(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=None,
+        project_name="Work",
+        parent_id=parent_id,
+        matched=False,
+    )
+
+
+def _member(content: str, parent_id: str | None = None) -> TaskRow:
+    return TaskRow(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=None,
+        project_name="Work",
+        parent_id=parent_id,
+    )
+
+
+def test_prune_drops_the_members_that_left() -> None:
+    rows = [_member("stays"), _member("goes")]
+
+    assert prune(rows, lambda row: row.content == "goes") == [_member("stays")]
+
+
+def test_prune_never_evicts_a_pulled_in_subtask_on_its_own() -> None:
+    # its own fields don't decide membership: the parent's do
+    rows = [_member("parent"), _pulled_in("sub", "parent")]
+
+    assert prune(rows, lambda row: row.content == "sub") == rows
+
+
+def test_prune_takes_pulled_in_subtasks_out_with_their_parent() -> None:
+    rows = [_member("parent"), _pulled_in("sub", "parent"), _member("other")]
+
+    assert prune(rows, lambda row: row.content == "parent") == [_member("other")]
+
+
+def test_prune_takes_out_a_whole_pulled_in_subtree() -> None:
+    rows = [
+        _member("parent"),
+        _pulled_in("sub", "parent"),
+        _pulled_in("subsub", "sub"),
+    ]
+
+    assert prune(rows, lambda row: row.content == "parent") == []
+
+
+def test_prune_keeps_a_matching_subtask_whose_parent_left() -> None:
+    # it matched on its own, so it stays — flat, as an orphan
+    rows = [_member("parent"), _member("sub", parent_id="parent")]
+
+    assert prune(rows, lambda row: row.content == "parent") == [
+        _member("sub", parent_id="parent")
+    ]
+
+
 @pytest.mark.anyio
 async def test_load_view_missing_project_yields_none_name() -> None:
     repo = FakeRepository(
@@ -474,6 +584,9 @@ class BarrierRepository:
         return []
 
     async def by_project(self, project_id: str) -> list[Task]:
+        return []
+
+    async def all_tasks(self) -> list[Task]:
         return []
 
     async def projects(self) -> list[Project]:

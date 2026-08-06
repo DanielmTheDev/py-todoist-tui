@@ -90,6 +90,9 @@ class SnapshotTaskRepository:
         snapshot = await self._snapshot_now()
         return [task for task in snapshot.tasks if task.project_id == project_id]
 
+    async def all_tasks(self) -> list[Task]:
+        return (await self._snapshot_now()).tasks
+
     async def today(self) -> list[Task]:
         snapshot = await self._snapshot_now()
         today = self._clock.today()

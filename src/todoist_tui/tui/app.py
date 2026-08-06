@@ -30,6 +30,7 @@ from todoist_tui.application.views import (
     filter_view,
     load_view,
     project_view,
+    prune,
     query_for_key,
     search_view,
     view_from_key,
@@ -441,7 +442,7 @@ class TodoistApp(App[None]):
                 undo.append((TaskId(task_id), row))
         # optimistic: drop them from the model and repaint, sync in the background
         dropped = set(ids)
-        self._rows = [r for r in self._rows if str(r.id) not in dropped]
+        self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
         self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._focus_task_at(table, cursor_row)
@@ -525,7 +526,7 @@ class TodoistApp(App[None]):
         dropped = {str(task_id) for task_id, _ in pairs}
         for task_id, row in pairs:
             self._pending_close[str(task_id)] = row.due
-        self._rows = [r for r in self._rows if str(r.id) not in dropped]
+        self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
         self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._focus_task_at(table, cursor_row)
@@ -670,13 +671,7 @@ class TodoistApp(App[None]):
             replace(row, due=by_id[str(row.id)]) if str(row.id) in targets else row
             for row in self._rows
         ]
-        if self._view.keeps is not None:  # drop those that left the view
-            today = self._clock.today()
-            self._rows = [row for row in self._rows if self._view.keeps(row, today)]
-        elif self._active_server_query is not None:
-            # a filter's membership needs the server; assume the reschedule drops
-            # them and let the background refresh restore any that still match
-            self._rows = [row for row in self._rows if str(row.id) not in targets]
+        self._rows = self._drop_departed(targets)
         self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._set_due(edits)
@@ -780,14 +775,9 @@ class TodoistApp(App[None]):
             for row in self._rows
         ]
         if self._view.key == "inbox":  # moved out of Inbox: it no longer lists them
-            self._rows = [r for r in self._rows if str(r.id) not in targets]
-        elif self._view.keeps is not None:  # membership is decidable here and now
-            today = self._clock.today()
-            self._rows = [r for r in self._rows if self._view.keeps(r, today)]
-        elif self._active_server_query is not None:
-            # a filter's membership needs the server; assume the move drops them and
-            # let the background refresh restore any that still match
-            self._rows = [r for r in self._rows if str(r.id) not in targets]
+            self._rows = prune(self._rows, lambda r: str(r.id) in targets)
+        else:
+            self._rows = self._drop_departed(targets)
         self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._move_task(task_ids, target.project_id, target.section_id)
@@ -926,13 +916,7 @@ class TodoistApp(App[None]):
             else row
             for row in self._rows
         ]
-        if self._view.keeps is not None:  # membership is decidable here and now
-            today = self._clock.today()
-            self._rows = [r for r in self._rows if self._view.keeps(r, today)]
-        elif self._active_server_query is not None:
-            # a filter/search's membership needs the server; assume the edits drop
-            # them and let the background refresh restore any that still match
-            self._rows = [r for r in self._rows if str(r.id) not in new_labels]
+        self._rows = self._drop_departed(set(new_labels))
         self._selected.clear()
         self._render(self._arrange(self._rows), self._view)
         self._set_labels(list(new_labels.items()), create)
@@ -1094,7 +1078,7 @@ class TodoistApp(App[None]):
             for tid, due in self._pending_close.items()
             if tid in present and present[tid] == due
         }
-        return [row for row in rows if str(row.id) not in self._pending_close]
+        return prune(rows, lambda row: str(row.id) in self._pending_close)
 
     def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
         return arrange(rows, self._arrangement, frozenset(self._expanded))
@@ -1122,6 +1106,20 @@ class TodoistApp(App[None]):
         if parent_id is not None:
             self._move_cursor_to_task(table, parent_id)
 
+    def _drop_departed(self, edited: set[str]) -> list[TaskRow]:
+        """The rows left after an edit to `edited`: those the view still wants.
+
+        A filter's membership needs the server, so the edited tasks are assumed
+        gone and the background refresh restores any that still match.
+        """
+        if self._view.keeps is not None:  # membership is decidable here and now
+            today = self._clock.today()
+            keeps = self._view.keeps
+            return prune(self._rows, lambda row: not keeps(row, today))
+        if self._active_server_query is not None:
+            return prune(self._rows, lambda row: str(row.id) in edited)
+        return self._rows
+
     def _has_children(self, task_id: str) -> bool:
         return any(row.parent_id == task_id for row in self._rows)
 
@@ -1145,7 +1143,6 @@ class TodoistApp(App[None]):
         today = self._clock.today()
         first_row_of: dict[str, int] = {}
         first_task_row: int | None = None
-        task_ids: set[str] = set()
         # drop metadata columns empty for every visible task, so short lists don't
         # strand three near-blank columns beside the titles
         tasks = [item.row for item in render_rows if isinstance(item, TaskLine)]
@@ -1194,12 +1191,14 @@ class TodoistApp(App[None]):
             if first_task_row is None:
                 first_task_row = index
             first_row_of.setdefault(str(row.id), index)
-            task_ids.add(str(row.id))
         if prior is not None and prior in first_row_of:
             table.move_cursor(row=first_row_of[prior])  # keep highlight on the task
         elif first_task_row is not None:
             table.move_cursor(row=first_task_row)  # never rest on a leading header
-        self._set_status(_count_status(view.title, len(task_ids)))
+        # the view's own tasks, not the visible lines: collapsing a parent or
+        # revealing a subtask pulled in for context must not move the number
+        matched = sum(1 for row in self._rows if row.matched)
+        self._set_status(_count_status(view.title, matched))
 
     def _focus_task_at(self, table: TaskTable, row: int) -> None:
         """Put the cursor on the task at or after `row`, else the last task —

@@ -56,6 +56,9 @@ class FakeRepository:
     async def by_project(self, project_id: str) -> list[Task]:
         return self._tasks.get(project_id, [])
 
+    async def all_tasks(self) -> list[Task]:
+        return [task for tasks in self._tasks.values() for task in tasks]
+
     async def apply_creation(self, plan: DuplicationPlan) -> None:
         self.applied.append(plan)
 

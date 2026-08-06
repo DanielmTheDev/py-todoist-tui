@@ -38,6 +38,12 @@ class ApiTaskRepository:
         live, _deleted = _split(body.get("filters", []), _to_filter)
         return live
 
+    async def all_tasks(self) -> list[Task]:
+        # No REST list-everything endpoint; a full /sync is the source, like filters().
+        body = await self._client.sync("*")
+        live, _deleted = _split(body.get("items", []), _to_task, _is_gone)
+        return live
+
     async def inbox(self) -> list[Task]:
         projects = await self._client.projects()
         inbox = next((p for p in projects if p.get("inbox_project")), None)

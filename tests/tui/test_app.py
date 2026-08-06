@@ -45,10 +45,12 @@ class FakeRepository:
         sections: list[Section] | None = None,
         labels: list[Label] | None = None,
         reminders: list[Reminder] | None = None,
+        pool: list[Task] | None = None,
     ) -> None:
         self._tasks = tasks
         self._projects = projects
         self._inbox = inbox or []
+        self._pool = pool or []  # tasks no view returns, e.g. non-matching subtasks
         self._filters = filters or []
         self._sections = sections or []
         self._labels = labels or []
@@ -78,6 +80,10 @@ class FakeRepository:
 
     async def by_project(self, project_id: str) -> list[Task]:
         return [t for t in self._tasks if t.project_id == project_id]
+
+    async def all_tasks(self) -> list[Task]:
+        by_id = {t.id: t for t in [*self._tasks, *self._inbox, *self._pool]}
+        return list(by_id.values())
 
     async def filtered(self, query: str) -> list[Task]:
         return list(self._tasks)
@@ -110,6 +116,7 @@ class FakeRepository:
         self.completed.append(task_id)
         self._removed.update({t.id: t for t in self._tasks if t.id == task_id})
         self._tasks = [t for t in self._tasks if t.id != task_id]
+        self._pool = [t for t in self._pool if t.id != task_id]
 
     async def uncomplete(self, task_id: TaskId) -> None:
         self.uncompleted.append(task_id)
@@ -120,6 +127,7 @@ class FakeRepository:
     async def delete(self, task_id: TaskId) -> None:
         self.deleted.append(task_id)
         self._tasks = [t for t in self._tasks if t.id != task_id]
+        self._pool = [t for t in self._pool if t.id != task_id]
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
@@ -1329,8 +1337,9 @@ class GatedRefreshRepository(FakeRepository):
         projects: list[Project],
         inbox: list[Task] | None = None,
         filters: list[Filter] | None = None,
+        pool: list[Task] | None = None,
     ) -> None:
-        super().__init__(tasks, projects, inbox=inbox, filters=filters)
+        super().__init__(tasks, projects, inbox=inbox, filters=filters, pool=pool)
         self.release = asyncio.Event()
 
     async def refresh(self) -> None:
@@ -3139,6 +3148,168 @@ async def test_h_on_a_child_jumps_the_cursor_to_its_parent() -> None:
         await pilot.press("h")  # collapse+jump: land on the parent
         await pilot.pause()
         assert _cursor_content(table).strip() == "▾ parent"
+
+
+def _match_with_unmatched_child() -> FakeRepository:
+    """A view whose query returns the parent only — the subtask cannot match it."""
+    child = Task(
+        id=TaskId("child"),
+        content="child",
+        priority=Priority.P4,
+        due=None,  # no due date: never returned by a Today/filter query
+        project_id="220",
+        parent_id="parent",
+    )
+    return FakeRepository(
+        [_row("parent")], [Project(id="220", name="Work")], pool=[child]
+    )
+
+
+@pytest.mark.anyio
+async def test_a_subtask_the_query_missed_is_still_nested_under_its_parent() -> None:
+    app = TodoistApp(_match_with_unmatched_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert [c.strip() for c in _content_col(table)] == ["▸ parent"]
+        await pilot.press("l")
+        await pilot.pause()
+        assert [c.strip() for c in _content_col(table)] == ["▾ parent", "child"]
+
+
+@pytest.mark.anyio
+async def test_a_pulled_in_subtask_does_not_count_towards_the_view() -> None:
+    app = TodoistApp(_match_with_unmatched_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one("#status", Static)
+        assert "Today · 1 task(s)" in str(status.render())
+        await pilot.press("l")  # revealing it must not inflate the count
+        await pilot.pause()
+        assert "Today · 1 task(s)" in str(status.render())
+
+
+@pytest.mark.anyio
+async def test_a_collapsed_matching_subtask_still_counts() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "Today · 2 task(s)" in str(app.query_one("#status", Static).render())
+
+
+def _due_today(content: str, parent_id: str | None = None) -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=_TODAY),
+        project_id="220",
+        parent_id=parent_id,
+    )
+
+
+def _today_view_with_a_pulled_in_subtask() -> GatedRefreshRepository:
+    sub = Task(
+        id=TaskId("sub"),
+        content="sub",
+        priority=Priority.P4,
+        due=None,  # not due today: only here as a subtask of "a parent"
+        project_id="220",
+        parent_id="a parent",
+    )
+    repo = GatedRefreshRepository(
+        [_due_today("a parent"), _due_today("b other")],
+        [Project(id="220", name="Work")],
+        pool=[sub],
+    )
+    repo.release.set()  # let the startup sync through
+    return repo
+
+
+@pytest.mark.anyio
+async def test_editing_another_task_leaves_a_pulled_in_subtask_alone() -> None:
+    repo = _today_view_with_a_pulled_in_subtask()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        table = app.query_one(TaskTable)
+        await pilot.press("l")  # reveal the subtask
+        await pilot.pause()
+        await pilot.press("j", "j")  # onto "b other"
+        assert _cursor_content(table).strip() == "b other"
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("l")  # calendar: move to tomorrow
+        await pilot.press("enter")  # pick it: only "b other" leaves Today
+
+        assert [c.strip() for c in _content_col(table)] == ["▾ a parent", "sub"]
+
+
+@pytest.mark.anyio
+async def test_a_reload_hides_the_subtask_of_a_not_yet_confirmed_close() -> None:
+    class UnconfirmedCloseRepository(GatedRefreshRepository):
+        """complete() is accepted but the server keeps listing the task."""
+
+        async def complete(self, task_id: TaskId) -> None:
+            self.completed.append(task_id)
+
+    sub = Task(
+        id=TaskId("sub"),
+        content="sub",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+        parent_id="a parent",
+    )
+    repo = UnconfirmedCloseRepository(
+        [_due_today("a parent"), _due_today("b other")],
+        [Project(id="220", name="Work")],
+        pool=[sub],
+    )
+    repo.release.set()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        table = app.query_one(TaskTable)
+        await pilot.press("l")  # reveal the subtask
+        await pilot.pause()
+        await pilot.press("e")  # close the parent
+        await pilot.pause()
+        await pilot.press("r")  # reload: the close is not confirmed yet
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert [c.strip() for c in _content_col(table)] == ["b other"]
+
+
+@pytest.mark.anyio
+async def test_a_pulled_in_subtask_leaves_with_the_parent_that_carried_it() -> None:
+    repo = _today_view_with_a_pulled_in_subtask()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        table = app.query_one(TaskTable)
+        await pilot.press("l")  # reveal the subtask
+        await pilot.pause()
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("t")  # cursor is on "a parent"
+        await pilot.pause()
+        await pilot.press("l")  # calendar: move to tomorrow
+        await pilot.press("enter")  # pick it: the parent leaves Today
+
+        assert [c.strip() for c in _content_col(table)] == ["b other"]
 
 
 @pytest.mark.anyio
