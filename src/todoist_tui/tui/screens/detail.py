@@ -12,6 +12,7 @@ from todoist_tui.tui.format import (
     format_deadline,
     format_due,
     format_labels,
+    format_reminder,
     styled_date,
 )
 
@@ -77,7 +78,8 @@ class TaskDetailScreen(ModalScreen[None]):
         self._append_due(text)
         text.append("\nDeadline  ")
         self._append_deadline(text)
-        text.append(f"\nPriority  {row.priority.label}\n")
+        text.append(f"\nReminders {self._reminders_line()}\n")
+        text.append(f"Priority  {row.priority.label}\n")
         text.append(f"Project   {row.project_name or _DASH}\n")
         text.append(f"Section   {row.section_name or _DASH}\n")
         text.append(f"Labels    {self._labels_line()}\n\n")
@@ -113,6 +115,10 @@ class TaskDetailScreen(ModalScreen[None]):
             return
         label = format_deadline(deadline, self._today)
         text.append_text(styled_date(label, deadline.date, self._today))
+
+    def _reminders_line(self) -> str:
+        joined = ", ".join(format_reminder(r, self._today) for r in self._row.reminders)
+        return joined or _DASH
 
     def _labels_line(self) -> str:
         return format_labels(self._row.labels) or _DASH

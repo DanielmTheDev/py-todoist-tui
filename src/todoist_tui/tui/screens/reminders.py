@@ -9,7 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from todoist_tui.domain.reminder import Reminder
-from todoist_tui.tui.format import format_due
+from todoist_tui.tui.format import format_reminder
 
 Mode = Literal["manage", "add"]
 
@@ -31,14 +31,6 @@ _PRESETS: dict[str, tuple[int, str]] = {
     "h": (60, "1 hour before"),
     "d": (1440, "1 day before"),
 }
-
-
-def describe(reminder: Reminder, today: datetime.date) -> str:
-    """Short human label for a reminder row."""
-    if reminder.type == "relative":
-        offset = reminder.minute_offset or 0
-        return "at due time" if offset == 0 else f"{offset} min before"
-    return format_due(reminder.due, today) or "absolute"
 
 
 class RemindersScreen(ModalScreen["ReminderRequest | None"]):
@@ -158,7 +150,7 @@ class RemindersScreen(ModalScreen["ReminderRequest | None"]):
             text.append("No reminders yet.\n\n", style="dim")
         for index, reminder in enumerate(self._existing):
             style = "reverse" if index == self._cursor else ""
-            text.append(f"{describe(reminder, self._today)}\n", style=style)
+            text.append(f"{format_reminder(reminder, self._today)}\n", style=style)
         text.append("\n")
         hint = "a add"
         if self._existing:

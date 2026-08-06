@@ -5,11 +5,14 @@ from rich.text import Text
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import (
     MATCH_STYLE,
     format_deadline,
     format_due,
     format_labels,
+    format_reminder,
+    format_reminder_badge,
     highlight_match,
     match_snippet,
     priority_dot,
@@ -88,6 +91,33 @@ def test_format_labels_prefixes_and_joins() -> None:
 
 def test_format_labels_blank_when_empty() -> None:
     assert format_labels(()) == ""
+
+
+def _relative(minute_offset: int) -> Reminder:
+    return Reminder(id="r", item_id="A", type="relative", minute_offset=minute_offset)
+
+
+def test_format_reminder_names_the_offset() -> None:
+    assert format_reminder(_relative(30), _TODAY) == "30 min before"
+
+
+def test_format_reminder_calls_a_zero_offset_due_time() -> None:
+    assert format_reminder(_relative(0), _TODAY) == "at due time"
+
+
+def test_format_reminder_shows_an_absolute_date() -> None:
+    reminder = Reminder(
+        id="r",
+        item_id="A",
+        type="absolute",
+        due=Due(date=_TODAY, time=datetime.time(11, 0)),
+    )
+    assert format_reminder(reminder, _TODAY) == "Today 11:00"
+
+
+def test_format_reminder_badge_counts_only_beyond_one() -> None:
+    assert format_reminder_badge(1) == "🔔"
+    assert format_reminder_badge(3) == "🔔3"
 
 
 def test_plain_text_has_no_styled_spans() -> None:

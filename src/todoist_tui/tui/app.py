@@ -64,6 +64,7 @@ from todoist_tui.tui.format import (
     format_deadline,
     format_due,
     format_labels,
+    format_reminder_badge,
     priority_dot,
     render_links,
     styled_date,
@@ -1147,15 +1148,13 @@ class TodoistApp(App[None]):
         # strand three near-blank columns beside the titles
         tasks = [item.row for item in render_rows if isinstance(item, TaskLine)]
         show_labels = any(t.labels for t in tasks)
-        show_reminders = any(t.reminders for t in tasks)
-        show_due = any(t.due for t in tasks)
+        # a reminder rides in the due cell, so it alone keeps that column alive
+        show_due = any(t.due or t.reminders for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
         show_project = any(t.project_name for t in tasks)
         columns = ["", "Task"]
         if show_labels:
             columns.append("Labels")
-        if show_reminders:
-            columns.append("Rem")
         if show_due:
             columns.append("Due")
         if show_deadline:
@@ -1177,10 +1176,8 @@ class TodoistApp(App[None]):
             cells: list[Text | str] = [priority_dot(row.priority), content]
             if show_labels:
                 cells.append(_labels_cell(row.labels))
-            if show_reminders:
-                cells.append(_reminders_cell(row.reminders))
             if show_due:
-                cells.append(_due_cell(row.due, today))
+                cells.append(_due_cell(row.due, row.reminders, today))
             if show_deadline:
                 cells.append(_deadline_cell(row.deadline, today))
             if show_project:
@@ -1263,13 +1260,20 @@ def _accent(cell: Text | str) -> Text:
     return text
 
 
-def _due_cell(due: Due | None, today: datetime.date) -> Text | str:
+def _due_cell(
+    due: Due | None, reminders: tuple[Reminder, ...], today: datetime.date
+) -> Text | str:
+    """The due label, trailed by a bell when the task has reminders — they share
+    the column so a rare reminder costs no width of its own. The detail card
+    spells the reminders out."""
+    badge = format_reminder_badge(len(reminders)) if reminders else ""
     if due is None:
-        return ""
+        return Text(badge, style="dim")
     label = format_due(due, today)
     if due.is_recurring:  # detail card shows the full rule; here just a quiet mark
         label += _RECURRING_GLYPH
-    return styled_date(label, due.date, today)
+    dated = styled_date(label, due.date, today)
+    return Text.assemble(dated, (f" {badge}", "dim")) if badge else dated
 
 
 def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | str:
@@ -1285,13 +1289,6 @@ def _project_cell(project_name: str | None) -> Text | str:
 def _labels_cell(labels: tuple[str, ...]) -> Text | str:
     line = format_labels(labels)
     return Text(line, style="dim") if line else ""
-
-
-def _reminders_cell(reminders: tuple[Reminder, ...]) -> Text | str:
-    if not reminders:
-        return ""
-    count = len(reminders)
-    return Text("🔔" if count == 1 else f"🔔{count}", style="dim")
 
 
 def _header_text(header: GroupHeader, today: datetime.date) -> Text:

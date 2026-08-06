@@ -10,6 +10,7 @@ from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 
@@ -26,6 +27,7 @@ def _row(
     labels: tuple[str, ...] = ("home", "errand"),
     description: str = "2% from the corner store",
     deadline: Deadline | None = None,
+    reminders: tuple[Reminder, ...] = (),
 ) -> TaskRow:
     return TaskRow(
         id=TaskId("6X4"),
@@ -37,6 +39,7 @@ def _row(
         labels=labels,
         description=description,
         deadline=deadline,
+        reminders=reminders,
     )
 
 
@@ -146,6 +149,34 @@ async def test_no_deadline_renders_a_dash() -> None:
     shown = await _shown(_row(deadline=None))
 
     assert "Deadline" in shown
+    assert "—" in shown
+
+
+@pytest.mark.anyio
+async def test_renders_every_reminder() -> None:
+    row = _row(
+        reminders=(
+            Reminder(id="r1", item_id="6X4", type="relative", minute_offset=30),
+            Reminder(
+                id="r2",
+                item_id="6X4",
+                type="absolute",
+                due=Due(date=datetime.date(2026, 7, 29), time=datetime.time(11, 0)),
+            ),
+        )
+    )
+
+    shown = await _shown(row)
+
+    assert "Reminders" in shown
+    assert "30 min before, Tomorrow 11:00" in shown
+
+
+@pytest.mark.anyio
+async def test_no_reminders_renders_a_dash() -> None:
+    shown = await _shown(_row(reminders=()))
+
+    assert "Reminders" in shown
     assert "—" in shown
 
 

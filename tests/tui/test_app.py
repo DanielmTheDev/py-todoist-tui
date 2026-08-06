@@ -608,7 +608,7 @@ async def test_reminder_add_absolute_picks_a_date() -> None:
 
 
 @pytest.mark.anyio
-async def test_reminder_bell_shows_in_the_row() -> None:
+async def test_reminder_bell_rides_along_the_due_cell() -> None:
     existing = Reminder(id="r1", item_id="A", type="relative", minute_offset=30)
     repo = FakeRepository([_timed("A")], [], reminders=[existing])
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
@@ -617,8 +617,49 @@ async def test_reminder_bell_shows_in_the_row() -> None:
         await app.workers.wait_for_complete()
 
         table = app.query_one(DataTable[object])
-        cells = [str(table.get_row_at(0)[c]) for c in range(len(table.get_row_at(0)))]
-        assert any("🔔" in cell for cell in cells)
+        assert "Rem" not in [str(c.label) for c in table.ordered_columns]
+        assert "🔔" in str(_cell(table, 0, "Due"))
+
+
+@pytest.mark.anyio
+async def test_two_reminders_show_a_count() -> None:
+    reminders = [
+        Reminder(id="r1", item_id="A", type="relative", minute_offset=30),
+        Reminder(id="r2", item_id="A", type="relative", minute_offset=60),
+    ]
+    repo = FakeRepository([_timed("A")], [], reminders=reminders)
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+
+        table = app.query_one(DataTable[object])
+        assert "🔔2" in str(_cell(table, 0, "Due"))
+
+
+@pytest.mark.anyio
+async def test_a_reminder_alone_keeps_the_due_column() -> None:
+    task = Task(
+        id=TaskId("A"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=None,
+        project_id="220",
+    )
+    existing = Reminder(
+        id="r1",
+        item_id="A",
+        type="absolute",
+        due=Due(date=datetime.date(2026, 7, 29), time=datetime.time(11, 0)),
+    )
+    repo = FakeRepository([task], [], reminders=[existing])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+
+        table = app.query_one(DataTable[object])
+        assert str(_cell(table, 0, "Due")) == "🔔"
 
 
 @pytest.mark.anyio
