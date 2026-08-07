@@ -19,7 +19,13 @@ from todoist_tui.tui.format import (
     format_reminder,
     priority_dot,
 )
-from todoist_tui.tui.theme import TIER_CLASSES, TIER_CSS, Tier, tier_styles
+from todoist_tui.tui.theme import (
+    PALETTE_CLASSES,
+    PALETTE_CSS,
+    Tier,
+    priority_styles,
+    tier_styles,
+)
 
 _DASH = "—"  # stands in for an unset field
 _LABEL_WIDTH = 10  # so the field values line up in a column of their own
@@ -30,8 +36,8 @@ class DetailCard(Static):
     """The card's body: fields, description, links, key hint. Labels recede so the
     values they name lead, and the sections are ruled apart."""
 
-    COMPONENT_CLASSES: ClassVar[set[str]] = set(TIER_CLASSES)
-    DEFAULT_CSS = TIER_CSS
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(PALETTE_CLASSES)
+    DEFAULT_CSS = PALETTE_CSS
 
     def __init__(
         self,
@@ -119,9 +125,12 @@ class DetailCard(Static):
         return Text(joined or _DASH, style=styles[Tier.PRIMARY])
 
     def _priority(self, styles: Mapping[Tier, Style]) -> Text:
-        dot = priority_dot(self._row.priority)
-        lead = f"{dot} " if dot else ""
-        return Text(f"{lead}{self._row.priority.label}", style=styles[Tier.PRIMARY])
+        priority = self._row.priority
+        text = Text()
+        if dot := priority_dot(priority):  # coloured as in the list, same language
+            text.append(f"{dot} ", style=priority_styles(self)[priority])
+        text.append(priority.label, style=styles[Tier.PRIMARY])
+        return text
 
     def _project(self, styles: Mapping[Tier, Style]) -> Text:
         return Text(self._row.project_name or _DASH, style=styles[Tier.PRIMARY])

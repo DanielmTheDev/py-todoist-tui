@@ -7,7 +7,7 @@ from tests.tui.test_app import FakeRepository
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.tui.app import InMemoryHome, TodoistApp
+from todoist_tui.tui.app import MARKER_SLOT, InMemoryHome, TodoistApp
 from todoist_tui.tui.screens.search import SearchScreen
 
 _PROJECTS = [Project(id="220", name="Errands")]
@@ -48,9 +48,11 @@ def _status(app: TodoistApp) -> str:
 
 
 def _contents(app: TodoistApp) -> list[str]:
+    """Each row's title, past the marker slot that opens the title cell."""
     table = app.query_one(DataTable[object])
-    column = list(table.columns)[1]  # 0 is the priority dot
-    return [str(table.get_cell(row, column)) for row in table.rows]
+    column = next(iter(table.columns))  # title, marker slot and all
+    slot = len(MARKER_SLOT)
+    return [str(table.get_cell(row, column))[slot:] for row in table.rows]
 
 
 @pytest.mark.anyio

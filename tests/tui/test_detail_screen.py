@@ -6,7 +6,7 @@ from textual.app import App
 from textual.content import Content
 from textual.widgets import Static
 
-from tests.tui.tiers import span_tiers
+from tests.tui.tiers import priority_at, span_tiers
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -14,7 +14,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.detail import DetailCard, TaskDetailScreen
-from todoist_tui.tui.theme import Tier
+from todoist_tui.tui.theme import TODOIST_THEME, Tier
 
 _TODAY = datetime.date(2026, 7, 28)
 _DUE = Due(date=datetime.date(2026, 7, 29), time=datetime.time(9, 0))
@@ -62,6 +62,10 @@ class _Host(App[None]):
         today: datetime.date = _TODAY,
     ) -> None:
         super().__init__()
+        # the card only ever opens inside TodoistApp, so host it on the same
+        # theme — the built-in default collapses $warning onto $accent
+        self.register_theme(TODOIST_THEME)
+        self.theme = TODOIST_THEME.name
         self._row = row
         self._dismissed = dismissed
         self._opener = opener or _FakeOpener()
@@ -158,9 +162,18 @@ async def test_field_labels_recede_behind_their_values() -> None:
 
 
 @pytest.mark.anyio
-async def test_the_priority_carries_its_dot() -> None:
-    assert "🔴 P1" in await _shown(_row(priority=Priority.P1))
+async def test_the_priority_carries_its_own_coloured_dot() -> None:
+    """Same mark as the list, so the card reads as the same language."""
+    assert "● P1" in await _shown(_row(priority=Priority.P1))
     assert "P4" in await _shown(_row(priority=Priority.P4))  # P4 needs no marking
+    assert "●" not in await _shown(_row(priority=Priority.P4))
+
+    host = _Host(_row(priority=Priority.P2), [])
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        card = host.screen.query_one(DetailCard)
+        content = cast(Content, card.render())
+        assert priority_at(card, content, "●") is Priority.P2
 
 
 @pytest.mark.anyio

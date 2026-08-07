@@ -135,8 +135,8 @@ def test_format_reminder_shows_an_absolute_date() -> None:
 
 
 def test_format_reminder_badge_counts_only_beyond_one() -> None:
-    assert format_reminder_badge(1) == "🔔"
-    assert format_reminder_badge(3) == "🔔3"
+    assert format_reminder_badge(1) == "•"
+    assert format_reminder_badge(3) == "•3"
 
 
 def test_description_marker_flags_a_task_that_carries_one() -> None:
@@ -155,10 +155,12 @@ def test_plain_text_has_no_styled_spans() -> None:
     assert result.spans == []
 
 
-def test_priority_dot_marks_the_top_three() -> None:
-    assert priority_dot(Priority.P1) == "🔴"
-    assert priority_dot(Priority.P2) == "🟠"
-    assert priority_dot(Priority.P3) == "🔵"
+def test_priority_dot_marks_the_top_three_in_one_cell() -> None:
+    """One single-width glyph, coloured by the caller: emoji would double the
+    column and bring a colour the palette doesn't control."""
+    assert priority_dot(Priority.P1) == "●"
+    assert priority_dot(Priority.P2) == "●"
+    assert priority_dot(Priority.P3) == "●"
 
 
 def test_priority_dot_leaves_the_default_blank() -> None:

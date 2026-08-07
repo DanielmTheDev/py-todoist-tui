@@ -14,7 +14,7 @@ from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.message import Message
-from textual.widgets import DataTable, Footer, Static
+from textual.widgets import DataTable, Footer, Rule, Static
 
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.complete import complete_task, uncomplete_task
@@ -91,10 +91,11 @@ from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 from todoist_tui.tui.theme import (
-    TIER_CLASSES,
-    TIER_CSS,
+    PALETTE_CLASSES,
+    PALETTE_CSS,
     TODOIST_THEME,
     Tier,
+    priority_styles,
     tier_styles,
 )
 
@@ -105,6 +106,11 @@ _GUTTER = 2  # shared by the status band's padding and the table's cell padding
 _SUMMARY_GAP = 2  # least space between the status message and the arrangement
 _FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
 _FOLD_SHUT = "▸ "  # subtree folded away
+_SELECT_MARKER = "▌"  # bar on a multi-selected row
+# The selection bar, the priority dot, and the space setting them off from the
+# title. They open the title cell, so the column label has to clear the same
+# width for TASK to sit above the titles rather than above their markers.
+MARKER_SLOT = "   "
 
 
 def as_binding(entry: BindingType) -> Binding:
@@ -163,8 +169,8 @@ class StatusBand(Static):
     """The band above the table: which view is open on the left, how it's arranged
     on the right. Also the app's error channel, so it holds arbitrary text."""
 
-    COMPONENT_CLASSES: ClassVar[set[str]] = set(TIER_CLASSES)
-    DEFAULT_CSS = TIER_CSS
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(PALETTE_CLASSES)
+    DEFAULT_CSS = PALETTE_CSS
 
     def __init__(self) -> None:
         super().__init__("Loading…", id="status", markup=False)
@@ -190,6 +196,32 @@ class StatusBand(Static):
         self.update(text)
 
 
+class ColumnHeader(Static):
+    """The column labels, as a widget rather than the table's own header row — so a
+    separator can sit under them, and so they align to the widths `_render`
+    computed rather than to whatever the table decided."""
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(PALETTE_CLASSES)
+    DEFAULT_CSS = PALETTE_CSS
+
+    def __init__(self) -> None:
+        super().__init__(id="columns", markup=False)
+        self._columns: list[tuple[str, int]] = []
+
+    def show(self, columns: list[tuple[str, int]]) -> None:
+        self._columns = columns
+        self.update(self._content())
+
+    def _content(self) -> Text:
+        muted = tier_styles(self)[Tier.MUTED]
+        labels = "".join(
+            # the first column opens with the marker slot, so its label clears it
+            (MARKER_SLOT + label if column == 0 else label).ljust(width)
+            for column, (label, width) in enumerate(self._columns)
+        )
+        return Text(labels.rstrip(), style=muted)
+
+
 class TaskTable(DataTable[object]):
     """DataTable with j/k or up/down row nav and h/l or left/right collapse/expand.
 
@@ -200,8 +232,10 @@ class TaskTable(DataTable[object]):
     useless in row mode.
     """
 
-    COMPONENT_CLASSES: ClassVar[set[str]] = DataTable.COMPONENT_CLASSES | TIER_CLASSES
-    DEFAULT_CSS = TIER_CSS
+    COMPONENT_CLASSES: ClassVar[set[str]] = (
+        DataTable.COMPONENT_CLASSES | PALETTE_CLASSES
+    )
+    DEFAULT_CSS = PALETTE_CSS
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j,down", "cursor_down", "Down", show=False),
@@ -215,6 +249,12 @@ class TaskTable(DataTable[object]):
 
     class Collapse(Message):
         """Fold the subtasks or group under the cursor, else step out to its parent."""
+
+    class Resized(Message):
+        """The table got wider or narrower, so the column stretch needs redoing."""
+
+    def on_resize(self) -> None:
+        self.post_message(self.Resized())
 
     def action_expand(self) -> None:
         self.post_message(self.Expand())
@@ -291,6 +331,7 @@ class TodoistApp(App[None]):
         self._syncing = False
         self._status_base = ""  # the band's left-hand line: view title, or an error
         self._status_tally = ""  # " · 9 task(s)", blank while an error is shown
+        self._laid_out = -1  # table width the current column stretch was sized for
         self._last_undo: list[tuple[TaskId, TaskRow]] = []  # last completed batch
         # tasks closed locally, kept hidden across reloads until the server's
         # snapshot reflects the change (gone, or a recurring task's new due)
@@ -311,8 +352,18 @@ class TodoistApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield StatusBand()
+        yield Rule(line_style="solid")
+        yield ColumnHeader()
+        yield Rule(line_style="solid")
         yield TaskTable()
         yield Footer()
+
+    def on_task_table_resized(self, _: TaskTable.Resized) -> None:
+        """The last column stretches to the right edge, so a width change has to
+        redraw. Guarded on the width actually differing: repainting adds rows,
+        which can move the scrollbar, which would resize us again."""
+        if self.query_one(TaskTable).scrollable_content_region.width != self._laid_out:
+            self._repaint()
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         return {"gutter": str(_GUTTER)}  # so the stylesheet shares the one constant
@@ -322,8 +373,8 @@ class TodoistApp(App[None]):
         table.cursor_type = "row"
         # the cursor tints the background only, so each cell keeps its own tier
         table.cursor_foreground_priority = "renderable"
-        # breathing room between columns, and the band's gutter under the first
-        table.cell_padding = _GUTTER
+        table.show_header = False  # ColumnHeader draws them, so a rule can follow
+        table.cell_padding = 0  # so a group divider runs unbroken across columns
         self._view, self._active_server_query = await self._resolve_home()
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
@@ -1334,6 +1385,7 @@ class TodoistApp(App[None]):
         prior_group = self._cursor_group_path(table)
         # at render time, not import: the styles follow the live theme
         styles = tier_styles(table)
+        priorities = priority_styles(table)
         today = self._clock.today()
         first_row_of: dict[str, int] = {}
         header_row_of: dict[GroupPath, int] = {}
@@ -1346,7 +1398,7 @@ class TodoistApp(App[None]):
         show_due = any(t.due or t.reminders for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
         show_project = any(t.project_name for t in tasks)
-        columns = ["", "TASK"]
+        columns = ["TASK"]
         if show_labels:
             columns.append("LABELS")
         if show_due:
@@ -1355,34 +1407,19 @@ class TodoistApp(App[None]):
             columns.append("DEADLINE")
         if show_project:
             columns.append("PROJECT")
-        table.clear(columns=True)
-        table.add_columns(*columns)
         self._header_paths = {}
-        titles = {
-            index: _title_cell(item, styles)
-            for index, item in enumerate(render_rows)
-            if isinstance(item, TaskLine)
-        }
-        # a divider spans the titles it divides: running it to the terminal edge
-        # would widen the title column and push the metadata into a scroll
-        target_width = max((cell_len(t.plain) for t in titles.values()), default=0)
+        # every cell is built before any is added, so the column widths — and the
+        # group dividers that have to span them — follow the content
+        built: list[tuple[str, Text | list[Text | str]]] = []
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
-                divider = _header_text(item, today, target_width, styles)
-                header = ["", divider] + [""] * (len(columns) - 2)
-                table.add_row(*header, key=_header_key(index))
+                built.append((_header_key(index), _header_lead(item, today, styles)))
                 self._header_paths[index] = item.path
                 header_row_of[item.path] = index
                 continue
             row = item.row
-            title = titles[index]
-            selected = str(row.id) in self._selected
-            if selected:  # only the title lifts; its metadata keeps receding
-                title.style = styles[Tier.ACCENT]
-            cells: list[Text | str] = [
-                _marker_cell(selected, row.priority, styles),
-                title,
-            ]
+            marked = str(row.id) in self._selected
+            cells: list[Text | str] = [_title_cell(item, marked, styles, priorities)]
             if show_labels:
                 cells.append(_labels_cell(row.labels, styles[Tier.MUTED]))
             if show_due:
@@ -1391,10 +1428,29 @@ class TodoistApp(App[None]):
                 cells.append(_deadline_cell(row.deadline, today, styles))
             if show_project:
                 cells.append(_project_cell(row.project_name, styles[Tier.MUTED]))
-            table.add_row(*cells, key=_task_key(index, row.id))
+            built.append((_task_key(index, row.id), cells))
             if first_task_row is None:
                 first_task_row = index
             first_row_of.setdefault(str(row.id), index)
+        leads = [entry for _, entry in built if isinstance(entry, Text)]
+        self._laid_out = table.scrollable_content_region.width
+        widths = _column_widths(
+            columns,
+            [entry for _, entry in built if isinstance(entry, list)],
+            table.scrollable_content_region.width,
+            max((cell_len(lead.plain) + _MIN_FILL for lead in leads), default=0),
+        )
+        table.clear(columns=True)
+        for label, width in zip(columns, widths, strict=True):
+            table.add_column(label, width=width)
+        self.query_one(ColumnHeader).show(list(zip(columns, widths, strict=True)))
+        for key, entry in built:
+            cells = (
+                _divider_cells(entry, widths, styles)
+                if isinstance(entry, Text)
+                else entry
+            )
+            table.add_row(*cells, key=key)
         if prior_group is not None and prior_group in header_row_of:
             table.move_cursor(row=header_row_of[prior_group])  # keep it on the group
         elif prior is not None and prior in first_row_of:
@@ -1471,27 +1527,73 @@ class TodoistApp(App[None]):
 
 
 _RECURRING_GLYPH = " ↻"
-_SELECT_MARKER = "▌"  # bar on a multi-selected row
 
 
-def _marker_cell(
-    selected: bool, priority: Priority, styles: Mapping[Tier, Style]
+def _title_cell(
+    line: TaskLine[TaskRow],
+    marked: bool,
+    styles: Mapping[Tier, Style],
+    priorities: Mapping[Priority, Style],
 ) -> Text:
-    """The selection bar and the priority dot share the leading column, so
-    selecting a row never shifts its title sideways."""
-    bar = _SELECT_MARKER if selected else " "
-    return Text.assemble((bar, styles[Tier.ACCENT]), priority_dot(priority))
+    """The row's whole left side: selection bar, priority dot, then the title.
 
-
-def _title_cell(line: TaskLine[TaskRow], styles: Mapping[Tier, Style]) -> Text:
-    """The task title, leading its row; only the description marker recedes."""
+    All one cell, so selecting a row can't shift its text and the group dividers
+    can start at the very left edge instead of after a column of their own."""
     row = line.row
-    title = Text(_indent(line.level), style=styles[Tier.PRIMARY])
+    cell = Text(_SELECT_MARKER if marked else " ", style=styles[Tier.ACCENT])
+    dot = priority_dot(row.priority)
+    cell.append(dot or " ", style=priorities.get(row.priority))
+    cell.append(" ")
+    tier = Tier.ACCENT if marked else Tier.PRIMARY
+    title = Text(_indent(line.level), style=styles[tier])
     title.append(_expand_marker(line))
     title.append_text(render_links(row.content))
     if marker := description_marker(row.description):
         title.append(marker, style=styles[Tier.MUTED])
-    return title
+    cell.append_text(title)
+    return cell
+
+
+def _column_widths(
+    labels: list[str],
+    rows: list[list[Text | str]],
+    available: int,
+    first_minimum: int,
+) -> list[int]:
+    """Each column as wide as its widest cell plus a gutter, the last stretched to
+    the right edge.
+
+    Widths are explicit because `cell_padding` has to be zero for a group divider
+    to run unbroken across the columns — with no padding, the gutter has to live
+    inside the width instead. `first_minimum` keeps the title column wide enough
+    for the group labels, which would otherwise be truncated by their own column.
+    """
+    # the first label is drawn past the marker slot, so it needs the room for both
+    widths = [
+        cell_len(label) + (len(MARKER_SLOT) if column == 0 else 0)
+        for column, label in enumerate(labels)
+    ]
+    for cells in rows:
+        for column, cell in enumerate(cells):
+            text = cell if isinstance(cell, str) else cell.plain
+            widths[column] = max(widths[column], cell_len(text))
+    widths = [width + _GUTTER for width in widths]
+    widths[0] = max(widths[0], first_minimum)
+    slack = available - sum(widths)  # 0 before the first layout; a resize repaints
+    if slack > 0:
+        widths[-1] += slack
+    return widths
+
+
+def _divider_cells(
+    lead: Text, widths: list[int], styles: Mapping[Tier, Style]
+) -> list[Text | str]:
+    """The group's label on a rule running the table's full width: the label rides
+    in the first column, every later column is rule to the edge."""
+    rule = styles[Tier.MUTED]
+    first = lead.copy()
+    first.append("─" * max(_MIN_FILL, widths[0] - cell_len(lead.plain)), style=rule)
+    return [first, *(Text("─" * width, style=rule) for width in widths[1:])]
 
 
 def _due_cell(
@@ -1534,32 +1636,24 @@ def _labels_cell(labels: tuple[str, ...], style: Style) -> Text | str:
     return Text(line, style=style) if line else ""
 
 
-def _header_text(
-    header: GroupHeader,
-    today: datetime.date,
-    target_width: int,
-    styles: Mapping[Tier, Style],
+def _header_lead(
+    header: GroupHeader, today: datetime.date, styles: Mapping[Tier, Style]
 ) -> Text:
-    """A divider carrying the group's label: the label leads in the accent, the
-    rules on either side recede. `target_width` is the width of the titles the
-    divider spans."""
+    """The divider's opening rule and its label, without the fill that carries it
+    across the column — measured first, so the column can be sized to hold it."""
     label = header.label
     if header.field is Field.DUE_DATE:
         # the bucket label is ISO (a stable grouping key) except "No due date"
         with contextlib.suppress(ValueError):
             label = humanize_date(datetime.date.fromisoformat(label), today)
-    label = f"{label} ({header.count})"
     marker = _FOLD_SHUT if header.collapsed else _FOLD_OPEN
-    lead = f"{_indent(header.level)}{marker}── "  # marker counted, so rules align
     rule = styles[Tier.MUTED]
+    lead = Text(f"{_indent(header.level)}{marker}── ", style=rule)  # marker counted
     # top level is the boldest divider; deeper ones recede to a plain accent
     accent = styles[Tier.ACCENT] + Style(bold=header.level == 0)
-    spanned = cell_len(lead) + cell_len(label) + 1  # +1 for the space before the fill
-    fill = "─" * max(_MIN_FILL, target_width - spanned)
-    text = Text(lead, style=rule)
-    text.append(label, style=accent)
-    text.append(f" {fill}", style=rule)
-    return text
+    lead.append(f"{label} ({header.count})", style=accent)
+    lead.append(" ", style=rule)
+    return lead
 
 
 def _indent(level: int) -> str:

@@ -348,7 +348,7 @@ async def test_rows_carry_priority_project_and_due() -> None:
     async with host.run_test() as pilot:
         await _search_for(host, pilot, "g", "e", "s", "c", "h")
         plain = _prompts(host)[0].plain
-        assert "🔴" in plain
+        assert "●" in plain  # the priority dot; the row colours it
         assert "Tasks" in plain
         assert "Tomorrow" in plain
 

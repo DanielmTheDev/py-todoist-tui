@@ -12,14 +12,16 @@ from todoist_tui.tui.theme import ACCENT, Tier
 
 _LINK_STYLE = f"underline {ACCENT}"
 MATCH_STYLE = ACCENT  # undecorated accent: points at what matched
-_PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
+_PRIORITY_DOT = "●"
 _ELLIPSIS = "…"
 _DESCRIPTION_GLYPH = " ≡"
 
 
 def priority_dot(priority: Priority) -> str:
-    """Coloured dot for the priority; blank for P4, which needs no marking."""
-    return _PRIORITY_DOTS.get(priority, "")
+    """Dot marking the priority; blank for P4, which needs no marking. The colour
+    is the caller's (see `theme.priority_styles`) so the palette owns it, and the
+    glyph is single-width so it costs one cell whatever the priority."""
+    return "" if priority is Priority.P4 else _PRIORITY_DOT
 
 
 def highlight_match(text: str, span: tuple[int, int] | None) -> Text:
@@ -74,9 +76,9 @@ def format_reminder(reminder: Reminder, today: datetime.date) -> str:
 
 
 def format_reminder_badge(count: int) -> str:
-    """Bell marking a task that has reminders; counted only when there's more
-    than one, so the common single reminder stays a bare glyph."""
-    return "🔔" if count == 1 else f"🔔{count}"
+    """Mark for a task that has reminders; counted only when there's more than
+    one, so the common single reminder stays a bare glyph."""
+    return "•" if count == 1 else f"•{count}"
 
 
 def description_marker(description: str) -> str:

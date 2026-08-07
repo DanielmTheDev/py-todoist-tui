@@ -11,7 +11,13 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import TaskTable, TodoistApp
 from todoist_tui.tui.format import MATCH_STYLE, render_links
-from todoist_tui.tui.theme import ACCENT, TODOIST_THEME, Tier, tier_styles
+from todoist_tui.tui.theme import (
+    ACCENT,
+    TODOIST_THEME,
+    Tier,
+    priority_styles,
+    tier_styles,
+)
 
 _RAMP = (Tier.PRIMARY, Tier.SECONDARY, Tier.MUTED)  # leading to receding
 _TODAY = datetime.date(2026, 7, 28)
@@ -73,6 +79,18 @@ async def test_every_tier_resolves_to_a_distinct_colour() -> None:
         styles = tier_styles(app.query_one(TaskTable))
         assert set(styles) == set(Tier)
         assert len({_color(style) for style in styles.values()}) == len(Tier)
+
+
+@pytest.mark.anyio
+async def test_every_marked_priority_gets_its_own_colour() -> None:
+    """The dot is the same glyph at every priority, so the colour is the whole
+    signal — two priorities sharing one says nothing."""
+    app = TodoistApp(FakeRepository([_TASK], []), clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        styles = priority_styles(app.query_one(TaskTable))
+        assert set(styles) == {Priority.P1, Priority.P2, Priority.P3}
+        assert len({_color(style) for style in styles.values()}) == len(styles)
 
 
 @pytest.mark.anyio

@@ -1,15 +1,26 @@
-/* Chrome for the main screen. The text-emphasis ramp itself lives in
-   `theme.TIER_CSS`, carried by each tiered widget. */
+/* Chrome for the main screen. The palette itself lives in `theme.PALETTE_CSS`,
+   carried by each palette-aware widget.
 
-/* A tint, not a slab: enough to read as chrome rather than content, and the
-   $text* ramp resolves over it so the band keeps its own hierarchy. */
-#status {
-    background: $primary 12%;
-    padding: 0 $gutter;
+   Sections are told apart by full-width rules, not by background tints: stacked
+   bands read as noise, and a rule that runs edge to edge lines up with the group
+   dividers inside the table. */
+
+#status, #columns {
+    background: transparent;
     height: 1;
     /* error text is arbitrary; clip it rather than let the chrome wrap */
     text-wrap: nowrap;
     text-overflow: ellipsis;
+}
+
+Rule.-horizontal {
+    color: $text-disabled;
+    margin: 0;  /* the default vertical margin would strand the rule mid-gap */
+}
+
+TaskTable {
+    /* the table's own surface would end in a hard edge under the last row */
+    background: transparent;
 }
 
 /* A tint the cells show through, not a slab that repaints them — paired with
@@ -17,11 +28,4 @@
    its own text hierarchy. */
 TaskTable > .datatable--cursor {
     background: $primary 20%;
-}
-
-/* Column headers name the data; they must not compete with it. */
-TaskTable > .datatable--header {
-    background: $surface;
-    color: $text-disabled;
-    text-style: not bold;
 }
