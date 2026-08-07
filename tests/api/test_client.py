@@ -336,6 +336,50 @@ async def test_update_item_labels_creates_new_labels_first() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_update_item_text_sends_content_and_description_together() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_item_text("6X4", "Buy oat milk", "2 cartons")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "item_update",
+            "uuid": "u-1",
+            "args": {
+                "id": "6X4",
+                "content": "Buy oat milk",
+                "description": "2 cartons",
+            },
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_update_item_text_clears_the_description_with_an_empty_string() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_item_text("6X4", "Buy oat milk", "")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"]["description"] == ""
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_move_item_posts_item_move_command_with_project() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

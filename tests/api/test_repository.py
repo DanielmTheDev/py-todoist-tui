@@ -1117,6 +1117,27 @@ async def test_set_labels_creates_unknown_labels_first() -> None:
 
 
 @pytest.mark.anyio
+@respx.mock
+async def test_set_text_updates_content_and_description() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_text(TaskId("6X4"), "Buy oat milk", "2 cartons")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_update"
+    assert commands[0]["args"] == {
+        "id": "6X4",
+        "content": "Buy oat milk",
+        "description": "2 cartons",
+    }
+
+
+@pytest.mark.anyio
 async def test_refresh_is_a_noop() -> None:
     repo = ApiTaskRepository(TodoistClient.create("tok"))
 

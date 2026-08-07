@@ -158,6 +158,10 @@ class SnapshotTaskRepository:
         await self._inner.set_labels(task_id, labels, create)
         await self._invalidate()
 
+    async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
+        await self._inner.set_text(task_id, content, description)
+        await self._invalidate()
+
     async def add_reminder(self, reminder: Reminder) -> None:
         await self._inner.add_reminder(reminder)
         await self._invalidate()

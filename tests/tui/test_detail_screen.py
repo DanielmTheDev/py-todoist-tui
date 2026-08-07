@@ -55,7 +55,7 @@ class _Host(App[None]):
     def __init__(
         self,
         row: TaskRow,
-        dismissed: list[bool],
+        dismissed: list[bool | None],
         opener: _FakeOpener | None = None,
         today: datetime.date = _TODAY,
     ) -> None:
@@ -68,7 +68,7 @@ class _Host(App[None]):
     def on_mount(self) -> None:
         self.push_screen(
             TaskDetailScreen(self._row, self._opener, self._today),
-            lambda _result: self._dismissed.append(True),
+            self._dismissed.append,
         )
 
 
@@ -89,14 +89,15 @@ async def _red_segments(row: TaskRow) -> list[str]:
     ]
 
 
-async def _dismisses_on(row: TaskRow, key: str) -> bool:
-    dismissed: list[bool] = []
+async def _result_of(row: TaskRow, key: str) -> list[bool | None]:
+    """The values the card dismissed with after `key` — True asks for an edit."""
+    dismissed: list[bool | None] = []
     host = _Host(row, dismissed)
     async with host.run_test() as pilot:
         await pilot.pause()
         await pilot.press(key)
         await pilot.pause()
-    return dismissed == [True]
+    return dismissed
 
 
 async def _opened_after(row: TaskRow, *keys: str) -> list[str]:
@@ -223,7 +224,17 @@ async def test_no_due_renders_a_dash() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("key", ["escape", "enter", "q"])
 async def test_escape_enter_and_q_close_the_view(key: str) -> None:
-    assert await _dismisses_on(_row(), key)
+    assert await _result_of(_row(), key) == [False]
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_closes_the_view_asking_for_an_edit() -> None:
+    assert await _result_of(_row(), "ctrl+e") == [True]
+
+
+@pytest.mark.anyio
+async def test_hint_advertises_the_edit_key() -> None:
+    assert "ctrl+e edit" in await _shown(_row())
 
 
 _LINKED = _row(

@@ -1,6 +1,6 @@
 import pytest
 
-from todoist_tui.application.set_priority import set_priority
+from todoist_tui.application.set_text import set_text
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.duplication import DuplicationPlan
@@ -15,7 +15,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.priorities: list[tuple[TaskId, Priority]] = []
+        self.text_edits: list[tuple[TaskId, str, str]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -55,8 +55,7 @@ class FakeRepository:
 
     async def delete_section(self, section_id: str) -> None: ...
 
-    async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
-        self.priorities.append((task_id, priority))
+    async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
 
@@ -72,9 +71,8 @@ class FakeRepository:
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...
 
-    async def set_text(
-        self, task_id: TaskId, content: str, description: str
-    ) -> None: ...
+    async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
+        self.text_edits.append((task_id, content, description))
 
     async def refresh(self) -> None: ...
 
@@ -89,9 +87,9 @@ class FakeRepository:
 
 
 @pytest.mark.anyio
-async def test_set_priority_delegates_to_repo() -> None:
+async def test_set_text_delegates_to_repo() -> None:
     repo = FakeRepository()
 
-    await set_priority(repo, TaskId("6X4"), Priority.P1)
+    await set_text(repo, TaskId("6X4"), "Buy oat milk", "2 cartons")
 
-    assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
+    assert repo.text_edits == [(TaskId("6X4"), "Buy oat milk", "2 cartons")]

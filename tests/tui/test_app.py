@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, Footer, Static
+from textual.widgets import DataTable, Footer, Input, Static, TextArea
 
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
 from todoist_tui.domain.deadline import Deadline
@@ -26,6 +26,7 @@ from todoist_tui.tui.app import (
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
+from todoist_tui.tui.screens.edit import TaskEditScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
@@ -58,6 +59,7 @@ class FakeRepository:
         self.added_reminders: list[Reminder] = []
         self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
+        self.text_edits: list[tuple[TaskId, str, str]] = []
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.deleted: list[TaskId] = []
@@ -111,6 +113,15 @@ class FakeRepository:
         self.label_edits.append((task_id, labels, create))
         self._tasks = [
             replace(t, labels=labels) if t.id == task_id else t for t in self._tasks
+        ]
+
+    async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
+        self.text_edits.append((task_id, content, description))
+        self._tasks = [
+            replace(t, content=content, description=description)
+            if t.id == task_id
+            else t
+            for t in self._tasks
         ]
 
     async def complete(self, task_id: TaskId) -> None:
@@ -4158,3 +4169,212 @@ async def test_home_filter_view_refreshes_live() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert "My Filter" in str(app.query_one("#status", Static).render())
         assert "p1" in repo.refresh_filtered_queries  # live-refreshed as a filter
+
+
+def _noted(content: str, description: str = "") -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="220",
+        description=description,
+    )
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_opens_the_editor_prefilled_from_the_cursor_row() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskEditScreen)
+        assert app.screen.query_one(Input).value == "t1"
+        assert app.screen.query_one(TextArea).text == "a note"
+
+
+@pytest.mark.anyio
+async def test_saving_the_editor_repaints_the_title_and_sends_one_update() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")  # title becomes "t1!"
+        await pilot.press("tab")
+        await pilot.press("s")  # description becomes "a notes"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.text_edits == [(TaskId("t1"), "t1!", "a notes")]
+        assert _content_col(app.query_one(TaskTable))[0] == "t1!"
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_ignores_the_selection_and_edits_the_cursor_task() -> None:
+    repo = FakeRepository([_noted("t1"), _noted("t2")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("x")  # selects t1, cursor advances to t2
+        await pilot.press("x")  # selects t2
+        await pilot.press("k")  # cursor back on t1
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert repo.text_edits == [(TaskId("t1"), "t1!", "")]
+        assert _selected_rows(app.query_one(TaskTable)) == [0, 1]  # selection kept
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_editor_records_nothing() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert repo.text_edits == []
+        assert _content_col(app.query_one(TaskTable))[0] == "t1"
+
+
+@pytest.mark.anyio
+async def test_saving_unchanged_text_is_a_noop() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("ctrl+s")  # nothing typed
+        await pilot.pause()
+
+        assert repo.text_edits == []
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_on_an_empty_table_does_nothing() -> None:
+    app = TodoistApp(FakeRepository([], []))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, TaskEditScreen)
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_noted("t1")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        table.move_cursor(row=0)  # the group header
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, TaskEditScreen)
+
+
+class FailingSetTextRepository(FakeRepository):
+    async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_set_text_failure_is_surfaced_and_resyncs() -> None:
+    repo = FailingSetTextRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to edit task: boom" in _status(app)
+        # failed command resyncs to server truth: the title reverts
+        assert _content_col(app.query_one(TaskTable))[0] == "t1"
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_in_the_detail_card_opens_the_editor() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskEditScreen)
+        assert not [s for s in app.screen_stack if isinstance(s, TaskDetailScreen)]
+
+
+@pytest.mark.anyio
+async def test_saving_from_the_detail_card_reopens_it_with_the_new_text() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskDetailScreen)
+        details = [s for s in app.screen_stack if isinstance(s, TaskDetailScreen)]
+        assert len(details) == 1  # the stale card was replaced, not stacked
+        assert "t1!" in str(app.screen.query_one("#detail", Static).render())
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_editor_returns_to_the_detail_card() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskDetailScreen)
+        assert repo.text_edits == []

@@ -110,6 +110,16 @@ class TodoistClient:
         # `deadline=None` clears it; otherwise a Sync `deadline` object (date-only).
         await self._command("item_update", {"id": task_id, "deadline": deadline})
 
+    async def update_item_text(
+        self, task_id: str, content: str, description: str
+    ) -> None:
+        # Both prose fields go in one command; Todoist strips surrounding
+        # whitespace on each, and an empty description clears it.
+        await self._command(
+            "item_update",
+            {"id": task_id, "content": content, "description": description},
+        )
+
     async def update_item_labels(
         self, task_id: str, labels: list[str], create: list[str] | None = None
     ) -> None:

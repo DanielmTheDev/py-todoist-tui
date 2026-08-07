@@ -22,6 +22,7 @@ from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_labels import set_labels
 from todoist_tui.application.set_priority import set_priority
+from todoist_tui.application.set_text import set_text
 from todoist_tui.application.views import (
     INBOX,
     TODAY,
@@ -73,6 +74,7 @@ from todoist_tui.tui.format import (
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
+from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
@@ -196,6 +198,7 @@ class TodoistApp(App[None]):
         Binding("at", "set_labels", "Labels", show=False),
         Binding("R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
+        Binding("ctrl+e", "edit_task", "Edit title + description", show=False),
         Binding("x", "toggle_select", "Select", show=False),
         Binding("asterisk", "select_all", "Select all", show=False),
         Binding("escape", "clear_selection", "Clear selection", show=False),
@@ -628,14 +631,70 @@ class TodoistApp(App[None]):
         self.push_screen(HelpScreen(rows))
 
     def action_open_detail(self) -> None:
-        table = self.query_one(TaskTable)
-        task_id = self._cursor_task_id(table)
-        if task_id is None:  # empty table or cursor on a group header
+        row = self._cursor_row()
+        if row is None:  # empty table or cursor on a group header
             return
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
-        if row is None:
+        self._open_detail(row)
+
+    def _open_detail(self, row: TaskRow) -> None:
+        self.push_screen(
+            TaskDetailScreen(row, self._link_opener, self._clock.today()),
+            lambda edit: self._on_detail_closed(row, edit),
+        )
+
+    def _on_detail_closed(self, row: TaskRow, edit: bool | None) -> None:
+        if edit:  # the card asked for the editor (ctrl+e)
+            self._open_editor(row, from_detail=True)
+
+    def action_edit_task(self) -> None:
+        row = self._cursor_row()
+        if row is None:  # empty table or cursor on a group header
             return
-        self.push_screen(TaskDetailScreen(row, self._link_opener, self._clock.today()))
+        self._open_editor(row, from_detail=False)
+
+    def _open_editor(self, row: TaskRow, from_detail: bool) -> None:
+        self.push_screen(
+            TaskEditScreen(row.content, row.description),
+            lambda text: self._on_edited(row, text, from_detail),
+        )
+
+    def _on_edited(
+        self, row: TaskRow, text: TaskText | None, from_detail: bool
+    ) -> None:
+        edited = row
+        if text is not None and (
+            text.content != row.content or text.description != row.description
+        ):
+            edited = replace(row, content=text.content, description=text.description)
+            task_id = str(row.id)
+            self._record_edit(
+                task_id, content=text.content, description=text.description
+            )
+            self._rows = [  # optimistic: repaint the title cell now
+                edited if str(r.id) == task_id else r for r in self._rows
+            ]
+            self._rows = self._drop_departed({task_id})
+            self._render(self._arrange(self._rows), self._view)
+            self._set_text(task_id, text)
+        if from_detail:  # came from the card: land back on it, showing the edit
+            self._open_detail(edited)
+
+    @work
+    async def _set_text(self, task_id: str, text: TaskText) -> None:
+        try:
+            await set_text(self._repo, TaskId(task_id), text.content, text.description)
+        except Exception as error:  # command rejected: resync, then report
+            self._forget_edit(task_id, "content", "description")
+            await self._reload(self._view)
+            self._set_status(f"Failed to edit task: {error}")
+            return
+        self._sync_now()  # pull server delta; re-runs a live filter/search view
+
+    def _cursor_row(self) -> TaskRow | None:
+        task_id = self._cursor_task_id(self.query_one(TaskTable))
+        if task_id is None:
+            return None
+        return next((r for r in self._rows if str(r.id) == task_id), None)
 
     def _on_scheduled(self, task_ids: list[TaskId], result: DueResult | None) -> None:
         if result is None:  # picker was cancelled

@@ -116,6 +116,9 @@ class ApiTaskRepository:
     ) -> None:
         await self._client.update_item_labels(str(task_id), list(labels), list(create))
 
+    async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
+        await self._client.update_item_text(str(task_id), content, description)
+
     async def apply_creation(self, plan: DuplicationPlan) -> None:
         specs: list[tuple[str, str, dict[str, Any]]] = []
         for project in plan.projects:

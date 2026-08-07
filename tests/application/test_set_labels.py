@@ -72,6 +72,10 @@ class FakeRepository:
     ) -> None:
         self.label_edits.append((task_id, labels, create))
 
+    async def set_text(
+        self, task_id: TaskId, content: str, description: str
+    ) -> None: ...
+
     async def refresh(self) -> None: ...
 
     async def apply_creation(self, plan: DuplicationPlan) -> None: ...

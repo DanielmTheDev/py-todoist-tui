@@ -19,8 +19,9 @@ from todoist_tui.tui.format import (
 _DASH = "—"  # stands in for an unset field
 
 
-class TaskDetailScreen(ModalScreen[None]):
-    """Read-only card for a single task. Any of escape/enter/q closes it.
+class TaskDetailScreen(ModalScreen[bool]):
+    """Read-only card for a single task. Any of escape/enter/q closes it; ctrl+e
+    closes it asking the app to open the editor (dismisses True).
     Links in the title/description are numbered; 1-9 or `o` open them."""
 
     DEFAULT_CSS = """
@@ -59,7 +60,9 @@ class TaskDetailScreen(ModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("escape", "enter", "q"):
-            self.dismiss()
+            self.dismiss(False)
+        elif event.key == "ctrl+e":
+            self.dismiss(True)
         elif event.key == "o":
             self._open(1)
         elif event.character and event.character.isdigit():
@@ -93,7 +96,8 @@ class TaskDetailScreen(ModalScreen[None]):
             for number, link in enumerate(self._links, start=1):
                 text.append(f"[{number}] ")
                 text.append(f"{link.url}\n", style=f"link {link.url}")
-        hint = "1-9 open link  o open  esc close" if self._links else "esc close"
+        links_hint = "1-9 open link  o open  " if self._links else ""
+        hint = f"{links_hint}ctrl+e edit  esc close"
         text.append(f"\n{hint}", style="dim")
         return text
 
