@@ -8,6 +8,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import (
     MATCH_STYLE,
+    description_marker,
     format_deadline,
     format_due,
     format_labels,
@@ -118,6 +119,15 @@ def test_format_reminder_shows_an_absolute_date() -> None:
 def test_format_reminder_badge_counts_only_beyond_one() -> None:
     assert format_reminder_badge(1) == "🔔"
     assert format_reminder_badge(3) == "🔔3"
+
+
+def test_description_marker_flags_a_task_that_carries_one() -> None:
+    assert description_marker("a note") == " ≡"
+
+
+def test_description_marker_ignores_blank_descriptions() -> None:
+    assert description_marker("") == ""
+    assert description_marker("  \n ") == ""
 
 
 def test_plain_text_has_no_styled_spans() -> None:

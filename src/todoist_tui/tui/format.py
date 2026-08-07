@@ -13,6 +13,7 @@ _LINK_STYLE = "underline #89ddff"  # cyan; readable on the dark and blue-selecti
 MATCH_STYLE = "#89ddff"  # the same accent, undecorated: points at what matched
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _ELLIPSIS = "…"
+_DESCRIPTION_GLYPH = " ≡"
 
 
 def priority_dot(priority: Priority) -> str:
@@ -75,6 +76,12 @@ def format_reminder_badge(count: int) -> str:
     """Bell marking a task that has reminders; counted only when there's more
     than one, so the common single reminder stays a bare glyph."""
     return "🔔" if count == 1 else f"🔔{count}"
+
+
+def description_marker(description: str) -> str:
+    """Mark a task that carries a description; presence only, since the list has
+    no room for the note itself. Blank-only text doesn't count as one."""
+    return _DESCRIPTION_GLYPH if description.strip() else ""
 
 
 def styled_date(label: str, d: datetime.date, today: datetime.date) -> Text:

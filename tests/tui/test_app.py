@@ -4240,6 +4240,54 @@ def _noted(content: str, description: str = "") -> Task:
 
 
 @pytest.mark.anyio
+async def test_a_description_marks_the_title_and_a_bare_task_stays_clean() -> None:
+    repo = FakeRepository([_noted("t1", "a note"), _noted("t2")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert _content_col(app.query_one(TaskTable)) == ["t1 ≡", "t2"]
+
+
+@pytest.mark.anyio
+async def test_the_description_marker_recedes_behind_the_bold_title() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        cell = app.query_one(TaskTable).get_row_at(0)[1]
+        assert isinstance(cell, Text)
+        assert [
+            (str(span.style), cell.plain[span.start : span.end]) for span in cell.spans
+        ] == [("not bold dim", " ≡")]
+
+
+@pytest.mark.anyio
+async def test_adding_a_description_makes_the_marker_appear_at_once() -> None:
+    repo = FakeRepository([_noted("t1")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert _content_col(app.query_one(TaskTable)) == ["t1"]
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.press("n")  # description becomes "n"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _content_col(app.query_one(TaskTable)) == ["t1 ≡"]
+
+
+@pytest.mark.anyio
 async def test_ctrl_e_opens_the_editor_prefilled_from_the_cursor_row() -> None:
     repo = FakeRepository([_noted("t1", "a note")], [])
     app = TodoistApp(repo)
@@ -4272,7 +4320,7 @@ async def test_saving_the_editor_repaints_the_title_and_sends_one_update() -> No
         await pilot.pause()
 
         assert repo.text_edits == [(TaskId("t1"), "t1!", "a notes")]
-        assert _content_col(app.query_one(TaskTable))[0] == "t1!"
+        assert _content_col(app.query_one(TaskTable))[0] == "t1! ≡"
 
 
 @pytest.mark.anyio
@@ -4310,7 +4358,7 @@ async def test_cancelling_the_editor_records_nothing() -> None:
         await pilot.pause()
 
         assert repo.text_edits == []
-        assert _content_col(app.query_one(TaskTable))[0] == "t1"
+        assert _content_col(app.query_one(TaskTable))[0] == "t1 ≡"
 
 
 @pytest.mark.anyio
@@ -4377,7 +4425,7 @@ async def test_set_text_failure_is_surfaced_and_resyncs() -> None:
 
         assert "Failed to edit task: boom" in _status(app)
         # failed command resyncs to server truth: the title reverts
-        assert _content_col(app.query_one(TaskTable))[0] == "t1"
+        assert _content_col(app.query_one(TaskTable))[0] == "t1 ≡"
 
 
 @pytest.mark.anyio

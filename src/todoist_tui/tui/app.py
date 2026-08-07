@@ -63,6 +63,7 @@ from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import (
+    description_marker,
     format_deadline,
     format_due,
     format_labels,
@@ -1302,6 +1303,8 @@ class TodoistApp(App[None]):
             content = Text(_indent(item.level), style="bold")
             content.append(_expand_marker(item))
             content.append_text(render_links(row.content))
+            if marker := description_marker(row.description):
+                content.append(marker, style="not bold dim")  # undo the bold base
             cells: list[Text | str] = [priority_dot(row.priority), content]
             if show_labels:
                 cells.append(_labels_cell(row.labels))
