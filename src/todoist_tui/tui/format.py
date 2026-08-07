@@ -8,9 +8,10 @@ from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import parse
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
+from todoist_tui.tui.theme import ACCENT, Tier
 
-_LINK_STYLE = "underline #89ddff"  # cyan; readable on the dark and blue-selection rows
-MATCH_STYLE = "#89ddff"  # the same accent, undecorated: points at what matched
+_LINK_STYLE = f"underline {ACCENT}"
+MATCH_STYLE = ACCENT  # undecorated accent: points at what matched
 _PRIORITY_DOTS = {Priority.P1: "🔴", Priority.P2: "🟠", Priority.P3: "🔵"}
 _ELLIPSIS = "…"
 _DESCRIPTION_GLYPH = " ≡"
@@ -84,13 +85,24 @@ def description_marker(description: str) -> str:
     return _DESCRIPTION_GLYPH if description.strip() else ""
 
 
-def styled_date(label: str, d: datetime.date, today: datetime.date) -> Text:
-    """`label` red when `d` is overdue (before `today`), else dim so dates
-    recede behind the task title.
+def date_tier(d: datetime.date, today: datetime.date) -> Tier:
+    """How much a date should stand out: overdue shouts, today reads, later
+    recedes behind the task title.
 
     Overdue is date-granular: the clock exposes only `today()`, so a timed task
     earlier today is not flagged."""
-    return Text(label, style="red" if d < today else "dim")
+    if d < today:
+        return Tier.OVERDUE
+    return Tier.SECONDARY if d == today else Tier.MUTED
+
+
+def due_tier(due: Due, today: datetime.date) -> Tier:
+    """`date_tier`, but a clock time today earns the accent — that's the one due
+    the eye should be pulled to. Overdue still outranks it."""
+    tier = date_tier(due.date, today)
+    if tier is Tier.SECONDARY and due.time is not None:
+        return Tier.ACCENT
+    return tier
 
 
 def format_labels(labels: tuple[str, ...]) -> str:

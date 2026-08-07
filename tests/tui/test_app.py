@@ -3,9 +3,12 @@ import datetime
 from dataclasses import replace
 
 import pytest
+from rich.cells import cell_len
 from rich.text import Text
+from textual.content import Content
 from textual.widgets import DataTable, Footer, Input, Static, TextArea
 
+from tests.tui.tiers import cell_tier, dot, selected, span_tiers
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -20,6 +23,7 @@ from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.tui.app import (
     InMemoryArrangements,
     InMemoryHome,
+    StatusBand,
     TaskTable,
     TodoistApp,
 )
@@ -34,6 +38,7 @@ from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
+from todoist_tui.tui.theme import Tier
 
 
 class FakeRepository:
@@ -211,6 +216,8 @@ class FakeClock:
 
 
 _TODAY = datetime.date(2026, 7, 28)  # a Tuesday
+_YESTERDAY = _TODAY - datetime.timedelta(days=1)
+_TOMORROW = _TODAY + datetime.timedelta(days=1)
 
 
 @pytest.mark.anyio
@@ -233,17 +240,142 @@ def _status(app: TodoistApp) -> str:
     return str(app.query_one("#status", Static).render())
 
 
+@pytest.mark.anyio
+async def test_the_context_name_leads_and_its_count_recedes() -> None:
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        band = app.query_one(StatusBand)
+        content = band.render()
+        assert isinstance(content, Content)
+        assert content.plain == "Today · 1 task(s)"
+        tiers = span_tiers(band, content)
+        assert any(tier is Tier.PRIMARY and "Today" in t for tier, t in tiers)
+        assert (Tier.MUTED, " · 1 task(s)") in tiers
+
+
+@pytest.mark.anyio
+async def test_the_arrangement_summary_sits_at_the_right_edge() -> None:
+    repo = FakeRepository([_row("A")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        band = app.query_one(StatusBand)
+        content = band.render()
+        assert isinstance(content, Content)
+        assert content.plain.endswith("Group: Project ↑")
+        assert cell_len(content.plain) == band.content_size.width  # flush right
+        tiers = span_tiers(band, content)
+        assert (Tier.MUTED, "Group: Project ↑") in tiers  # and it recedes
+
+
+@pytest.mark.anyio
+async def test_a_narrow_band_drops_the_summary_rather_than_wrapping() -> None:
+    repo = FakeRepository([_row("A")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+    async with app.run_test(size=(24, 24)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert "Group" not in _status(app)
+        assert "Today · 1 task(s)" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_the_band_and_the_first_column_share_a_gutter() -> None:
+    """So the view name and the task titles under it start on the same column."""
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        band = app.query_one(StatusBand)
+        table = app.query_one(TaskTable)
+        assert band.styles.padding.left == table.cell_padding
+        assert band.styles.background != app.screen.styles.background  # tinted
+
+
+@pytest.mark.anyio
+async def test_a_long_message_keeps_the_band_one_line() -> None:
+    """The band is chrome; wrapping it would shove the table down a row. Error
+    text is arbitrary, so it has to clip."""
+    name = "a project with a name far too long to fit across a narrow terminal"
+    repo = FakeRepository([_row("A", project_id="9")], [Project(id="9", name=name)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert app.query_one(StatusBand).size.height == 1
+
+
+@pytest.mark.anyio
+async def test_a_bracketed_project_name_reaches_the_status_line_verbatim() -> None:
+    """The band shows names the user typed; Rich would read "[b]" as markup and
+    swallow it."""
+    repo = FakeRepository(
+        [_row("A", project_id="9")], [Project(id="9", name="[b]Work")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert "[b]Work" in _status(app)
+
+
 def _selected_rows(table: DataTable[object]) -> list[int]:
-    """Row indices whose title cell carries the selection accent (magenta)."""
-    marked: list[int] = []
-    for i in range(table.row_count):
-        cell = table.get_row_at(i)[1]
-        styles = str(getattr(cell, "style", "")) + " ".join(
-            str(span.style) for span in getattr(cell, "spans", [])
-        )
-        if "magenta" in styles:
-            marked.append(i)
-    return marked
+    """Row indices showing the selection bar."""
+    return [i for i in range(table.row_count) if selected(table, i)]
+
+
+@pytest.mark.anyio
+async def test_selecting_a_row_bars_it_and_accents_only_its_title() -> None:
+    """A bar in the marker slot plus an accented title, so the metadata keeps
+    receding and nothing shifts sideways."""
+    repo = FakeRepository([_row("A"), _row("B")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("x")  # select A
+        await pilot.pause()
+
+        table = app.query_one(TaskTable)
+        assert selected(table, 0) and not selected(table, 1)
+        assert cell_tier(table, table.get_row_at(0)[1]) is Tier.ACCENT
+        assert cell_tier(table, _cell(table, 0, "Project")) is Tier.MUTED
+        assert cell_tier(table, table.get_row_at(1)[1]) is Tier.PRIMARY
+
+
+@pytest.mark.anyio
+async def test_the_marker_slot_keeps_its_width_when_nothing_is_selected() -> None:
+    """The bar shares column 0 with the priority dot, so selecting can't push the
+    title rightwards."""
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        table = app.query_one(TaskTable)
+        before = str(table.get_row_at(0)[0])
+        await pilot.press("x")
+        await pilot.pause()
+        assert cell_len(str(table.get_row_at(0)[0])) == cell_len(before)
 
 
 @pytest.mark.anyio
@@ -1202,10 +1334,10 @@ async def test_mount_renders_today_tasks_in_table() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        table = app.query_one(DataTable[object])
+        table = app.query_one(TaskTable)
         assert table.row_count == 1
+        assert dot(table, 0) == "🔴"
         row = table.get_row_at(0)
-        assert row[0] == "🔴"
         assert str(row[1]) == "Buy milk"  # title leads, right after the priority dot
         assert str(_cell(table, 0, "Due")) == "21 Jul 09:30"  # overdue vs _TODAY
         assert str(_cell(table, 0, "Project")) == "Errands"
@@ -1227,11 +1359,54 @@ async def test_all_empty_metadata_columns_are_hidden() -> None:
         await pilot.pause()
         table = app.query_one(DataTable[object])
         labels = [str(c.label) for c in table.ordered_columns]
-        assert labels == ["", "Task", "Due"]  # Deadline + Project omitted
+        assert labels == ["", "TASK", "DUE"]  # Deadline + Project omitted
 
 
 @pytest.mark.anyio
-async def test_labels_render_in_own_dim_column() -> None:
+async def test_column_headers_recede_behind_their_data() -> None:
+    """Headers name the columns; uppercased and unemphasised they stop competing
+    with the tasks underneath."""
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 30)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert [str(c.label) for c in table.ordered_columns] == ["", "TASK", "DUE"]
+        header = table.get_component_rich_style("datatable--header")
+        assert header.color == table.get_component_rich_style(Tier.MUTED.value).color
+        assert not header.bold
+
+
+@pytest.mark.anyio
+async def test_the_cursor_row_is_tinted_and_keeps_the_ramp() -> None:
+    """A slab cursor would repaint every cell one colour and flatten the
+    hierarchy on the very row being read."""
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P1,
+        due=Due(date=datetime.date(2026, 7, 30)),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        cursor = table.get_component_styles("datatable--cursor")
+        assert cursor.background != table.styles.background  # tinted
+        assert table.cursor_foreground_priority == "renderable"  # cells keep their tier
+
+
+@pytest.mark.anyio
+async def test_labels_render_in_their_own_receding_column() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Buy milk",
@@ -1246,9 +1421,9 @@ async def test_labels_render_in_own_dim_column() -> None:
         await pilot.pause()
         table = app.query_one(DataTable[object])
         columns = [str(c.label) for c in table.ordered_columns]
-        assert columns == ["", "Task", "Labels"]  # Labels sits right after the title
+        assert columns == ["", "TASK", "LABELS"]  # Labels sits right after the title
         cell = _cell(table, 0, "Labels")
-        assert isinstance(cell, Text) and cell.style == "dim"  # recedes behind title
+        assert cell_tier(table, cell) is Tier.MUTED  # recedes behind the title
         assert str(cell) == "@errand @home"
 
 
@@ -1267,17 +1442,88 @@ async def test_labels_column_hidden_when_no_task_has_labels() -> None:
         await pilot.pause()
         table = app.query_one(DataTable[object])
         columns = [str(c.label) for c in table.ordered_columns]
-        assert "Labels" not in columns
+        assert "LABELS" not in columns
 
 
 @pytest.mark.anyio
-async def test_title_is_bold_and_dates_dimmed() -> None:
+async def test_the_due_column_grades_urgency() -> None:
+    """A clock time today pulls the eye; overdue sounds the alarm; a later date
+    recedes with the rest of the metadata."""
+    now = Task(
+        id=TaskId("now"),
+        content="now",
+        priority=Priority.P4,
+        due=Due(date=_TODAY, time=datetime.time(15, 0)),
+        project_id="220",
+    )
+    late = replace(now, id=TaskId("late"), content="late", due=Due(date=_YESTERDAY))
+    later = replace(now, id=TaskId("later"), content="later", due=Due(date=_TOMORROW))
+    app = TodoistApp(FakeRepository([now, late, later], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        by_title = {str(table.get_row_at(i)[1]): i for i in range(table.row_count)}
+        assert cell_tier(table, _cell(table, by_title["now"], "Due")) is Tier.ACCENT
+        assert cell_tier(table, _cell(table, by_title["late"], "Due")) is Tier.OVERDUE
+        assert cell_tier(table, _cell(table, by_title["later"], "Due")) is Tier.MUTED
+
+
+@pytest.mark.anyio
+async def test_the_recurrence_mark_and_reminder_bell_recede_behind_the_due() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Stretching",
+        priority=Priority.P4,
+        due=Due(
+            date=_TODAY,
+            time=datetime.time(14, 0),
+            is_recurring=True,
+            string="every day 14:00",
+        ),
+        project_id="220",
+    )
+    reminder = Reminder(id="r1", item_id="6X4", type="relative", minute_offset=0)
+    app = TodoistApp(
+        FakeRepository([task], [], reminders=[reminder]), clock=FakeClock(_TODAY)
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        cell = _cell(table, 0, "Due")
+        assert isinstance(cell, Text)
+        assert cell_tier(table, cell) is Tier.ACCENT  # the due itself still leads
+        assert span_tiers(table, cell) == [(Tier.MUTED, " ↻"), (Tier.MUTED, " 🔔")]
+
+
+@pytest.mark.anyio
+async def test_the_deadline_column_grades_urgency() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=None,
+        deadline=Deadline(date=_YESTERDAY),
+        project_id="220",
+    )
+    app = TodoistApp(FakeRepository([task], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert cell_tier(table, _cell(table, 0, "Deadline")) is Tier.OVERDUE
+
+
+@pytest.mark.anyio
+async def test_the_title_leads_and_its_metadata_recedes() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Buy milk",
         priority=Priority.P1,
-        due=Due(date=datetime.date(2026, 7, 30)),  # future: dim, not red
+        due=Due(date=datetime.date(2026, 7, 30)),
         project_id="220",
+        labels=("errand",),
     )
     app = TodoistApp(
         FakeRepository([task], [Project(id="220", name="Errands")]),
@@ -1286,13 +1532,10 @@ async def test_title_is_bold_and_dates_dimmed() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        table = app.query_one(DataTable[object])
-        title = table.get_row_at(0)[1]
-        due = _cell(table, 0, "Due")
-        project = _cell(table, 0, "Project")
-        assert isinstance(title, Text) and title.style == "bold"  # title, theme-safe
-        assert isinstance(due, Text) and due.style == "dim"  # due recedes
-        assert isinstance(project, Text) and project.style == "dim"  # project recedes
+        table = app.query_one(TaskTable)
+        assert cell_tier(table, table.get_row_at(0)[1]) is Tier.PRIMARY
+        assert cell_tier(table, _cell(table, 0, "Project")) is Tier.MUTED
+        assert cell_tier(table, _cell(table, 0, "Labels")) is Tier.MUTED
 
 
 @pytest.mark.anyio
@@ -1327,7 +1570,7 @@ async def test_p4_has_no_dot() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""
+        assert dot(app.query_one(TaskTable), 0) == ""
 
 
 @pytest.mark.anyio
@@ -1589,12 +1832,12 @@ async def test_pressing_digit_sets_priority_optimistically() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""  # P4: no dot
+        assert dot(app.query_one(TaskTable), 0) == ""  # P4: no dot
         syncs = repo.refresh_calls
 
         await pilot.press("1")
         # optimistic: the dot repaints before the network command resolves
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        assert dot(app.query_one(TaskTable), 0) == "🔴"
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
@@ -1617,10 +1860,10 @@ async def test_pressing_4_clears_the_priority_dot() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        assert dot(app.query_one(TaskTable), 0) == "🔴"
 
         await pilot.press("4")
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""  # P4: no dot
+        assert dot(app.query_one(TaskTable), 0) == ""  # P4: no dot
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
@@ -1722,7 +1965,7 @@ async def test_set_priority_failure_is_surfaced_and_resyncs() -> None:
             app.query_one("#status", Static).render()
         )
         # failed command resyncs to server truth: the dot reverts to P4 (blank)
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == ""
+        assert dot(app.query_one(TaskTable), 0) == ""
 
 
 class LaggingEditRepository(FakeRepository):
@@ -1783,18 +2026,18 @@ async def test_priority_survives_a_lagging_sync() -> None:
         await pilot.pause()
 
         await pilot.press("1")
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        assert dot(app.query_one(TaskTable), 0) == "🔴"
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()  # the success sync lands, still lists P4
 
         # optimistic P1 must not be reverted by the lagging snapshot
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        assert dot(app.query_one(TaskTable), 0) == "🔴"
 
         repo.catch_up()  # server finally reflects the change
         await pilot.press("r")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🔴"
+        assert dot(app.query_one(TaskTable), 0) == "🔴"
 
 
 @pytest.mark.anyio
@@ -1816,7 +2059,7 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
 
         await pilot.press("1")
         await pilot.press("2")  # second set before the first's sync settles
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"  # P2
+        assert dot(app.query_one(TaskTable), 0) == "🟠"  # P2
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
@@ -1824,13 +2067,13 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
             (TaskId("6X4"), Priority.P1),
             (TaskId("6X4"), Priority.P2),
         ]
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"  # holds P2
+        assert dot(app.query_one(TaskTable), 0) == "🟠"  # holds P2
 
         repo.catch_up()
         await pilot.press("r")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-        assert app.query_one(DataTable[object]).get_row_at(0)[0] == "🟠"
+        assert dot(app.query_one(TaskTable), 0) == "🟠"
 
 
 @pytest.mark.anyio
@@ -3067,10 +3310,67 @@ def _content_col(table: DataTable[object]) -> list[str]:
 
 def _cell(table: DataTable[object], row: int, label: str) -> object:
     """A cell by column label, or None when that column is hidden (all-empty)."""
-    labels = [str(c.label) for c in table.ordered_columns]
-    if label not in labels:
+    labels = [str(c.label).casefold() for c in table.ordered_columns]
+    if label.casefold() not in labels:
         return None
-    return table.get_row_at(row)[labels.index(label)]
+    return table.get_row_at(row)[labels.index(label.casefold())]
+
+
+@pytest.mark.anyio
+async def test_the_group_rule_spans_the_titles_it_divides() -> None:
+    """A divider that ran to the terminal edge would widen the title column and
+    push the metadata into horizontal scroll, so it tracks its own content."""
+    long_title = "a task title long enough to outgrow the default divider width"
+    repo = FakeRepository(
+        [_row(long_title), _row("short")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        col = _content_col(app.query_one(TaskTable))
+        header = next(c for c in col if "──" in c)
+        titles = [c for c in col if "──" not in c]
+        assert long_title in max(titles, key=cell_len)  # the grouped title, indented
+        assert cell_len(header) == cell_len(max(titles, key=cell_len))
+
+
+@pytest.mark.anyio
+async def test_the_group_rule_stays_visible_over_short_titles() -> None:
+    repo = FakeRepository([_row("a"), _row("b")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        col = _content_col(app.query_one(TaskTable))
+        header = next(c for c in col if "──" in c)
+        assert cell_len(header) > cell_len("Errands (2)")  # still reads as a divider
+
+
+@pytest.mark.anyio
+async def test_the_group_label_leads_over_a_receding_rule() -> None:
+    repo = FakeRepository([_row("a")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        table = app.query_one(TaskTable)
+        header = next(
+            cell
+            for i in range(table.row_count)
+            if isinstance(cell := table.get_row_at(i)[1], Text) and "──" in cell.plain
+        )
+        assert cell_tier(table, header) is Tier.MUTED  # the rules recede
+        accented = [
+            text for tier, text in span_tiers(table, header) if tier is Tier.ACCENT
+        ]
+        assert accented == ["Errands (1)"]  # only the label is accented
 
 
 def _in_section(content: str, section_id: str | None) -> Task:
@@ -4252,7 +4552,7 @@ async def test_a_description_marks_the_title_and_a_bare_task_stays_clean() -> No
 
 
 @pytest.mark.anyio
-async def test_the_description_marker_recedes_behind_the_bold_title() -> None:
+async def test_the_description_marker_recedes_behind_the_title() -> None:
     repo = FakeRepository([_noted("t1", "a note")], [])
     app = TodoistApp(repo)
 
@@ -4260,11 +4560,10 @@ async def test_the_description_marker_recedes_behind_the_bold_title() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
 
-        cell = app.query_one(TaskTable).get_row_at(0)[1]
+        table = app.query_one(TaskTable)
+        cell = table.get_row_at(0)[1]
         assert isinstance(cell, Text)
-        assert [
-            (str(span.style), cell.plain[span.start : span.end]) for span in cell.spans
-        ] == [("not bold dim", " ≡")]
+        assert span_tiers(table, cell) == [(Tier.MUTED, " ≡")]
 
 
 @pytest.mark.anyio

@@ -8,7 +8,9 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import (
     MATCH_STYLE,
+    date_tier,
     description_marker,
+    due_tier,
     format_deadline,
     format_due,
     format_labels,
@@ -18,8 +20,8 @@ from todoist_tui.tui.format import (
     match_snippet,
     priority_dot,
     render_links,
-    styled_date,
 )
+from todoist_tui.tui.theme import Tier
 
 _TODAY = datetime.date(2026, 8, 3)
 
@@ -47,16 +49,32 @@ def test_format_deadline_blank_when_unset() -> None:
     assert format_deadline(None, _TODAY) == ""
 
 
-def test_styled_date_reds_overdue() -> None:
-    result = styled_date("Yesterday", datetime.date(2026, 8, 2), _TODAY)
-    assert result.plain == "Yesterday"
-    assert result.style == "red"
+def test_date_tier_flags_overdue() -> None:
+    assert date_tier(datetime.date(2026, 8, 2), _TODAY) is Tier.OVERDUE
 
 
-def test_styled_date_dims_when_not_overdue() -> None:
-    result = styled_date("Today", _TODAY, _TODAY)
-    assert result.plain == "Today"
-    assert result.style == "dim"
+def test_date_tier_keeps_today_readable() -> None:
+    assert date_tier(_TODAY, _TODAY) is Tier.SECONDARY
+
+
+def test_date_tier_lets_future_dates_recede() -> None:
+    assert date_tier(datetime.date(2026, 8, 4), _TODAY) is Tier.MUTED
+
+
+def test_a_time_today_earns_the_accent() -> None:
+    """A task due at a clock time today is the one thing worth looking at now."""
+    due = Due(date=_TODAY, time=datetime.time(14, 30))
+    assert due_tier(due, _TODAY) is Tier.ACCENT
+
+
+def test_a_timed_overdue_task_stays_overdue() -> None:
+    """The alarm outranks the accent."""
+    due = Due(date=datetime.date(2026, 8, 2), time=datetime.time(14, 30))
+    assert due_tier(due, _TODAY) is Tier.OVERDUE
+
+
+def test_an_untimed_task_due_today_follows_the_plain_date_tier() -> None:
+    assert due_tier(Due(date=_TODAY), _TODAY) is Tier.SECONDARY
 
 
 def _styled(text: Text, needle: str) -> str | None:

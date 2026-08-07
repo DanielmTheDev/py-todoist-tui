@@ -1,5 +1,8 @@
 import datetime
+from collections.abc import Mapping
+from typing import ClassVar
 
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -9,14 +12,127 @@ from textual.widgets import Static
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.links import Link, LinkOpener, XdgOpenLinkOpener, annotate
 from todoist_tui.tui.format import (
+    date_tier,
     format_deadline,
     format_due,
     format_labels,
     format_reminder,
-    styled_date,
+    priority_dot,
 )
+from todoist_tui.tui.theme import TIER_CLASSES, TIER_CSS, Tier, tier_styles
 
 _DASH = "—"  # stands in for an unset field
+_LABEL_WIDTH = 10  # so the field values line up in a column of their own
+_MIN_RULE = 8  # a rule shorter than this reads as debris, not a separator
+
+
+class DetailCard(Static):
+    """The card's body: fields, description, links, key hint. Labels recede so the
+    values they name lead, and the sections are ruled apart."""
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(TIER_CLASSES)
+    DEFAULT_CSS = TIER_CSS
+
+    def __init__(
+        self,
+        row: TaskRow,
+        title: str,
+        description: str,
+        links: list[Link],
+        today: datetime.date,
+    ) -> None:
+        super().__init__(id="detail", markup=False)
+        self._row = row
+        self._title = title
+        self._description = description
+        self._links = links
+        self._today = today
+
+    def render(self) -> Text:
+        return self._content()  # rebuilt per paint, so the rules follow the width
+
+    def _content(self) -> Text:
+        styles = tier_styles(self)
+        label, value = styles[Tier.MUTED], styles[Tier.PRIMARY]
+        text = Text(f"{self._title}\n\n", style=value + Style(bold=True))
+        for name, render in (
+            ("Due", self._due),
+            ("Deadline", self._deadline),
+            ("Reminders", self._reminders),
+            ("Priority", self._priority),
+            ("Project", self._project),
+            ("Section", self._section),
+            ("Labels", self._labels),
+        ):
+            text.append(name.ljust(_LABEL_WIDTH), style=label)
+            text.append_text(render(styles))
+            text.append("\n")
+        self._append_section(text, "DESCRIPTION", styles)
+        if self._row.description:
+            text.append(self._description, style=value)
+        else:
+            text.append("No description", style=label)
+        if self._links:
+            self._append_section(text, "LINKS", styles)
+            for number, link in enumerate(self._links, start=1):
+                text.append(f"[{number}] ", style=label)
+                text.append(
+                    f"{link.url}\n", style=styles[Tier.ACCENT] + Style(link=link.url)
+                )
+        text.append(f"\n{self._rule()}\n", style=label)
+        text.append(self._hint(), style=label)
+        return text
+
+    def _append_section(
+        self, text: Text, heading: str, styles: Mapping[Tier, Style]
+    ) -> None:
+        text.append(
+            f"\n{heading} {self._rule(len(heading) + 1)}\n", style=styles[Tier.MUTED]
+        )
+
+    def _rule(self, taken: int = 0) -> str:
+        return "─" * max(_MIN_RULE, self.content_size.width - taken)
+
+    def _hint(self) -> str:
+        links = "1-9 open link  o open  " if self._links else ""
+        return f"{links}ctrl+e edit  esc close"
+
+    def _due(self, styles: Mapping[Tier, Style]) -> Text:
+        due = self._row.due
+        if due is None:
+            return Text(_DASH, style=styles[Tier.PRIMARY])
+        label = format_due(due, self._today)
+        text = Text(label, style=styles[date_tier(due.date, self._today)])
+        if due.string:  # recurring: show the rule alongside the next date
+            text.append(f" ({due.string})", style=styles[Tier.MUTED])
+        return text
+
+    def _deadline(self, styles: Mapping[Tier, Style]) -> Text:
+        deadline = self._row.deadline
+        if deadline is None:
+            return Text(_DASH, style=styles[Tier.PRIMARY])
+        label = format_deadline(deadline, self._today)
+        return Text(label, style=styles[date_tier(deadline.date, self._today)])
+
+    def _reminders(self, styles: Mapping[Tier, Style]) -> Text:
+        joined = ", ".join(format_reminder(r, self._today) for r in self._row.reminders)
+        return Text(joined or _DASH, style=styles[Tier.PRIMARY])
+
+    def _priority(self, styles: Mapping[Tier, Style]) -> Text:
+        dot = priority_dot(self._row.priority)
+        lead = f"{dot} " if dot else ""
+        return Text(f"{lead}{self._row.priority.label}", style=styles[Tier.PRIMARY])
+
+    def _project(self, styles: Mapping[Tier, Style]) -> Text:
+        return Text(self._row.project_name or _DASH, style=styles[Tier.PRIMARY])
+
+    def _section(self, styles: Mapping[Tier, Style]) -> Text:
+        return Text(self._row.section_name or _DASH, style=styles[Tier.PRIMARY])
+
+    def _labels(self, styles: Mapping[Tier, Style]) -> Text:
+        return Text(
+            format_labels(self._row.labels) or _DASH, style=styles[Tier.PRIMARY]
+        )
 
 
 class TaskDetailScreen(ModalScreen[bool]):
@@ -56,7 +172,13 @@ class TaskDetailScreen(ModalScreen[bool]):
         self._links: list[Link] = content_links + description_links
 
     def compose(self) -> ComposeResult:
-        yield Static(self._content(), id="detail")
+        yield DetailCard(
+            self._row,
+            self._content_text,
+            self._description_text,
+            self._links,
+            self._today,
+        )
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("escape", "enter", "q"):
@@ -72,57 +194,3 @@ class TaskDetailScreen(ModalScreen[bool]):
     def _open(self, number: int) -> None:
         if 1 <= number <= len(self._links):
             self._opener.open(self._links[number - 1].url)
-
-    def _content(self) -> Text:
-        row = self._row
-        text = Text()
-        text.append(f"{self._content_text}\n\n", style="bold")
-        text.append("Due       ")
-        self._append_due(text)
-        text.append("\nDeadline  ")
-        self._append_deadline(text)
-        text.append(f"\nReminders {self._reminders_line()}\n")
-        text.append(f"Priority  {row.priority.label}\n")
-        text.append(f"Project   {row.project_name or _DASH}\n")
-        text.append(f"Section   {row.section_name or _DASH}\n")
-        text.append(f"Labels    {self._labels_line()}\n\n")
-        text.append("Description\n", style="bold")
-        if row.description:
-            text.append(self._description_text)
-        else:
-            text.append("No description", style="dim")
-        if self._links:
-            text.append("\n\nLinks\n", style="bold")
-            for number, link in enumerate(self._links, start=1):
-                text.append(f"[{number}] ")
-                text.append(f"{link.url}\n", style=f"link {link.url}")
-        links_hint = "1-9 open link  o open  " if self._links else ""
-        hint = f"{links_hint}ctrl+e edit  esc close"
-        text.append(f"\n{hint}", style="dim")
-        return text
-
-    def _append_due(self, text: Text) -> None:
-        due = self._row.due
-        if due is None:
-            text.append(_DASH)
-            return
-        text.append_text(
-            styled_date(format_due(due, self._today), due.date, self._today)
-        )
-        if due.string:  # recurring: show the rule alongside the next date
-            text.append(f" ({due.string})")
-
-    def _append_deadline(self, text: Text) -> None:
-        deadline = self._row.deadline
-        if deadline is None:
-            text.append(_DASH)
-            return
-        label = format_deadline(deadline, self._today)
-        text.append_text(styled_date(label, deadline.date, self._today))
-
-    def _reminders_line(self) -> str:
-        joined = ", ".join(format_reminder(r, self._today) for r in self._row.reminders)
-        return joined or _DASH
-
-    def _labels_line(self) -> str:
-        return format_labels(self._row.labels) or _DASH

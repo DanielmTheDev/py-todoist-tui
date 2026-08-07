@@ -6,13 +6,15 @@ from textual.app import App
 from textual.content import Content
 from textual.widgets import Static
 
+from tests.tui.tiers import span_tiers
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.screens.detail import TaskDetailScreen
+from todoist_tui.tui.screens.detail import DetailCard, TaskDetailScreen
+from todoist_tui.tui.theme import Tier
 
 _TODAY = datetime.date(2026, 7, 28)
 _DUE = Due(date=datetime.date(2026, 7, 29), time=datetime.time(9, 0))
@@ -79,14 +81,14 @@ async def _shown(row: TaskRow) -> str:
         return str(host.screen.query_one("#detail", Static).render())
 
 
-async def _red_segments(row: TaskRow) -> list[str]:
+async def _tiered(row: TaskRow, tier: Tier) -> list[str]:
+    """The runs of the rendered card carrying `tier`."""
     host = _Host(row, [])
     async with host.run_test() as pilot:
         await pilot.pause()
-        content = cast(Content, host.screen.query_one("#detail", Static).render())
-    return [
-        content.plain[s.start : s.end] for s in content.spans if "red" in str(s.style)
-    ]
+        card = host.screen.query_one(DetailCard)
+        content = cast(Content, card.render())
+        return [text for found, text in span_tiers(card, content) if found is tier]
 
 
 async def _result_of(row: TaskRow, key: str) -> list[bool | None]:
@@ -134,15 +136,51 @@ async def test_renders_deadline_when_set() -> None:
 
 
 @pytest.mark.anyio
-async def test_overdue_due_and_deadline_render_red() -> None:
+async def test_an_overdue_due_and_deadline_sound_the_alarm() -> None:
     row = _row(
         due=Due(date=datetime.date(2026, 7, 27)),  # yesterday vs _TODAY
         deadline=Deadline(date=datetime.date(2026, 7, 20)),  # overdue
     )
-    red = await _red_segments(row)
+    overdue = await _tiered(row, Tier.OVERDUE)
 
-    assert any("Yesterday" in seg for seg in red)
-    assert any("20 Jul" in seg for seg in red)
+    assert any("Yesterday" in seg for seg in overdue)
+    assert any("20 Jul" in seg for seg in overdue)
+
+
+@pytest.mark.anyio
+async def test_field_labels_recede_behind_their_values() -> None:
+    muted = await _tiered(_row(), Tier.MUTED)
+    primary = await _tiered(_row(), Tier.PRIMARY)
+
+    assert any("Priority" in seg for seg in muted)
+    assert any("P1" in seg for seg in primary)
+    assert any("Errands" in seg for seg in primary)
+
+
+@pytest.mark.anyio
+async def test_the_priority_carries_its_dot() -> None:
+    assert "🔴 P1" in await _shown(_row(priority=Priority.P1))
+    assert "P4" in await _shown(_row(priority=Priority.P4))  # P4 needs no marking
+
+
+@pytest.mark.anyio
+async def test_section_headings_are_uppercase_and_recede() -> None:
+    shown = await _shown(_LINKED)
+    muted = await _tiered(_LINKED, Tier.MUTED)
+
+    assert "DESCRIPTION" in shown
+    assert "LINKS" in shown
+    assert any("DESCRIPTION" in seg for seg in muted)
+
+
+@pytest.mark.anyio
+async def test_a_rule_separates_the_hint_from_the_body() -> None:
+    shown = await _shown(_row())
+    rule = next(line for line in shown.splitlines() if set(line) == {"─"})
+
+    assert shown.splitlines().index(rule) < shown.splitlines().index(
+        next(line for line in shown.splitlines() if "esc close" in line)
+    )
 
 
 @pytest.mark.anyio

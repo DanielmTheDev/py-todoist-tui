@@ -1,8 +1,12 @@
 import contextlib
 import datetime
+from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import ClassVar
 
+from rich.cells import cell_len
+from rich.style import Style
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -63,14 +67,15 @@ from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.format import (
+    date_tier,
     description_marker,
+    due_tier,
     format_deadline,
     format_due,
     format_labels,
     format_reminder_badge,
     priority_dot,
     render_links,
-    styled_date,
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
@@ -85,10 +90,19 @@ from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
+from todoist_tui.tui.theme import (
+    TIER_CLASSES,
+    TIER_CSS,
+    TODOIST_THEME,
+    Tier,
+    tier_styles,
+)
 
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _INDENT = "  "  # per nesting level, for group headers and their tasks
-_HEADER_WIDTH = 56  # target width of a group divider rule
+_MIN_FILL = 3  # so a label as wide as the titles still trails a visible rule
+_GUTTER = 2  # shared by the status band's padding and the table's cell padding
+_SUMMARY_GAP = 2  # least space between the status message and the arrangement
 _FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
 _FOLD_SHUT = "▸ "  # subtree folded away
 
@@ -145,6 +159,37 @@ class InMemoryHome:
         self._key = view_key
 
 
+class StatusBand(Static):
+    """The band above the table: which view is open on the left, how it's arranged
+    on the right. Also the app's error channel, so it holds arbitrary text."""
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(TIER_CLASSES)
+    DEFAULT_CSS = TIER_CSS
+
+    def __init__(self) -> None:
+        super().__init__("Loading…", id="status", markup=False)
+        self._message = "Loading…"
+        self._tally = ""
+        self._summary = ""
+
+    def show(self, message: str, tally: str, summary: str) -> None:
+        self._message, self._tally, self._summary = message, tally, summary
+        self._paint()
+
+    def on_resize(self) -> None:
+        self._paint()  # the summary is right-aligned, so its padding is width-bound
+
+    def _paint(self) -> None:
+        styles = tier_styles(self)
+        text = Text(self._message, style=styles[Tier.PRIMARY] + Style(bold=True))
+        text.append(self._tally, style=styles[Tier.MUTED])
+        gap = self.content_size.width - cell_len(text.plain) - cell_len(self._summary)
+        if self._summary and gap >= _SUMMARY_GAP:  # else it would wrap the band
+            text.append(" " * gap)
+            text.append(self._summary, style=styles[Tier.MUTED])
+        self.update(text)
+
+
 class TaskTable(DataTable[object]):
     """DataTable with j/k or up/down row nav and h/l or left/right collapse/expand.
 
@@ -154,6 +199,9 @@ class TaskTable(DataTable[object]):
     Binding left/right here shadows DataTable's horizontal scroll, which is
     useless in row mode.
     """
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = DataTable.COMPONENT_CLASSES | TIER_CLASSES
+    DEFAULT_CSS = TIER_CSS
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j,down", "cursor_down", "Down", show=False),
@@ -178,6 +226,10 @@ class TaskTable(DataTable[object]):
 class TodoistApp(App[None]):
     """Row-highlighted task table over Today, Inbox, project, and filter views,
     opening on a persisted home view."""
+
+    # absolute: a relative path resolves against the *subclass's* module, which
+    # would send a test-local subclass looking in the tests directory
+    CSS_PATH = Path(__file__).with_name("app.tcss")
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("question_mark", "help", "Help"),  # the only footer entry
@@ -222,6 +274,8 @@ class TodoistApp(App[None]):
         home: HomeViewStore | None = None,
     ) -> None:
         super().__init__()
+        self.register_theme(TODOIST_THEME)
+        self.theme = TODOIST_THEME.name
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
         self._home = home or InMemoryHome()
@@ -235,7 +289,8 @@ class TodoistApp(App[None]):
         self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
         self._syncing = False
-        self._status_base = ""
+        self._status_base = ""  # the band's left-hand line: view title, or an error
+        self._status_tally = ""  # " · 9 task(s)", blank while an error is shown
         self._last_undo: list[tuple[TaskId, TaskRow]] = []  # last completed batch
         # tasks closed locally, kept hidden across reloads until the server's
         # snapshot reflects the change (gone, or a recurring task's new due)
@@ -255,14 +310,20 @@ class TodoistApp(App[None]):
         self._active_server_query: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("Loading…", id="status")
+        yield StatusBand()
         yield TaskTable()
         yield Footer()
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        return {"gutter": str(_GUTTER)}  # so the stylesheet shares the one constant
 
     async def on_mount(self) -> None:
         table = self.query_one(TaskTable)
         table.cursor_type = "row"
-        table.cell_padding = 2  # breathing room between columns; _render owns columns
+        # the cursor tints the background only, so each cell keeps its own tier
+        table.cursor_foreground_priority = "renderable"
+        # breathing room between columns, and the band's gutter under the first
+        table.cell_padding = _GUTTER
         self._view, self._active_server_query = await self._resolve_home()
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
@@ -437,7 +498,7 @@ class TodoistApp(App[None]):
         dropped = set(ids)
         self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._focus_task_at(table, cursor_row)
         self._complete([TaskId(i) for i in ids], undo)
 
@@ -470,7 +531,7 @@ class TodoistApp(App[None]):
             self._pending_close.pop(str(task_id), None)  # reopened: stop filtering it
             if all(str(r.id) != str(task_id) for r in self._rows):
                 self._rows = [*self._rows, row]
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._uncomplete([task_id for task_id, _ in batch])
 
     @work
@@ -521,7 +582,7 @@ class TodoistApp(App[None]):
             self._pending_close[str(task_id)] = row.due
         self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._focus_task_at(table, cursor_row)
         self._delete([task_id for task_id, _ in pairs])
 
@@ -553,7 +614,7 @@ class TodoistApp(App[None]):
             for row in self._rows
         ]
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._set_priority([TaskId(i) for i in ids], priority)
 
     @work
@@ -610,7 +671,7 @@ class TodoistApp(App[None]):
             self._selected.discard(task_id)
         else:
             self._selected.add(task_id)
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._focus_task_at(table, cursor_row + 1)  # advance for rapid marking
 
     def action_select_all(self) -> None:
@@ -620,13 +681,13 @@ class TodoistApp(App[None]):
             task_id = _task_id_of(str(key.value))
             if task_id is not None:  # skip group-header rows
                 self._selected.add(task_id)
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
 
     def action_clear_selection(self) -> None:
         if not self._selected:
             return
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
 
     def action_help(self) -> None:
         if isinstance(self.screen, HelpScreen):  # already open
@@ -678,7 +739,7 @@ class TodoistApp(App[None]):
                 edited if str(r.id) == task_id else r for r in self._rows
             ]
             self._rows = self._drop_departed({task_id})
-            self._render(self._arrange(self._rows), self._view)
+            self._repaint()
             self._set_text(task_id, text)
         if from_detail:  # came from the card: land back on it, showing the edit
             self._open_detail(edited)
@@ -722,7 +783,7 @@ class TodoistApp(App[None]):
         ]
         self._rows = self._drop_departed(targets)
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._set_due(edits)
 
     @work
@@ -752,7 +813,7 @@ class TodoistApp(App[None]):
             for row in self._rows
         ]
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._set_deadline(task_ids, new_deadline)
 
     @work
@@ -828,7 +889,7 @@ class TodoistApp(App[None]):
         else:
             self._rows = self._drop_departed(targets)
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._move_task(task_ids, target.project_id, target.section_id)
 
     @work
@@ -1018,7 +1079,7 @@ class TodoistApp(App[None]):
         ]
         self._rows = self._drop_departed(set(new_labels))
         self._selected.clear()
-        self._render(self._arrange(self._rows), self._view)
+        self._repaint()
         self._set_labels(list(new_labels.items()), create)
 
     @work
@@ -1195,7 +1256,7 @@ class TodoistApp(App[None]):
         if group is not None:  # on a group header: unfold it
             if group in self._collapsed:
                 self._collapsed.discard(group)
-                self._render(self._arrange(self._rows), self._view)
+                self._repaint()
             return
         task_id = self._cursor_task_id(table)
         if task_id is None or task_id in self._expanded:
@@ -1203,7 +1264,7 @@ class TodoistApp(App[None]):
         if not self._has_children(task_id):  # nothing to reveal
             return
         self._expanded.add(TaskId(task_id))
-        self._render(self._arrange(self._rows), self._view)  # cursor stays on it
+        self._repaint()  # cursor stays on it
 
     def on_task_table_collapse(self, _message: TaskTable.Collapse) -> None:
         table = self.query_one(TaskTable)
@@ -1211,7 +1272,7 @@ class TodoistApp(App[None]):
         if group is not None:
             if group not in self._collapsed:  # an open group: fold it away
                 self._collapsed.add(group)
-                self._render(self._arrange(self._rows), self._view)
+                self._repaint()
             elif len(group) > 1:  # already folded: step out to the enclosing group
                 self._move_cursor_to_group(table, group[:-1])
             return
@@ -1220,7 +1281,7 @@ class TodoistApp(App[None]):
             return
         if task_id in self._expanded:  # an expanded parent: fold it away
             self._expanded.discard(TaskId(task_id))
-            self._render(self._arrange(self._rows), self._view)  # cursor stays on it
+            self._repaint()  # cursor stays on it
             return
         parent_id = self._parent_of(task_id)  # a leaf/child: step out to the parent
         if parent_id is not None:
@@ -1260,6 +1321,10 @@ class TodoistApp(App[None]):
                 table.move_cursor(row=row)
                 return
 
+    def _repaint(self) -> None:
+        """Redraw the open view from the rows already loaded."""
+        self._render(self._arrange(self._rows), self._view)
+
     def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:
         try:
             table = self.query_one(TaskTable)
@@ -1267,6 +1332,8 @@ class TodoistApp(App[None]):
             return
         prior = self._cursor_task_id(table)  # survive the clear+rebuild below
         prior_group = self._cursor_group_path(table)
+        # at render time, not import: the styles follow the live theme
+        styles = tier_styles(table)
         today = self._clock.today()
         first_row_of: dict[str, int] = {}
         header_row_of: dict[GroupPath, int] = {}
@@ -1279,43 +1346,51 @@ class TodoistApp(App[None]):
         show_due = any(t.due or t.reminders for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
         show_project = any(t.project_name for t in tasks)
-        columns = ["", "Task"]
+        columns = ["", "TASK"]
         if show_labels:
-            columns.append("Labels")
+            columns.append("LABELS")
         if show_due:
-            columns.append("Due")
+            columns.append("DUE")
         if show_deadline:
-            columns.append("Deadline")
+            columns.append("DEADLINE")
         if show_project:
-            columns.append("Project")
+            columns.append("PROJECT")
         table.clear(columns=True)
         table.add_columns(*columns)
         self._header_paths = {}
+        titles = {
+            index: _title_cell(item, styles)
+            for index, item in enumerate(render_rows)
+            if isinstance(item, TaskLine)
+        }
+        # a divider spans the titles it divides: running it to the terminal edge
+        # would widen the title column and push the metadata into a scroll
+        target_width = max((cell_len(t.plain) for t in titles.values()), default=0)
         for index, item in enumerate(render_rows):
             if isinstance(item, GroupHeader):
-                header = ["", _header_text(item, today)] + [""] * (len(columns) - 2)
+                divider = _header_text(item, today, target_width, styles)
+                header = ["", divider] + [""] * (len(columns) - 2)
                 table.add_row(*header, key=_header_key(index))
                 self._header_paths[index] = item.path
                 header_row_of[item.path] = index
                 continue
             row = item.row
-            # bold (no color) so the title leads on any theme; dim metadata recedes
-            content = Text(_indent(item.level), style="bold")
-            content.append(_expand_marker(item))
-            content.append_text(render_links(row.content))
-            if marker := description_marker(row.description):
-                content.append(marker, style="not bold dim")  # undo the bold base
-            cells: list[Text | str] = [priority_dot(row.priority), content]
+            title = titles[index]
+            selected = str(row.id) in self._selected
+            if selected:  # only the title lifts; its metadata keeps receding
+                title.style = styles[Tier.ACCENT]
+            cells: list[Text | str] = [
+                _marker_cell(selected, row.priority, styles),
+                title,
+            ]
             if show_labels:
-                cells.append(_labels_cell(row.labels))
+                cells.append(_labels_cell(row.labels, styles[Tier.MUTED]))
             if show_due:
-                cells.append(_due_cell(row.due, row.reminders, today))
+                cells.append(_due_cell(row.due, row.reminders, today, styles))
             if show_deadline:
-                cells.append(_deadline_cell(row.deadline, today))
+                cells.append(_deadline_cell(row.deadline, today, styles))
             if show_project:
-                cells.append(_project_cell(row.project_name))
-            if str(row.id) in self._selected:  # accent the whole row, no shift
-                cells = [_accent(cell) for cell in cells]
+                cells.append(_project_cell(row.project_name, styles[Tier.MUTED]))
             table.add_row(*cells, key=_task_key(index, row.id))
             if first_task_row is None:
                 first_task_row = index
@@ -1329,7 +1404,7 @@ class TodoistApp(App[None]):
         # the view's own tasks, not the visible lines: collapsing a parent or
         # revealing a subtask pulled in for context must not move the number
         matched = sum(1 for row in self._rows if row.matched)
-        self._set_status(_count_status(view.title, matched))
+        self._set_count_status(view.title, matched)
 
     def _focus_task_at(self, table: TaskTable, row: int) -> None:
         """Put the cursor on the task at or after `row`, else the last task —
@@ -1366,7 +1441,15 @@ class TodoistApp(App[None]):
         return self._header_paths.get(table.cursor_row)
 
     def _set_status(self, message: str) -> None:
+        """A progress or error line, holding the band until the next paint."""
         self._status_base = message
+        self._status_tally = ""
+        self._render_status()
+
+    def _set_count_status(self, title: str, count: int) -> None:
+        self._status_base = title
+        tally = "no tasks" if count == 0 else f"{count} task(s)"
+        self._status_tally = f" · {tally}"
         self._render_status()
 
     def _set_syncing(self, syncing: bool) -> None:
@@ -1375,64 +1458,91 @@ class TodoistApp(App[None]):
 
     def _render_status(self) -> None:
         try:
-            status = self.query_one("#status", Static)
+            band = self.query_one(StatusBand)
         except NoMatches:  # background resync landed mid-teardown: nothing to draw
             return
-        summary = _arrangement_summary(self._arrangement)
         selected = f"  · {len(self._selected)} selected" if self._selected else ""
         marker = "  ⟳" if self._syncing else ""
-        status.update(f"{self._status_base}{summary}{selected}{marker}")
-
-
-def _count_status(title: str, count: int) -> str:
-    return f"{title} · no tasks" if count == 0 else f"{title} · {count} task(s)"
+        band.show(
+            self._status_base,
+            f"{self._status_tally}{selected}{marker}",
+            _arrangement_summary(self._arrangement),
+        )
 
 
 _RECURRING_GLYPH = " ↻"
-_SELECT_STYLE = "bold magenta"  # accents every cell of a multi-selected row
+_SELECT_MARKER = "▌"  # bar on a multi-selected row
 
 
-def _accent(cell: Text | str) -> Text:
-    """The cell recolored with the selection accent over its whole width, so a
-    selected row stands out without shifting its text."""
-    text = Text(cell) if isinstance(cell, str) else cell.copy()
-    text.stylize(_SELECT_STYLE)
-    return text
+def _marker_cell(
+    selected: bool, priority: Priority, styles: Mapping[Tier, Style]
+) -> Text:
+    """The selection bar and the priority dot share the leading column, so
+    selecting a row never shifts its title sideways."""
+    bar = _SELECT_MARKER if selected else " "
+    return Text.assemble((bar, styles[Tier.ACCENT]), priority_dot(priority))
+
+
+def _title_cell(line: TaskLine[TaskRow], styles: Mapping[Tier, Style]) -> Text:
+    """The task title, leading its row; only the description marker recedes."""
+    row = line.row
+    title = Text(_indent(line.level), style=styles[Tier.PRIMARY])
+    title.append(_expand_marker(line))
+    title.append_text(render_links(row.content))
+    if marker := description_marker(row.description):
+        title.append(marker, style=styles[Tier.MUTED])
+    return title
 
 
 def _due_cell(
-    due: Due | None, reminders: tuple[Reminder, ...], today: datetime.date
+    due: Due | None,
+    reminders: tuple[Reminder, ...],
+    today: datetime.date,
+    styles: Mapping[Tier, Style],
 ) -> Text | str:
-    """The due label, trailed by a bell when the task has reminders — they share
-    the column so a rare reminder costs no width of its own. The detail card
-    spells the reminders out."""
+    """The due label graded by urgency, trailed by a bell when the task has
+    reminders — they share the column so a rare reminder costs no width of its
+    own. Both trailing marks recede, so only the due itself carries the grade.
+    The detail card spells the reminders out."""
+    muted = styles[Tier.MUTED]
     badge = format_reminder_badge(len(reminders)) if reminders else ""
     if due is None:
-        return Text(badge, style="dim")
-    label = format_due(due, today)
+        return Text(badge, style=muted)
+    cell = Text(format_due(due, today), style=styles[due_tier(due, today)])
     if due.is_recurring:  # detail card shows the full rule; here just a quiet mark
-        label += _RECURRING_GLYPH
-    dated = styled_date(label, due.date, today)
-    return Text.assemble(dated, (f" {badge}", "dim")) if badge else dated
+        cell.append(_RECURRING_GLYPH, style=muted)
+    if badge:
+        cell.append(f" {badge}", style=muted)
+    return cell
 
 
-def _deadline_cell(deadline: Deadline | None, today: datetime.date) -> Text | str:
+def _deadline_cell(
+    deadline: Deadline | None, today: datetime.date, styles: Mapping[Tier, Style]
+) -> Text | str:
     if deadline is None:
         return ""
-    return styled_date(format_deadline(deadline, today), deadline.date, today)
+    label = format_deadline(deadline, today)
+    return Text(label, style=styles[date_tier(deadline.date, today)])
 
 
-def _project_cell(project_name: str | None) -> Text | str:
-    return Text(project_name, style="dim") if project_name else ""
+def _project_cell(project_name: str | None, style: Style) -> Text | str:
+    return Text(project_name, style=style) if project_name else ""
 
 
-def _labels_cell(labels: tuple[str, ...]) -> Text | str:
+def _labels_cell(labels: tuple[str, ...], style: Style) -> Text | str:
     line = format_labels(labels)
-    return Text(line, style="dim") if line else ""
+    return Text(line, style=style) if line else ""
 
 
-def _header_text(header: GroupHeader, today: datetime.date) -> Text:
-    indent = _indent(header.level)
+def _header_text(
+    header: GroupHeader,
+    today: datetime.date,
+    target_width: int,
+    styles: Mapping[Tier, Style],
+) -> Text:
+    """A divider carrying the group's label: the label leads in the accent, the
+    rules on either side recede. `target_width` is the width of the titles the
+    divider spans."""
     label = header.label
     if header.field is Field.DUE_DATE:
         # the bucket label is ISO (a stable grouping key) except "No due date"
@@ -1440,11 +1550,16 @@ def _header_text(header: GroupHeader, today: datetime.date) -> Text:
             label = humanize_date(datetime.date.fromisoformat(label), today)
     label = f"{label} ({header.count})"
     marker = _FOLD_SHUT if header.collapsed else _FOLD_OPEN
-    lead = f"{indent}{marker}── {label} "  # marker counted, so the rules stay aligned
-    fill = "─" * max(3, _HEADER_WIDTH - len(lead))
-    # deeper levels recede a little; top level is the boldest divider
-    style = "bold cyan" if header.level == 0 else "bold blue"
-    return Text(f"{lead}{fill}", style=style)
+    lead = f"{_indent(header.level)}{marker}── "  # marker counted, so rules align
+    rule = styles[Tier.MUTED]
+    # top level is the boldest divider; deeper ones recede to a plain accent
+    accent = styles[Tier.ACCENT] + Style(bold=header.level == 0)
+    spanned = cell_len(lead) + cell_len(label) + 1  # +1 for the space before the fill
+    fill = "─" * max(_MIN_FILL, target_width - spanned)
+    text = Text(lead, style=rule)
+    text.append(label, style=accent)
+    text.append(f" {fill}", style=rule)
+    return text
 
 
 def _indent(level: int) -> str:
@@ -1480,7 +1595,7 @@ def _arrangement_summary(arrangement: Arrangement) -> str:
             for s in arrangement.sort_by
         )
         parts.append(f"Sort: {keys}")
-    return "   ·   " + "    ".join(parts) if parts else ""
+    return "    ".join(parts)  # the band right-aligns it; no lead-in needed
 
 
 def _expand_marker(line: TaskLine[TaskRow]) -> str:
