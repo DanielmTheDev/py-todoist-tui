@@ -18,6 +18,11 @@ def test_shortcut_rows_flattens_both_lists_dropping_help_and_blank() -> None:
     assert all(desc for _, desc in rows)  # blank descriptions dropped
 
 
+def test_shortcut_rows_spells_out_a_multi_key_binding() -> None:
+    rows = shortcut_rows([Binding("h,left", "collapse", "Collapse", show=False)])
+    assert rows == [("h / left", "Collapse")]
+
+
 def test_app_bindings_hide_everything_but_help() -> None:
     shown = [b for b in map(as_binding, TodoistApp.BINDINGS) if b.show]
     assert [b.action for b in shown] == ["help"]

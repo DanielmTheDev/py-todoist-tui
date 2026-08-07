@@ -62,6 +62,15 @@ async def test_cursor_moves_before_delete() -> None:
 
 
 @pytest.mark.anyio
+async def test_arrow_keys_move_the_cursor_like_jk() -> None:
+    two = (_R1, Reminder(id="r2", item_id="t1", type="relative", minute_offset=60))
+    assert await _press("down", "d", existing=two) == ReminderRequest(delete_id="r2")
+    assert await _press("down", "up", "d", existing=two) == ReminderRequest(
+        delete_id="r1"
+    )
+
+
+@pytest.mark.anyio
 async def test_escape_from_menu_cancels() -> None:
     assert await _press("escape", existing=(_R1,)) is None
 

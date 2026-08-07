@@ -30,12 +30,13 @@ uv run todoist-tui
 | Key | Action |
 |-----|--------|
 | `t` / `i` | Today / Inbox view |
-| `f` | Pick a saved filter (server-side, cached; ↑/↓ or `j`/`k`, `Enter` select, `Esc` cancel) |
+| `f` | Pick a saved filter (server-side, cached; ↑/↓ move, `Enter` select, `Esc` cancel) |
 | `/` | Search every task by title or description; matches preview as you type, `Enter` opens them as a view |
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |
-| `j` `k` `h` `l` | Move the cursor (vim-style) |
+| `j`/`↓` `k`/`↑` | Move the cursor down / up |
+| `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor |
 
 Saved filters sync from your Todoist account; selecting one runs its query on
 Todoist (full fidelity) and caches the result, refreshing in the background.

@@ -102,13 +102,14 @@ def as_binding(entry: BindingType) -> Binding:
 
 def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
     """Flatten Textual binding definitions into (key, description) help rows,
-    dropping entries with no description and the help binding itself."""
+    dropping entries with no description and the help binding itself. A binding
+    holding several keys ("h,left") lists them all: "h / left"."""
     rows: list[tuple[str, str]] = []
     for bindings in binding_lists:
         for binding in map(as_binding, bindings):
             if binding.action == "help" or not binding.description:
                 continue
-            rows.append((binding.key, binding.description))
+            rows.append((" / ".join(binding.key.split(",")), binding.description))
     return rows
 
 
@@ -144,18 +145,20 @@ class InMemoryHome:
 
 
 class TaskTable(DataTable[object]):
-    """DataTable with vim j/k row nav and h/l collapse/expand.
+    """DataTable with j/k or up/down row nav and h/l or left/right collapse/expand.
 
-    The cursor rests on group headers too, since they fold. h/l don't move the
-    column cursor (the table is row-mode); they ask the app to collapse/expand
-    whatever the cursor sits on — a task's subtasks, or a group.
+    The cursor rests on group headers too, since they fold. Collapse/expand don't
+    move the column cursor (the table is row-mode); they ask the app to
+    collapse/expand whatever the cursor sits on — a task's subtasks, or a group.
+    Binding left/right here shadows DataTable's horizontal scroll, which is
+    useless in row mode.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("j", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=False),
-        Binding("h", "collapse", "Collapse task/group", show=False),
-        Binding("l", "expand", "Expand task/group", show=False),
+        Binding("j,down", "cursor_down", "Down", show=False),
+        Binding("k,up", "cursor_up", "Up", show=False),
+        Binding("h,left", "collapse", "Collapse task/group", show=False),
+        Binding("l,right", "expand", "Expand task/group", show=False),
     ]
 
     class Expand(Message):

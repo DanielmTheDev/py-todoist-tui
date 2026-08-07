@@ -44,13 +44,19 @@ _WEEKDAYS = "Mo Tu We Th Fr Sa Su"
 _DAY = datetime.timedelta(days=1)
 _WEEK = datetime.timedelta(days=7)
 # Calendar cursor moves: h/j/k/l like the task list, [/] step whole months.
-_NAV: dict[str, Callable[[datetime.date], datetime.date]] = {
+_VIM_NAV: dict[str, Callable[[datetime.date], datetime.date]] = {
     "h": lambda d: d - _DAY,
     "l": lambda d: d + _DAY,
     "k": lambda d: d - _WEEK,
     "j": lambda d: d + _WEEK,
     "[": lambda d: shift_month(d, -1),
     "]": lambda d: shift_month(d, 1),
+}
+# Arrows are aliases of hjkl. Looked up by Textual key name, since arrow keys
+# carry no character — the bracket keys have no key-name entry and fall back to it.
+_NAV = _VIM_NAV | {
+    arrow: _VIM_NAV[vim]
+    for arrow, vim in (("left", "h"), ("right", "l"), ("up", "k"), ("down", "j"))
 }
 
 
@@ -117,7 +123,9 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self._time = ""
             self._error = None
             self._refresh()
-        elif (move := _NAV.get(event.character or "")) is not None:
+        elif (
+            move := _NAV.get(event.key) or _NAV.get(event.character or "")
+        ) is not None:
             self._cursor = move(self._cursor)
             self._refresh()
         event.stop()  # consume every key so app bindings never fire under the modal
@@ -159,7 +167,7 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             text.append("\n\n")
         if self._error is not None:
             text.append(f"{self._error}\n", style="bold red")
-        hint = "hjkl move  [ ] month"
+        hint = "hjkl/arrows move  [ ] month"
         if self._kind == "due":
             hint += "  digits time"
             if self._time:

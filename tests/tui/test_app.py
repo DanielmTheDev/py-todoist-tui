@@ -3329,6 +3329,63 @@ async def test_h_on_a_child_jumps_the_cursor_to_its_parent() -> None:
         assert _cursor_content(table).strip() == "▾ parent"
 
 
+@pytest.mark.anyio
+async def test_down_and_up_arrows_move_row_cursor() -> None:
+    repo = FakeRepository([_row("First"), _row("Second")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("down")
+        assert table.cursor_row == 1
+        await pilot.press("up")
+        assert table.cursor_row == 0
+
+
+@pytest.mark.anyio
+async def test_right_arrow_expands_a_parent_revealing_its_child() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("right")
+        await pilot.pause()
+        assert [c.strip() for c in _content_col(table)] == ["▾ parent", "child"]
+
+
+@pytest.mark.anyio
+async def test_left_arrow_collapses_an_expanded_parent() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("right")
+        await pilot.pause()
+        assert table.row_count == 2
+        await pilot.press("left")
+        await pilot.pause()
+        assert [c.strip() for c in _content_col(table)] == ["▸ parent"]
+
+
+@pytest.mark.anyio
+async def test_left_arrow_on_a_child_jumps_the_cursor_to_its_parent() -> None:
+    app = TodoistApp(_parent_and_child())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("right")
+        await pilot.pause()
+        await pilot.press("down")
+        assert _cursor_content(table).strip() == "child"
+        await pilot.press("left")
+        await pilot.pause()
+        assert _cursor_content(table).strip() == "▾ parent"
+
+
 def _match_with_unmatched_child() -> FakeRepository:
     """A view whose query returns the parent only — the subtask cannot match it."""
     child = Task(

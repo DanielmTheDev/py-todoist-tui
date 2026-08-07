@@ -106,6 +106,22 @@ async def test_down_and_up_move_by_one_week() -> None:
 
 
 @pytest.mark.anyio
+async def test_arrow_keys_move_like_hjkl() -> None:
+    assert await _press("right", "enter") == DueResult(
+        Due(date=datetime.date(2026, 7, 29))
+    )
+    assert await _press("left", "enter") == DueResult(
+        Due(date=datetime.date(2026, 7, 27))
+    )
+    assert await _press("down", "enter") == DueResult(
+        Due(date=datetime.date(2026, 8, 4))
+    )
+    assert await _press("up", "enter") == DueResult(
+        Due(date=datetime.date(2026, 7, 21))
+    )
+
+
+@pytest.mark.anyio
 async def test_bracket_keys_move_by_one_month() -> None:
     assert await _press("]", "enter") == DueResult(Due(date=datetime.date(2026, 8, 28)))
     assert await _press("[", "enter") == DueResult(Due(date=datetime.date(2026, 6, 28)))

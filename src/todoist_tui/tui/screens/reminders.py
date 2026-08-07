@@ -154,7 +154,7 @@ class RemindersScreen(ModalScreen["ReminderRequest | None"]):
         text.append("\n")
         hint = "a add"
         if self._existing:
-            hint = "j/k move  d delete  " + hint
+            hint = "j/k or arrows move  d delete  " + hint
         text.append(f"{hint}  esc close", style="dim")
         return text
 
