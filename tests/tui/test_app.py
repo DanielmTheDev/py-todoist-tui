@@ -61,6 +61,7 @@ class FakeRepository:
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.deleted: list[TaskId] = []
+        self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
@@ -128,6 +129,12 @@ class FakeRepository:
         self.deleted.append(task_id)
         self._tasks = [t for t in self._tasks if t.id != task_id]
         self._pool = [t for t in self._pool if t.id != task_id]
+
+    async def delete_section(self, section_id: str) -> None:
+        self.deleted_sections.append(section_id)
+        self._sections = [s for s in self._sections if s.id != section_id]
+        self._tasks = [t for t in self._tasks if t.section_id != section_id]
+        self._pool = [t for t in self._pool if t.section_id != section_id]
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
@@ -769,6 +776,126 @@ async def test_duplicate_section_copies_its_tasks_into_the_project() -> None:
         assert plan.sections[0].name == "Planning (copy)"
         assert plan.sections[0].project_ref == "9"
         assert {t.content for t in plan.tasks} == {"A"}
+
+
+def _section_repo() -> FakeRepository:
+    task = Task(
+        id=TaskId("A"),
+        content="A",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+        section_id="s1",
+    )
+    return FakeRepository(
+        [task],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+
+
+@pytest.mark.anyio
+async def test_delete_section_removes_it_after_confirmation() -> None:
+    repo = _section_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("D")  # open the section picker
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+        await pilot.press("enter")  # only "Work / Planning" is listed
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert repo.deleted_sections == ["s1"]
+
+
+@pytest.mark.anyio
+async def test_delete_section_cancelled_at_the_confirmation_deletes_nothing() -> None:
+    repo = _section_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+
+        assert repo.deleted_sections == []
+        await pilot.press("D")  # the guard released, so the picker reopens
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+
+
+class OfflineSectionsRepository(FakeRepository):
+    """Sections load fails while `offline`, so a retry proves the guard released."""
+
+    offline = False
+
+    async def sections(self) -> list[Section]:
+        if self.offline:
+            raise RuntimeError("offline")
+        return await super().sections()
+
+
+@pytest.mark.anyio
+async def test_delete_section_load_failure_is_surfaced_and_releases_the_guard() -> None:
+    repo = OfflineSectionsRepository(
+        [],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        repo.offline = True
+        await pilot.press("D")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ProjectPickerScreen)
+        assert "Failed to load sections: offline" in _status(app)
+
+        repo.offline = False
+        await pilot.press("D")  # the guard released, so a retry still opens
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+
+
+class FailingDeleteSectionRepository(FakeRepository):
+    async def delete_section(self, section_id: str) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_delete_section_failure_is_surfaced() -> None:
+    app = TodoistApp(
+        FailingDeleteSectionRepository(
+            [],
+            [Project(id="9", name="Work")],
+            sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+        ),
+        clock=FakeClock(_TODAY),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert "Failed to delete section: boom" in _status(app)
 
 
 @pytest.mark.anyio

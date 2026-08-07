@@ -56,9 +56,10 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
         current_project: str | None = None,
         current_section: str | None = None,
         placeholder: str = "Move to project or section…",
+        sections_only: bool = False,
     ) -> None:
         super().__init__()
-        self._targets = _targets(projects, sections)
+        self._targets = _targets(projects, sections, sections_only)
         self._visible = list(self._targets)
         self._current_project = current_project
         self._current_section = current_section
@@ -110,15 +111,18 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
         self.dismiss(self._visible[index])
 
 
-def _targets(projects: list[Project], sections: list[Section]) -> list[MoveTarget]:
+def _targets(
+    projects: list[Project], sections: list[Section], sections_only: bool
+) -> list[MoveTarget]:
     by_project: dict[str, list[Section]] = {}
     for section in sections:
         by_project.setdefault(section.project_id, []).append(section)
     targets: list[MoveTarget] = []
     for project in sorted_projects(projects):
-        if project.is_inbox:  # Inbox is not a move target (has its own `i` key)
-            continue
-        targets.append(MoveTarget(project.id, project.name))
+        # the Inbox root is not a target (it has its own `i` key), but its
+        # sections are ordinary targets
+        if not sections_only and not project.is_inbox:
+            targets.append(MoveTarget(project.id, project.name))
         for section in sorted_sections(by_project.get(project.id, [])):
             targets.append(
                 MoveTarget(project.id, project.name, section.id, section.name)

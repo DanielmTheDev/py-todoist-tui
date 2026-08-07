@@ -14,7 +14,7 @@ from textual.widgets import DataTable, Footer, Static
 
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.complete import complete_task, uncomplete_task
-from todoist_tui.application.delete import delete_task
+from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
 from todoist_tui.application.duplicate import duplicate_project, duplicate_section
 from todoist_tui.application.move_task import move_task
@@ -192,6 +192,7 @@ class TodoistApp(App[None]):
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
         Binding("Y", "duplicate", "Duplicate project/section", show=False),
+        Binding("D", "delete_section", "Delete section", show=False),
         Binding("at", "set_labels", "Labels", show=False),
         Binding("R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
@@ -238,6 +239,8 @@ class TodoistApp(App[None]):
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_duplicate = False  # guards the duplicate picker + name prompt
+        # guards the section-delete picker + its confirmation
+        self._picking_delete_section = False
         self._picking_project_list = False  # guards against stacking the project list
         self._picking_labels = False  # guards against stacking the labels editor
         # the server query of the open view — a saved filter's, or a search's —
@@ -836,6 +839,57 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to duplicate: {error}")
             return
         self._sync_now()  # pull the real new entities into the view
+
+    async def action_delete_section(self) -> None:
+        if self._picking_delete_section:  # already loading or a step already open
+            return
+        self._picking_delete_section = True
+        try:
+            projects = await self._repo.projects()
+            sections = await self._repo.sections()
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load sections: {error}")
+            self._picking_delete_section = False
+            return
+        self.push_screen(
+            ProjectPickerScreen(
+                projects,
+                sections,
+                placeholder="Delete section…",
+                sections_only=True,
+            ),
+            self._on_delete_section_target,
+        )
+
+    def _on_delete_section_target(self, target: MoveTarget | None) -> None:
+        if target is None or target.section_id is None:  # picker cancelled
+            self._picking_delete_section = False
+            return
+        section_id, name = target.section_id, target.section_name
+        self.push_screen(
+            ConfirmScreen(f"Delete section “{name}” and its tasks?"),
+            lambda confirmed: self._on_delete_section_confirmed(
+                section_id, name, confirmed
+            ),
+        )
+
+    def _on_delete_section_confirmed(
+        self, section_id: str, name: str | None, confirmed: bool | None
+    ) -> None:
+        self._picking_delete_section = False
+        if not confirmed:
+            return
+        self._set_status(f"Deleting {name}…")
+        self._delete_section(section_id)
+
+    @work
+    async def _delete_section(self, section_id: str) -> None:
+        try:
+            await delete_section(self._repo, section_id)
+        except Exception as error:  # command rejected: report, keep the view
+            self._set_status(f"Failed to delete section: {error}")
+            return
+        self._sync_now()  # the section and its tasks leave the view with the delta
 
     async def action_set_labels(self) -> None:
         if self._picking_labels:  # already loading or editor already open

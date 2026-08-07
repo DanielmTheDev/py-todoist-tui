@@ -920,6 +920,23 @@ async def test_delete_deletes_the_task() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_delete_section_deletes_the_section() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.delete_section("6S1")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "section_delete"
+    assert commands[0]["args"] == {"id": "6S1"}
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_set_priority_updates_the_task() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

@@ -562,6 +562,41 @@ async def test_delete_item_raises_on_command_error() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_delete_section_posts_section_delete_command() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.delete_section("6S1")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "section_delete", "uuid": "u-1", "args": {"id": "6S1"}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delete_section_raises_on_command_error() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={"sync_status": {"u-1": {"error": "not found"}}},
+        )
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    with pytest.raises(SyncCommandError, match="not found"):
+        await client.delete_section("nope")
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_create_entities_wraps_specs_in_temp_id_commands() -> None:
     ids = iter(["u-1", "u-2"])
     route = respx.post(f"{BASE_URL}/sync").mock(

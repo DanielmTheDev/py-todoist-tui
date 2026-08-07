@@ -53,6 +53,8 @@ class FakeRepository:
 
     async def delete(self, task_id: TaskId) -> None: ...
 
+    async def delete_section(self, section_id: str) -> None: ...
+
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
 

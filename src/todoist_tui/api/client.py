@@ -94,6 +94,9 @@ class TodoistClient:
     async def delete_item(self, task_id: str) -> None:
         await self._command("item_delete", {"id": task_id})
 
+    async def delete_section(self, section_id: str) -> None:
+        await self._command("section_delete", {"id": section_id})
+
     async def update_item(self, task_id: str, priority: int) -> None:
         await self._command("item_update", {"id": task_id, "priority": priority})
 

@@ -92,6 +92,9 @@ class ApiTaskRepository:
     async def delete(self, task_id: TaskId) -> None:
         await self._client.delete_item(str(task_id))
 
+    async def delete_section(self, section_id: str) -> None:
+        await self._client.delete_section(section_id)
+
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._client.update_item(str(task_id), priority.to_api)
 

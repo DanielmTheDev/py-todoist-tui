@@ -34,6 +34,7 @@ class _Host(App[None]):
         on_result: Callable[[MoveTarget | None], None],
         current_project: str | None = None,
         current_section: str | None = None,
+        sections_only: bool = False,
     ) -> None:
         super().__init__()
         self._choices = projects  # not self._projects: keep off App-owned names
@@ -41,6 +42,7 @@ class _Host(App[None]):
         self._on_result = on_result
         self._current_project = current_project
         self._current_section = current_section
+        self._sections_only = sections_only
 
     def on_mount(self) -> None:
         self.push_screen(
@@ -49,6 +51,7 @@ class _Host(App[None]):
                 self._sections,
                 current_project=self._current_project,
                 current_section=self._current_section,
+                sections_only=self._sections_only,
             ),
             self._on_result,
         )
@@ -141,6 +144,24 @@ async def test_inbox_is_not_a_move_target() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == ["Work"]  # Inbox has its own `i` key, not a target
+
+
+@pytest.mark.anyio
+async def test_sections_only_drops_the_project_roots() -> None:
+    host = _Host(_PROJECTS, _SECTIONS, lambda _t: None, sections_only=True)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host) == ["Work / Planning", "Work / In progress"]
+
+
+@pytest.mark.anyio
+async def test_sections_only_keeps_inbox_sections() -> None:
+    projects = [Project(id="1", name="Inbox", is_inbox=True)]
+    sections = [Section(id="s3", project_id="1", name="Later")]
+    host = _Host(projects, sections, lambda _t: None, sections_only=True)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host) == ["Inbox / Later"]  # only the root is not a target
 
 
 @pytest.mark.anyio

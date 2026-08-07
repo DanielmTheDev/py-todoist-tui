@@ -130,6 +130,10 @@ class SnapshotTaskRepository:
         await self._inner.delete(task_id)
         await self._invalidate()
 
+    async def delete_section(self, section_id: str) -> None:
+        await self._inner.delete_section(section_id)
+        await self._invalidate()
+
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._inner.set_priority(task_id, priority)
         await self._invalidate()

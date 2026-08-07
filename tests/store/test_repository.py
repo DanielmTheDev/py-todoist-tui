@@ -61,6 +61,7 @@ class FakeInner:
         self.completed: list[TaskId] = []
         self.uncompleted: list[TaskId] = []
         self.deleted: list[TaskId] = []
+        self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
@@ -114,6 +115,9 @@ class FakeInner:
 
     async def delete(self, task_id: TaskId) -> None:
         self.deleted.append(task_id)
+
+    async def delete_section(self, section_id: str) -> None:
+        self.deleted_sections.append(section_id)
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
@@ -328,6 +332,22 @@ async def test_delete_delegates_then_invalidates_filter_cache() -> None:
     await repo.filtered("a")
 
     assert inner.deleted == [TaskId("x")]
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_delete_section_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.delete_section("6S1")  # the section's tasks vanish with it
+    await repo.filtered("a")
+
+    assert inner.deleted_sections == ["6S1"]
     assert inner.filtered_queries == ["a", "a"]
 
 
