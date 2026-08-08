@@ -14,6 +14,23 @@ class TaskText:
     description: str
 
 
+class TitleInput(Input):
+    """Textual maps ctrl+backspace to delete_right_word; every other editor
+    deletes the word to the left."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("ctrl+backspace,alt+backspace", "delete_left_word", show=False),
+    ]
+
+
+class DescriptionArea(TextArea):
+    """Select-all on the same key as the title field, not only TextArea's f7."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("ctrl+shift+a", "select_all", show=False),
+    ]
+
+
 class TaskEditScreen(ModalScreen["TaskText | None"]):
     """Edit a task's title and description together. Tab moves between the
     fields, ctrl+s (or enter in the title) dismisses both trimmed values, escape
@@ -42,9 +59,9 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
         with Vertical(id="fields"):
             yield Static("Title", classes="label")
             # select_on_focus would make the first keystroke wipe the title
-            yield Input(value=self._content.strip(), select_on_focus=False)
+            yield TitleInput(value=self._content.strip(), select_on_focus=False)
             yield Static("Description", classes="label")
-            yield TextArea(self._description.strip())
+            yield DescriptionArea(self._description.strip())
             yield Static("tab switch · ctrl+s save · esc cancel", id="hint")
 
     def on_mount(self) -> None:

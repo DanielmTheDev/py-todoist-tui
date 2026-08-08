@@ -96,6 +96,32 @@ async def test_enter_in_the_description_adds_a_line() -> None:
 
 
 @pytest.mark.anyio
+async def test_ctrl_backspace_in_the_title_deletes_the_word_to_the_left() -> None:
+    edited: list[TaskText | None] = []
+    host = _Host("Buy oat milk", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+backspace")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert edited == [TaskText("Buy oat", "")]
+
+
+@pytest.mark.anyio
+async def test_ctrl_shift_a_in_the_description_selects_all_so_typing_replaces() -> None:
+    edited: list[TaskText | None] = []
+    host = _Host("Buy milk", "oat\nand 2x", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.press("ctrl+shift+a")
+        await pilot.press("s", "o", "y")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert edited == [TaskText("Buy milk", "soy")]
+
+
+@pytest.mark.anyio
 async def test_escape_returns_none() -> None:
     edited: list[TaskText | None] = []
     host = _Host("Buy milk", "oat", edited.append)
