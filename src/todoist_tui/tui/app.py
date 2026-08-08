@@ -17,6 +17,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Footer, Rule, Static
 
 from todoist_tui.application.add_reminder import add_reminder
+from todoist_tui.application.add_task import add_task
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
@@ -79,7 +80,7 @@ from todoist_tui.tui.format import (
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
-from todoist_tui.tui.screens.detail import TaskDetailScreen
+from todoist_tui.tui.screens.detail import DetailOutcome, TaskDetailScreen
 from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
@@ -295,6 +296,8 @@ class TodoistApp(App[None]):
         Binding("R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
         Binding("ctrl+e", "edit_task", "Edit title + description", show=False),
+        Binding("a", "add_task", "Add task", show=False),
+        Binding("A", "add_subtask", "Add subtask", show=False),
         Binding("x", "toggle_select", "Select", show=False),
         Binding("asterisk", "select_all", "Select all", show=False),
         Binding("escape", "clear_selection", "Clear selection", show=False),
@@ -758,9 +761,82 @@ class TodoistApp(App[None]):
             lambda edit: self._on_detail_closed(row, edit),
         )
 
-    def _on_detail_closed(self, row: TaskRow, edit: bool | None) -> None:
-        if edit:  # the card asked for the editor (ctrl+e)
+    def _on_detail_closed(self, row: TaskRow, outcome: DetailOutcome | None) -> None:
+        if outcome is DetailOutcome.EDIT:
             self._open_editor(row, from_detail=True)
+        elif outcome is DetailOutcome.ADD_SUBTASK:
+            self._open_add("New subtask", row.project_id, parent_id=str(row.id))
+
+    def action_add_task(self) -> None:
+        row = self._cursor_row()
+        self._open_add(
+            "New task",
+            # a new task keeps the cursor row company; on an empty view it falls
+            # back to the view's own project, and past that to the Inbox
+            row.project_id if row else self._view.project_id,
+            section_id=row.section_id if row else None,
+            # so the task the user just wrote in Today actually shows up there
+            due=Due(date=self._clock.today()) if self._view.key == TODAY.key else None,
+        )
+
+    def action_add_subtask(self) -> None:
+        row = self._cursor_row()
+        if row is None:  # empty table or cursor on a group header
+            return
+        self._open_add("New subtask", row.project_id, parent_id=str(row.id))
+
+    def _open_add(
+        self,
+        heading: str,
+        project_id: str | None,
+        section_id: str | None = None,
+        parent_id: str | None = None,
+        due: Due | None = None,
+    ) -> None:
+        self.push_screen(
+            TaskEditScreen("", "", heading=heading),
+            lambda text: self._on_new_task(
+                text, project_id, section_id, parent_id, due
+            ),
+        )
+
+    def _on_new_task(
+        self,
+        text: TaskText | None,
+        project_id: str | None,
+        section_id: str | None,
+        parent_id: str | None,
+        due: Due | None,
+    ) -> None:
+        if text is None:  # editor was cancelled
+            return
+        if parent_id is not None:  # else the new subtask lands out of sight
+            self._expanded.add(TaskId(parent_id))
+        self._add_task(text, project_id, section_id, parent_id, due)
+
+    @work
+    async def _add_task(
+        self,
+        text: TaskText,
+        project_id: str | None,
+        section_id: str | None,
+        parent_id: str | None,
+        due: Due | None,
+    ) -> None:
+        try:
+            await add_task(
+                self._repo,
+                text.content,
+                text.description,
+                project_id=project_id,
+                section_id=section_id,
+                parent_id=parent_id,
+                due=due,
+            )
+        except Exception as error:  # command rejected: report, nothing was added
+            self._set_status(f"Failed to add task: {error}")
+            return
+        self._sync_now()  # the create returns no id, so the row arrives with the sync
 
     def action_edit_task(self) -> None:
         row = self._cursor_row()

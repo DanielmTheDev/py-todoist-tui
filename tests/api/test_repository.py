@@ -1245,3 +1245,47 @@ async def test_apply_creation_maps_plan_to_sync_commands() -> None:
             },
         },
     ]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_apply_creation_omits_child_order_when_unset() -> None:
+    """Todoist appends a task with no `child_order` to the end of its list —
+    what a fresh add wants, and what no caller can compute from the view."""
+    from todoist_tui.domain.creation import CreationPlan, NewTask
+
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.apply_creation(
+        CreationPlan(
+            projects=(),
+            sections=(),
+            tasks=(
+                NewTask(
+                    temp_id="t1",
+                    content="new",
+                    priority=Priority.P4,
+                    due=None,
+                    deadline=None,
+                    labels=(),
+                    description="",
+                    child_order=None,
+                    project_ref="P",
+                    section_ref=None,
+                    parent_ref=None,
+                ),
+            ),
+        )
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {
+        "content": "new",
+        "project_id": "P",
+        "priority": 1,
+    }

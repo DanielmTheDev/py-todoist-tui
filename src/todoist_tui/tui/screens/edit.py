@@ -44,19 +44,25 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
     DEFAULT_CSS = """
     TaskEditScreen { align: center middle; }
     TaskEditScreen #fields { width: 70%; max-width: 80; height: auto; }
+    TaskEditScreen #heading { padding: 0 1; text-style: bold; }
     TaskEditScreen .label { padding: 0 1; }
     TaskEditScreen Input { border: round $primary; }
     TaskEditScreen TextArea { height: 8; border: round $primary; }
     TaskEditScreen #hint { padding: 0 1; color: $text-muted; }
     """
 
-    def __init__(self, content: str, description: str) -> None:
+    def __init__(
+        self, content: str, description: str, heading: str | None = None
+    ) -> None:
         super().__init__()
         self._content = content
         self._description = description
+        self._heading = heading
 
     def compose(self) -> ComposeResult:
         with Vertical(id="fields"):
+            if self._heading is not None:  # so an add does not read as an edit
+                yield Static(self._heading, id="heading")
             yield Static("Title", classes="label")
             # select_on_focus would make the first keystroke wipe the title
             yield TitleInput(value=self._content.strip(), select_on_focus=False)

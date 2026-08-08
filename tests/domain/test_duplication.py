@@ -186,7 +186,8 @@ def test_project_duplicate_orders_tasks_by_emission() -> None:
         temp_ids=_temp_ids(),
     )
 
-    orders = [t.child_order for t in plan.tasks]
+    orders = [t.child_order for t in plan.tasks if t.child_order is not None]
+    assert len(orders) == len(plan.tasks)  # a copy orders every task it recreates
     assert orders == sorted(orders)
     assert len(set(orders)) == 2
 

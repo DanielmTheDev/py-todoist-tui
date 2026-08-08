@@ -58,6 +58,9 @@ class View:
     keeps: Callable[[TaskRow, datetime.date], bool] | None = None
     # applied until the user saves an arrangement for this view
     default_arrangement: Arrangement = field(default_factory=Arrangement)
+    # the project every task here belongs to, when the view has one — where a
+    # task added to an empty view lands. None means "no one project".
+    project_id: str | None = None
 
 
 def _due_today(row: TaskRow, today: datetime.date) -> bool:
@@ -98,6 +101,7 @@ def project_view(p: Project) -> View:
         lambda repo: repo.by_project(p.id),
         keeps=lambda row, _today: row.project_id == p.id,
         default_arrangement=Arrangement(group_by=(Field.SECTION,)),  # like Todoist
+        project_id=p.id,
     )
 
 

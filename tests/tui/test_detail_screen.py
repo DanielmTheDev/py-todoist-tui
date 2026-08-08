@@ -13,7 +13,11 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.screens.detail import DetailCard, TaskDetailScreen
+from todoist_tui.tui.screens.detail import (
+    DetailCard,
+    DetailOutcome,
+    TaskDetailScreen,
+)
 from todoist_tui.tui.theme import TODOIST_THEME, Tier
 
 _TODAY = datetime.date(2026, 7, 28)
@@ -57,7 +61,7 @@ class _Host(App[None]):
     def __init__(
         self,
         row: TaskRow,
-        dismissed: list[bool | None],
+        dismissed: list[DetailOutcome | None],
         opener: _FakeOpener | None = None,
         today: datetime.date = _TODAY,
     ) -> None:
@@ -95,9 +99,9 @@ async def _tiered(row: TaskRow, tier: Tier) -> list[str]:
         return [text for found, text in span_tiers(card, content) if found is tier]
 
 
-async def _result_of(row: TaskRow, key: str) -> list[bool | None]:
-    """The values the card dismissed with after `key` — True asks for an edit."""
-    dismissed: list[bool | None] = []
+async def _result_of(row: TaskRow, key: str) -> list[DetailOutcome | None]:
+    """The outcomes the card dismissed with after `key`."""
+    dismissed: list[DetailOutcome | None] = []
     host = _Host(row, dismissed)
     async with host.run_test() as pilot:
         await pilot.pause()
@@ -275,17 +279,25 @@ async def test_no_due_renders_a_dash() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("key", ["escape", "enter", "q"])
 async def test_escape_enter_and_q_close_the_view(key: str) -> None:
-    assert await _result_of(_row(), key) == [False]
+    assert await _result_of(_row(), key) == [DetailOutcome.CLOSE]
 
 
 @pytest.mark.anyio
 async def test_ctrl_e_closes_the_view_asking_for_an_edit() -> None:
-    assert await _result_of(_row(), "ctrl+e") == [True]
+    assert await _result_of(_row(), "ctrl+e") == [DetailOutcome.EDIT]
 
 
 @pytest.mark.anyio
-async def test_hint_advertises_the_edit_key() -> None:
-    assert "ctrl+e edit" in await _shown(_row())
+async def test_a_closes_the_view_asking_for_a_subtask() -> None:
+    assert await _result_of(_row(), "a") == [DetailOutcome.ADD_SUBTASK]
+
+
+@pytest.mark.anyio
+async def test_hint_advertises_the_edit_and_subtask_keys() -> None:
+    shown = await _shown(_row())
+
+    assert "a subtask" in shown
+    assert "ctrl+e edit" in shown
 
 
 _LINKED = _row(

@@ -8,6 +8,7 @@ from rich.color_triplet import ColorTriplet
 from rich.text import Text
 from textual.content import Content
 from textual.coordinate import Coordinate
+from textual.pilot import Pilot
 from textual.widgets import DataTable, Footer, Input, Rule, Static, TextArea
 
 from tests.tui.tiers import (
@@ -19,7 +20,7 @@ from tests.tui.tiers import (
     title_cell,
 )
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
-from todoist_tui.domain.creation import CreationPlan
+from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -213,6 +214,24 @@ class FakeRepository:
 
     async def apply_creation(self, plan: CreationPlan) -> None:
         self.applied.append(plan)
+        # created tasks land where the server would put them: readable on the
+        # next sync, under the temp id the plan named them by
+        self._pool = [
+            *self._pool,
+            *(
+                Task(
+                    id=TaskId(task.temp_id),
+                    content=task.content,
+                    priority=task.priority,
+                    due=task.due,
+                    project_id=task.project_ref,
+                    section_id=task.section_ref,
+                    description=task.description,
+                    parent_id=task.parent_ref,
+                )
+                for task in plan.tasks
+            ),
+        ]
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -4891,3 +4910,201 @@ async def test_cancelling_the_editor_returns_to_the_detail_card() -> None:
 
         assert isinstance(app.screen, TaskDetailScreen)
         assert repo.text_edits == []
+
+
+def _sectioned(content: str, section_id: str | None = None) -> Task:
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=_TODAY),
+        project_id="9",
+        section_id=section_id,
+    )
+
+
+def _added(repo: FakeRepository) -> NewTask:
+    assert len(repo.applied) == 1
+    plan = repo.applied[0]
+    assert len(plan.tasks) == 1
+    return plan.tasks[0]
+
+
+async def _type(pilot: Pilot[None], text: str) -> None:
+    for character in text:
+        await pilot.press(character)
+
+
+@pytest.mark.anyio
+async def test_a_opens_an_empty_editor() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskEditScreen)
+        assert app.screen.query_one(Input).value == ""
+        assert app.screen.query_one(TextArea).text == ""
+
+
+@pytest.mark.anyio
+async def test_a_adds_the_task_beside_the_cursor_row() -> None:
+    repo = FakeRepository(
+        [_sectioned("t1", section_id="s1")],
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+        ],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("tab")
+        await _type(pilot, "why")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        task = _added(repo)
+        assert (task.content, task.description) == ("new", "why")
+        assert (task.project_ref, task.section_ref) == ("9", "s1")
+        assert task.parent_ref is None
+
+
+@pytest.mark.anyio
+async def test_a_in_today_gives_the_new_task_todays_date() -> None:
+    repo = FakeRepository([_noted("t1")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _added(repo).due == Due(date=_TODAY)
+
+
+@pytest.mark.anyio
+async def test_a_on_an_empty_view_falls_back_to_the_inbox() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Eingang", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _added(repo).project_ref == "220"
+
+
+@pytest.mark.anyio
+async def test_shift_a_adds_a_subtask_under_the_cursor_task() -> None:
+    repo = FakeRepository(
+        [_sectioned("t1", section_id="s1")],
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+        ],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("A")
+        await pilot.pause()
+        await _type(pilot, "step")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        task = _added(repo)
+        assert (task.content, task.parent_ref) == ("step", "t1")
+        assert task.section_ref is None  # inherited from the parent
+        assert task.due is None  # a subtask does not take the view's date
+
+
+@pytest.mark.anyio
+async def test_a_subtask_unfolds_its_parent_so_it_will_be_seen() -> None:
+    parent = _row("p1")
+    repo = FakeRepository([parent], [], pool=[_row("c1", parent_id="p1")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("h")  # fold the parent away
+        await pilot.pause()
+        assert _content_col(app.query_one(TaskTable)) == ["▸ p1"]
+
+        await pilot.press("A")
+        await pilot.pause()
+        await _type(pilot, "c2")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        shown = _content_col(app.query_one(TaskTable))
+        assert shown[0] == "▾ p1"  # unfolded, so the new subtask is in sight
+        assert sorted(shown[1:]) == ["  c1", "  c2"]
+
+
+@pytest.mark.anyio
+async def test_a_on_the_detail_card_adds_a_subtask_of_the_open_task() -> None:
+    repo = FakeRepository([_noted("t1", "a note")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskEditScreen)
+        await _type(pilot, "step")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _added(repo).parent_ref == "t1"
+        assert not isinstance(app.screen, TaskDetailScreen)  # back on the list
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_add_editor_creates_nothing() -> None:
+    repo = FakeRepository([_noted("t1")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("escape")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.applied == []

@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Mapping
+from enum import Enum, auto
 from typing import ClassVar
 
 from rich.style import Style
@@ -101,7 +102,7 @@ class DetailCard(Static):
 
     def _hint(self) -> str:
         links = "1-9 open link  o open  " if self._links else ""
-        return f"{links}ctrl+e edit  esc close"
+        return f"{links}a subtask  ctrl+e edit  esc close"
 
     def _due(self, styles: Mapping[Tier, Style]) -> Text:
         due = self._row.due
@@ -144,9 +145,17 @@ class DetailCard(Static):
         )
 
 
-class TaskDetailScreen(ModalScreen[bool]):
+class DetailOutcome(Enum):
+    """What the card asks the app to do next, once it has closed."""
+
+    CLOSE = auto()
+    EDIT = auto()
+    ADD_SUBTASK = auto()
+
+
+class TaskDetailScreen(ModalScreen[DetailOutcome]):
     """Read-only card for a single task. Any of escape/enter/q closes it; ctrl+e
-    closes it asking the app to open the editor (dismisses True).
+    and `a` close it asking for the editor / a new subtask.
     Links in the title/description are numbered; 1-9 or `o` open them."""
 
     DEFAULT_CSS = """
@@ -191,9 +200,11 @@ class TaskDetailScreen(ModalScreen[bool]):
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("escape", "enter", "q"):
-            self.dismiss(False)
+            self.dismiss(DetailOutcome.CLOSE)
         elif event.key == "ctrl+e":
-            self.dismiss(True)
+            self.dismiss(DetailOutcome.EDIT)
+        elif event.key == "a":
+            self.dismiss(DetailOutcome.ADD_SUBTASK)
         elif event.key == "o":
             self._open(1)
         elif event.character and event.character.isdigit():

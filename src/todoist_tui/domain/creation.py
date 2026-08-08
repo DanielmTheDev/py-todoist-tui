@@ -35,7 +35,7 @@ class NewTask:
     deadline: Deadline | None
     labels: tuple[str, ...]
     description: str
-    child_order: int
+    child_order: int | None  # None lets Todoist append it to the end of its list
     project_ref: str
     section_ref: str | None
     parent_ref: str | None

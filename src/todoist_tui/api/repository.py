@@ -194,8 +194,9 @@ def _item_add_args(task: NewTask) -> dict[str, Any]:
         "content": task.content,
         "project_id": task.project_ref,
         "priority": task.priority.to_api,
-        "child_order": task.child_order,
     }
+    if task.child_order is not None:
+        args["child_order"] = task.child_order
     if task.parent_ref is not None:
         # a subtask inherits its parent's section; sending section_id is redundant
         args["parent_id"] = task.parent_ref
