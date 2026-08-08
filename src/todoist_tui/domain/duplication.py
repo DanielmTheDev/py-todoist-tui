@@ -1,58 +1,17 @@
 """Build a plan for recreating a project or section under new IDs.
 
 Todoist has no server-side duplicate command, so a copy is made by recreating
-the source with fresh entities. Refs (`project_ref`/`section_ref`/`parent_ref`)
-hold either a `temp_id` of another entity in this same plan or a real existing
-id — both are valid targets in a batched Sync create. Pure: no I/O.
+the source as fresh entities. Pure: no I/O.
 """
 
 import itertools
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
 
-from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
-from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.creation import CreationPlan, NewProject, NewSection, NewTask
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section, sorted_sections
 from todoist_tui.domain.task import Task
-
-
-@dataclass(frozen=True, slots=True)
-class NewProject:
-    temp_id: str
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
-class NewSection:
-    temp_id: str
-    name: str
-    order: int
-    project_ref: str
-
-
-@dataclass(frozen=True, slots=True)
-class NewTask:
-    temp_id: str
-    content: str
-    priority: Priority
-    due: Due | None
-    deadline: Deadline | None
-    labels: tuple[str, ...]
-    description: str
-    child_order: int
-    project_ref: str
-    section_ref: str | None
-    parent_ref: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class DuplicationPlan:
-    projects: tuple[NewProject, ...]
-    sections: tuple[NewSection, ...]
-    tasks: tuple[NewTask, ...]
 
 
 def build_project_duplicate(
@@ -61,7 +20,7 @@ def build_project_duplicate(
     tasks: Iterable[Task],
     new_name: str,
     temp_ids: Iterator[str],
-) -> DuplicationPlan:
+) -> CreationPlan:
     new_project = NewProject(temp_id=next(temp_ids), name=new_name)
     new_sections: list[NewSection] = []
     section_ref: dict[str, str] = {}
@@ -82,7 +41,7 @@ def build_project_duplicate(
         project_ref=new_project.temp_id,
         section_ref_of=lambda task: section_ref.get(task.section_id or ""),
     )
-    return DuplicationPlan((new_project,), tuple(new_sections), new_tasks)
+    return CreationPlan((new_project,), tuple(new_sections), new_tasks)
 
 
 def build_section_duplicate(
@@ -90,7 +49,7 @@ def build_section_duplicate(
     tasks: Iterable[Task],
     new_name: str,
     temp_ids: Iterator[str],
-) -> DuplicationPlan:
+) -> CreationPlan:
     new_section = NewSection(
         temp_id=next(temp_ids),
         name=new_name,
@@ -103,7 +62,7 @@ def build_section_duplicate(
         project_ref=section.project_id,
         section_ref_of=lambda _task: new_section.temp_id,
     )
-    return DuplicationPlan((), (new_section,), new_tasks)
+    return CreationPlan((), (new_section,), new_tasks)
 
 
 def _rebuild_tasks(

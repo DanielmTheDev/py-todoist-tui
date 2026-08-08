@@ -2,9 +2,9 @@ from collections.abc import Callable
 from typing import Any
 
 from todoist_tui.api.client import TodoistClient
+from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.duplication import DuplicationPlan, NewTask
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -119,7 +119,7 @@ class ApiTaskRepository:
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         await self._client.update_item_text(str(task_id), content, description)
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> None:
         specs: list[tuple[str, str, dict[str, Any]]] = []
         for project in plan.projects:
             specs.append(("project_add", project.temp_id, {"name": project.name}))

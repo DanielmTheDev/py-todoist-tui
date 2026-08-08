@@ -3,9 +3,9 @@ from datetime import date
 
 import pytest
 
+from todoist_tui.domain.creation import CreationPlan, NewProject
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.duplication import DuplicationPlan, NewProject
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -68,7 +68,7 @@ class FakeInner:
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.text_edits: list[tuple[TaskId, str, str]] = []
-        self.applied: list[DuplicationPlan] = []
+        self.applied: list[CreationPlan] = []
         self.filtered_queries: list[str] = []
         self._filtered_result = filtered_result or []
 
@@ -142,7 +142,7 @@ class FakeInner:
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         self.text_edits.append((task_id, content, description))
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> None:
         self.applied.append(plan)
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
@@ -442,7 +442,7 @@ async def test_apply_creation_delegates_then_invalidates_filter_cache() -> None:
     repo = SnapshotTaskRepository(
         inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
     )
-    plan = DuplicationPlan(
+    plan = CreationPlan(
         projects=(NewProject(temp_id="tp", name="Work (copy)"),), sections=(), tasks=()
     )
 

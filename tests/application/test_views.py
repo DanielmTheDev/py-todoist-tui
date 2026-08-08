@@ -16,9 +16,9 @@ from todoist_tui.application.views import (
     view_from_key,
 )
 from todoist_tui.domain.arrange import Arrangement, Field
+from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.duplication import DuplicationPlan
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -106,7 +106,7 @@ class FakeRepository:
 
     async def refresh(self) -> None: ...
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None: ...
+    async def apply_creation(self, plan: CreationPlan) -> None: ...
 
     async def reminders(self) -> list[Reminder]:
         return self._reminders
@@ -645,7 +645,7 @@ class BarrierRepository:
 
     async def refresh(self) -> None: ...
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None: ...
+    async def apply_creation(self, plan: CreationPlan) -> None: ...
 
     async def reminders(self) -> list[Reminder]:
         return []

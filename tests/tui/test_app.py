@@ -19,9 +19,9 @@ from tests.tui.tiers import (
     title_cell,
 )
 from todoist_tui.domain.arrange import Arrangement, Field, SortKey
+from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.duplication import DuplicationPlan
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -84,7 +84,7 @@ class FakeRepository:
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
-        self.applied: list[DuplicationPlan] = []
+        self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
@@ -211,7 +211,7 @@ class FakeRepository:
         self.deleted_reminders.append(reminder_id)
         self._reminders = [r for r in self._reminders if r.id != reminder_id]
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> None:
         self.applied.append(plan)
 
     async def refresh(self) -> None:

@@ -4,10 +4,10 @@ from collections.abc import Iterator
 import pytest
 
 from todoist_tui.application.duplicate import duplicate_project, duplicate_section
+from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.duplication import (
-    DuplicationPlan,
     build_project_duplicate,
     build_section_duplicate,
 )
@@ -45,7 +45,7 @@ class FakeRepository:
         self._projects = projects
         self._sections = sections
         self._tasks = tasks
-        self.applied: list[DuplicationPlan] = []
+        self.applied: list[CreationPlan] = []
 
     async def projects(self) -> list[Project]:
         return self._projects
@@ -59,7 +59,7 @@ class FakeRepository:
     async def all_tasks(self) -> list[Task]:
         return [task for tasks in self._tasks.values() for task in tasks]
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> None:
         self.applied.append(plan)
 
     async def today(self) -> list[Task]:

@@ -1,9 +1,9 @@
 import asyncio
 
 from todoist_tui.domain.clock import Clock
+from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
-from todoist_tui.domain.duplication import DuplicationPlan
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.filter_query import FilterQuery
 from todoist_tui.domain.label import Label
@@ -170,7 +170,7 @@ class SnapshotTaskRepository:
         await self._inner.delete_reminder(reminder_id)
         await self._invalidate()
 
-    async def apply_creation(self, plan: DuplicationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> None:
         await self._inner.apply_creation(plan)
         await self._invalidate()
 

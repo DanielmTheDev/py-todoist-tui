@@ -1147,8 +1147,8 @@ async def test_refresh_is_a_noop() -> None:
 @pytest.mark.anyio
 @respx.mock
 async def test_apply_creation_maps_plan_to_sync_commands() -> None:
-    from todoist_tui.domain.duplication import (
-        DuplicationPlan,
+    from todoist_tui.domain.creation import (
+        CreationPlan,
         NewProject,
         NewSection,
         NewTask,
@@ -1165,7 +1165,7 @@ async def test_apply_creation_maps_plan_to_sync_commands() -> None:
         TodoistClient.create("tok", uuid_factory=lambda: next(ids))
     )
 
-    plan = DuplicationPlan(
+    plan = CreationPlan(
         projects=(NewProject(temp_id="tp", name="Work (copy)"),),
         sections=(NewSection(temp_id="ts", name="Now", order=2, project_ref="tp"),),
         tasks=(
