@@ -55,6 +55,17 @@ def _contents(app: TodoistApp) -> list[str]:
     return [str(table.get_cell(row, column))[slot:] for row in table.rows]
 
 
+def _state(app: TodoistApp) -> str:
+    """What a row assertion cannot show: which view and screen were live, and
+    what was still in flight. Reschedule below failed once, unreproducibly."""
+    workers = ", ".join(f"{w.name}={w.state.name}" for w in app.workers) or "none"
+    view = app._view.key  # pyright: ignore[reportPrivateUsage]
+    rows = [row.content for row in app._rows]  # pyright: ignore[reportPrivateUsage]
+    return (
+        f"view={view} screen={type(app.screen).__name__} rows={rows} workers={workers}"
+    )
+
+
 @pytest.mark.anyio
 async def test_slash_opens_the_search_modal() -> None:
     app = TodoistApp(SearchingRepository([]))
@@ -175,7 +186,7 @@ async def test_rescheduling_keeps_a_still_matching_row_in_place() -> None:
         await pilot.pause()
         await pilot.press("m")  # tomorrow
         await pilot.pause()
-        assert _contents(app) == ["Buy milk"]
+        assert _contents(app) == ["Buy milk"], _state(app)
 
 
 @pytest.mark.anyio
