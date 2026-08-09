@@ -1,7 +1,7 @@
 import contextlib
 import datetime
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -40,6 +40,7 @@ from todoist_tui.application.views import (
     query_for_key,
     search_view,
     view_from_key,
+    with_subtrees,
 )
 from todoist_tui.domain.arrange import (
     Arrangement,
@@ -133,6 +134,18 @@ def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
                 continue
             rows.append((" / ".join(binding.key.split(",")), binding.description))
     return rows
+
+
+@dataclass(frozen=True)
+class Close:
+    """One `item_close`, and everything it takes down with it.
+
+    Todoist closes a task's whole subtree, so a single command hides several rows
+    — `rows` holds them, parent first, to hide, unhide and reopen as one unit.
+    """
+
+    task_id: TaskId
+    rows: list[TaskRow]
 
 
 class InMemoryArrangements:
@@ -542,37 +555,41 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         cursor_row = table.cursor_row  # follow the highlight down to the neighbour
-        undo: list[tuple[TaskId, TaskRow]] = []
+        closing = with_subtrees(self._rows, set(ids))
+        closes: list[Close] = []
+        claimed: set[str] = set()
         for task_id in ids:
-            row = next((r for r in self._rows if str(r.id) == task_id), None)
-            self._pending_close[task_id] = row.due if row is not None else None
-            if row is not None:  # only a known row is restorable
-                undo.append((TaskId(task_id), row))
+            if task_id in claimed:  # a selected subtask closes with its parent, once
+                continue
+            subtree = with_subtrees(self._rows, {task_id}) - claimed
+            # view order, so a parent precedes the subtasks it takes with it
+            rows = [row for row in self._rows if str(row.id) in subtree]
+            claimed |= subtree
+            for row in rows:
+                self._pending_close[str(row.id)] = row.due
+            closes.append(Close(TaskId(task_id), rows))
         # optimistic: drop them from the model and repaint, sync in the background
-        dropped = set(ids)
-        self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
+        self._rows = prune(self._rows, lambda r: str(r.id) in closing)
         self._selected.clear()
         self._repaint()
         self._focus_task_at(table, cursor_row)
-        self._complete([TaskId(i) for i in ids], undo)
+        self._complete(closes)
 
     @work
-    async def _complete(
-        self, task_ids: list[TaskId], undo: list[tuple[TaskId, TaskRow]]
-    ) -> None:
-        undo_of = {str(task_id): (task_id, row) for task_id, row in undo}
+    async def _complete(self, closes: list[Close]) -> None:
         done: list[tuple[TaskId, TaskRow]] = []  # confirmed closes, reversible by z
-        for task_id in task_ids:
+        for index, close in enumerate(closes):
             try:
-                await complete_task(self._repo, task_id)
+                await complete_task(self._repo, close.task_id)
             except Exception as error:  # command rejected: unhide it, resync, report
-                self._pending_close.pop(str(task_id), None)
+                for stayed in closes[index:]:  # this one failed, the rest never ran
+                    for row in stayed.rows:  # a subtree stays open with its root
+                        self._pending_close.pop(str(row.id), None)
                 self._last_undo = done  # only what actually closed stays undoable
                 await self._reload(self._view)
                 self._set_status(f"Failed to complete task: {error}")
                 return
-            if str(task_id) in undo_of:
-                done.append(undo_of[str(task_id)])
+            done.extend((TaskId(str(row.id)), row) for row in close.rows)
         self._last_undo = done  # the whole confirmed batch reverses as one undo
         self._sync_now()  # pull server delta so the view reflects the close
 

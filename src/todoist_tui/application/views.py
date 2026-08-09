@@ -166,6 +166,16 @@ def prune(rows: list[TaskRow], leaving: Callable[[TaskRow], bool]) -> list[TaskR
         result = kept
 
 
+def with_subtrees(rows: list[TaskRow], ids: set[str]) -> set[str]:
+    """`ids` plus every row beneath them — Todoist closes a subtree with its root."""
+    result = set(ids)
+    while True:  # a subtask's own subtasks come along too, however deep
+        grown = result | {str(r.id) for r in rows if r.parent_id in result}
+        if grown == result:  # a parent cycle would otherwise never settle
+            return result
+        result = grown
+
+
 async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
     matches, pool, projects, sections, reminders = await asyncio.gather(
         view.fetch(repo),

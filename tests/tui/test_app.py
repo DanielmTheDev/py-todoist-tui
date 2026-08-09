@@ -531,6 +531,65 @@ async def test_undo_restores_the_whole_completed_batch() -> None:
         assert set(_content_col(table)) == {"A", "B", "C"}
 
 
+@pytest.mark.anyio
+async def test_completing_a_parent_takes_its_matching_subtask_with_it() -> None:
+    # Todoist's item_close closes the whole subtree, so the subtask goes too —
+    # even though it matched the view on its own
+    repo = FakeRepository([_row("A"), _row("sub", parent_id="A"), _row("B")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")  # complete A, the cursor row
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("A")]  # one command closes the subtree
+        table = app.query_one(DataTable[object])
+        assert [c.strip() for c in _content_col(table)] == ["B"]
+
+
+@pytest.mark.anyio
+async def test_undo_reopens_the_subtasks_that_closed_with_the_parent() -> None:
+    # item_uncomplete restores ancestors, never descendants: each one is reopened
+    subtree = [_row("sub", parent_id="A"), _row("deep", parent_id="sub")]
+    repo = FakeRepository([_row("A"), _row("B")], [], pool=subtree)
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")  # complete A, carrying its pulled-in subtree
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.uncompleted == [TaskId("A"), TaskId("sub"), TaskId("deep")]
+        table = app.query_one(DataTable[object])
+        # the fold marker is back, so A carries its restored subtree again
+        assert [c.strip() for c in _content_col(table)] == ["▸ A", "B"]
+
+
+@pytest.mark.anyio
+async def test_selecting_a_subtask_alongside_its_parent_closes_it_once() -> None:
+    repo = FakeRepository([_row("A"), _row("sub", parent_id="A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()  # pyright: ignore[reportUnknownMemberType]
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("l")  # reveal the subtask so it can be selected
+        await pilot.press("x")  # select A, cursor -> sub
+        await pilot.press("x")  # select sub as well
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("A")]  # the parent's close covers the subtask
+        assert repo.uncompleted == [TaskId("A"), TaskId("sub")]  # each reopened once
+
+
 class FailingOnCompleteRepository(FakeRepository):
     """complete() raises for one specific id, succeeds for the rest."""
 
@@ -568,6 +627,42 @@ async def test_partial_batch_complete_undoes_only_the_successes() -> None:
 
         assert TaskId("A") in repo.uncompleted  # the confirmed close is undoable
         assert TaskId("B") not in repo.uncompleted  # the stale prior undo is gone
+
+
+@pytest.mark.anyio
+async def test_a_rejected_close_unhides_the_whole_subtree() -> None:
+    repo = FailingOnCompleteRepository(
+        [_row("A"), _row("sub", parent_id="A")], [], fail_id=TaskId("A")
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")  # rejected: nothing closed, so nothing stays hidden
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("l")  # expand A to see its subtask
+        await pilot.pause()
+
+        table = app.query_one(DataTable[object])
+        assert [c.strip() for c in _content_col(table)] == ["▾ A", "sub"]
+
+
+@pytest.mark.anyio
+async def test_a_rejected_close_unhides_the_batch_it_cut_short() -> None:
+    repo = FailingOnCompleteRepository([_row("A"), _row("B")], [], fail_id=TaskId("A"))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()  # pyright: ignore[reportUnknownMemberType]
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("x")  # select A, cursor -> B
+        await pilot.press("x")  # select B
+        await pilot.press("e")  # A is rejected, so B is never even attempted
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == []
+        table = app.query_one(DataTable[object])
+        assert [c.strip() for c in _content_col(table)] == ["A", "B"]
 
 
 @pytest.mark.anyio

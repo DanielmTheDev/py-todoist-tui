@@ -14,6 +14,7 @@ from todoist_tui.application.views import (
     query_for_key,
     search_view,
     view_from_key,
+    with_subtrees,
 )
 from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.creation import CreationPlan
@@ -384,6 +385,40 @@ def test_prune_keeps_a_matching_subtask_whose_parent_left() -> None:
     assert prune(rows, lambda row: row.content == "parent") == [
         _member("sub", parent_id="parent")
     ]
+
+
+def test_with_subtrees_returns_the_ids_it_was_given() -> None:
+    rows = [_member("alone"), _member("other")]
+
+    assert with_subtrees(rows, {"alone"}) == {"alone"}
+
+
+def test_with_subtrees_reaches_the_whole_subtree() -> None:
+    rows = [
+        _member("parent"),
+        _member("sub", parent_id="parent"),
+        _pulled_in("subsub", "sub"),
+        _member("other"),
+    ]
+
+    assert with_subtrees(rows, {"parent"}) == {"parent", "sub", "subsub"}
+
+
+def test_with_subtrees_covers_every_root_it_is_given() -> None:
+    rows = [
+        _member("one"),
+        _pulled_in("one-sub", "one"),
+        _member("two"),
+        _pulled_in("two-sub", "two"),
+    ]
+
+    assert with_subtrees(rows, {"one", "two"}) == {"one", "one-sub", "two", "two-sub"}
+
+
+def test_with_subtrees_terminates_on_a_parent_cycle() -> None:
+    rows = [_member("a", parent_id="b"), _member("b", parent_id="a")]
+
+    assert with_subtrees(rows, {"a"}) == {"a", "b"}
 
 
 @pytest.mark.anyio
