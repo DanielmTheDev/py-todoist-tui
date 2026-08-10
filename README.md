@@ -16,14 +16,30 @@ elsewhere (i3 quick-add); this tool is for browsing, filtering, and bulk editing
   (Same file used by `todoist-cli`. Get the token from Todoist → Settings →
   Integrations → Developer.)
 
-## Setup
+## Install
+```sh
+./install.sh
+```
+Installs `todoist-tui` as an editable [`uv` tool](https://docs.astral.sh/uv/guides/tools/)
+— the command tracks this checkout, so `git pull` is enough to update it — and
+adds uv's bin directory to `PATH` in your shell config (zsh, bash, fish, or
+`~/.profile`) if it isn't there already. Re-running it is safe.
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Print every action, change nothing |
+| `--uninstall` | Remove the tool and the `PATH` block (config and cache are kept) |
+| `--shell zsh\|bash\|fish\|posix\|none` | Override the detected shell; `none` only prints the `export` line |
+
+## Setup (development)
 ```sh
 uv sync
 ```
 
 ## Run
 ```sh
-uv run todoist-tui
+todoist-tui        # installed
+uv run todoist-tui # from a checkout
 ```
 
 ## Keys
