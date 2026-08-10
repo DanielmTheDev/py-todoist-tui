@@ -12,6 +12,7 @@ from todoist_tui.domain.arrange import (
     TaskLine,
     arrange,
 )
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 
@@ -27,10 +28,15 @@ class Row:
     parent_id: str | None = None
     section_name: str | None = None
     section_order: int = 0
+    deadline: Deadline | None = None
 
 
 def _date(y: int, m: int, d: int) -> Due:
     return Due(date=datetime.date(y, m, d))
+
+
+def _deadline(y: int, m: int, d: int) -> Deadline:
+    return Deadline(date=datetime.date(y, m, d))
 
 
 def _shape(rows: list[RenderRow[Row]]) -> list[tuple[str, int, str]]:
@@ -97,6 +103,43 @@ def test_sort_by_due_date_descending_still_puts_no_due_last() -> None:
     assert [c for _, _, c in _shape(result)] == ["later", "soon", "none"]
 
 
+def test_sort_by_deadline_puts_no_deadline_last() -> None:
+    rows = [
+        Row("1", "later", deadline=_deadline(2026, 8, 15)),
+        Row("2", "none"),
+        Row("3", "soon", deadline=_deadline(2026, 8, 9)),
+    ]
+
+    result = arrange(rows, Arrangement(sort_by=(SortKey(Field.DEADLINE),)))
+
+    assert [c for _, _, c in _shape(result)] == ["soon", "later", "none"]
+
+
+def test_sort_by_deadline_descending_still_puts_no_deadline_last() -> None:
+    rows = [
+        Row("1", "later", deadline=_deadline(2026, 8, 15)),
+        Row("2", "none"),
+        Row("3", "soon", deadline=_deadline(2026, 8, 9)),
+    ]
+
+    result = arrange(
+        rows, Arrangement(sort_by=(SortKey(Field.DEADLINE, ascending=False),))
+    )
+
+    assert [c for _, _, c in _shape(result)] == ["later", "soon", "none"]
+
+
+def test_sort_by_deadline_is_independent_of_due_date() -> None:
+    rows = [
+        Row("1", "due-first", due=_date(2026, 8, 1), deadline=_deadline(2026, 8, 15)),
+        Row("2", "due-later", due=_date(2026, 8, 20), deadline=_deadline(2026, 8, 9)),
+    ]
+
+    result = arrange(rows, Arrangement(sort_by=(SortKey(Field.DEADLINE),)))
+
+    assert [c for _, _, c in _shape(result)] == ["due-later", "due-first"]
+
+
 def test_sort_by_project_descending_still_puts_no_project_last() -> None:
     rows = [
         Row("1", "orphan", project_name=None),
@@ -152,6 +195,25 @@ def test_group_by_project() -> None:
         ("H", 0, "Work"),
         ("T", 1, "w1"),
         ("T", 1, "w2"),
+    ]
+
+
+def test_group_by_deadline_labels_dates_and_puts_no_deadline_last() -> None:
+    rows = [
+        Row("1", "later", deadline=_deadline(2026, 8, 15)),
+        Row("2", "none"),
+        Row("3", "soon", deadline=_deadline(2026, 8, 9)),
+    ]
+
+    result = arrange(rows, Arrangement(group_by=(Field.DEADLINE,)))
+
+    assert _shape(result) == [
+        ("H", 0, "2026-08-09"),
+        ("T", 1, "soon"),
+        ("H", 0, "2026-08-15"),
+        ("T", 1, "later"),
+        ("H", 0, "No deadline"),
+        ("T", 1, "none"),
     ]
 
 

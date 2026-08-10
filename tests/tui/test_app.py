@@ -4463,6 +4463,39 @@ async def test_s_appends_then_toggles_sort_direction() -> None:
 
 
 @pytest.mark.anyio
+async def test_s_then_e_sorts_by_deadline() -> None:
+    store = InMemoryArrangements()
+    repo = FakeRepository(
+        [
+            replace(_row("later"), deadline=Deadline(date=datetime.date(2026, 8, 15))),
+            _row("none"),
+            replace(_row("soon"), deadline=Deadline(date=datetime.date(2026, 8, 9))),
+        ],
+        [Project(id="220", name="Work")],
+    )
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press("e")  # sort by Deadline
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _content_col(app.query_one(DataTable[object])) == [
+            "soon",
+            "later",
+            "none",
+        ]
+        assert await store.get("today") == Arrangement(
+            sort_by=(SortKey(Field.DEADLINE),)
+        )
+
+
+@pytest.mark.anyio
 async def test_escape_cancels_without_changing_arrangement() -> None:
     store = InMemoryArrangements()
     app = TodoistApp(_two_project_repo(), arrangements=store)

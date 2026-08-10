@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 
@@ -20,6 +21,7 @@ _NO_PROJECT = "No project"
 _NO_LABELS = "(no labels)"
 _NO_DUE_DATE = "No due date"
 _NO_DUE_TIME = "No time"
+_NO_DEADLINE = "No deadline"
 _NO_SECTION = "(no section)"
 
 
@@ -37,6 +39,8 @@ class ArrangeRow(Protocol):
     def priority(self) -> Priority: ...
     @property
     def due(self) -> Due | None: ...
+    @property
+    def deadline(self) -> Deadline | None: ...
     @property
     def project_name(self) -> str | None: ...
     @property
@@ -62,6 +66,7 @@ class Field(Enum):
     PRIORITY = "priority"
     DUE_DATE = "due_date"
     DUE_TIME = "due_time"
+    DEADLINE = "deadline"
     RECURRING = "recurring"
     CONTENT = "content"
     LABELS = "labels"
@@ -77,6 +82,7 @@ _FIELD_LABELS = {
     Field.PRIORITY: "Priority",
     Field.DUE_DATE: "Due date",
     Field.DUE_TIME: "Due time",
+    Field.DEADLINE: "Deadline",
     Field.RECURRING: "Recurring",
     Field.CONTENT: "Content",
     Field.LABELS: "Labels",
@@ -123,6 +129,11 @@ def _buckets(field: Field, row: ArrangeRow) -> list[_Bucket]:
                 return [_Bucket((1, 0), _NO_DUE_TIME)]
             t = row.due.time
             return [_Bucket((0, t.hour * 60 + t.minute), t.strftime("%H:%M"))]
+        case Field.DEADLINE:
+            if row.deadline is None:
+                return [_Bucket((1, 0), _NO_DEADLINE)]
+            deadline = row.deadline.date
+            return [_Bucket((0, deadline.toordinal()), deadline.isoformat())]
         case Field.CONTENT:
             return [_Bucket((0, row.content.lower()), row.content)]
         case Field.LABELS:
