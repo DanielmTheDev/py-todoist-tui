@@ -1,7 +1,9 @@
+import asyncio
 import contextlib
 import datetime
-from collections.abc import Mapping
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import ClassVar
 
@@ -23,6 +25,15 @@ from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
 from todoist_tui.application.duplicate import duplicate_project, duplicate_section
 from todoist_tui.application.move_task import move_task
+from todoist_tui.application.mutation import (
+    Mutation,
+    apply,
+    edit,
+    hide,
+    restore,
+    touched,
+)
+from todoist_tui.application.outbox import Command, Outbox
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_labels import set_labels
@@ -109,6 +120,7 @@ _SUMMARY_GAP = 2  # least space between the status message and the arrangement
 _FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
 _FOLD_SHUT = "▸ "  # subtree folded away
 _SELECT_MARKER = "▌"  # bar on a multi-selected row
+PENDING_MARK = " ⟳"  # trails a row whose change Todoist hasn't confirmed yet
 # The selection bar, the priority dot, and the space setting them off from the
 # title. They open the title cell, so the column label has to clear the same
 # width for TASK to sit above the titles rather than above their markers.
@@ -146,6 +158,20 @@ class Close:
 
     task_id: TaskId
     rows: list[TaskRow]
+
+
+@dataclass(frozen=True, slots=True)
+class Step:
+    """One change on its way to Todoist: what it does to the open view, the
+    command that carries it, and how a rejection is reported."""
+
+    mutation: Mutation | None  # None when nothing on screen changes yet
+    command: Command
+    label: str
+
+
+# how many actions `z` can walk back; deep enough for a slip, not a history
+_UNDO_DEPTH = 20
 
 
 class InMemoryArrangements:
@@ -338,7 +364,8 @@ class TodoistApp(App[None]):
         self._clock = clock or SystemClock()
         self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
-        self._rows: list[TaskRow] = []  # last loaded rows, for local re-arrange
+        self._rows: list[TaskRow] = []  # last loaded rows, as the server has them
+        self._visible: list[TaskRow] = []  # `_rows` with the outbox replayed on top
         self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
         self._collapsed: set[GroupPath] = set()  # groups folded to their header
         self._header_paths: dict[int, GroupPath] = {}  # header row index → its group
@@ -348,13 +375,18 @@ class TodoistApp(App[None]):
         self._status_base = ""  # the band's left-hand line: view title, or an error
         self._status_tally = ""  # " · 9 task(s)", blank while an error is shown
         self._laid_out = -1  # table width the current column stretch was sized for
-        self._last_undo: list[tuple[TaskId, TaskRow]] = []  # last completed batch
-        # tasks closed locally, kept hidden across reloads until the server's
-        # snapshot reflects the change (gone, or a recurring task's new due)
-        self._pending_close: dict[str, Due | None] = {}
-        # fields edited locally, kept applied across reloads until the server
-        # snapshot reflects them — so a lagging sync can't revert an optimistic edit
-        self._pending_edits: dict[str, dict[str, object]] = {}
+        # local changes the server hasn't confirmed: replayed over every reload,
+        # so a sync already in flight can't revert what the user just did
+        self._outbox = Outbox(
+            resync=self._resync,
+            on_change=self._repaint,
+            on_error=self._set_status,
+            spawn=self._spawn,
+        )
+        self._undo: list[list[Step]] = []  # reversals, one batch per action
+        self._batching = False  # a batch paints once, when all of it is queued
+        self._syncs = asyncio.Lock()  # one snapshot fetch at a time
+        self._inbox_id: str | None = None  # so a move out of the Inbox drops the row
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_duplicate = False  # guards the duplicate picker + name prompt
@@ -398,16 +430,61 @@ class TodoistApp(App[None]):
 
     @work(exclusive=True, group="reload")
     async def _sync_now(self) -> None:
-        self._set_syncing(True)
+        await self._resync()
+
+    async def _resync(self) -> None:
+        """Fetch a fresh snapshot and redraw. Confirms every local change the
+        server had already acknowledged when the fetch started — one begun
+        earlier could still be carrying a snapshot from before them.
+
+        The reload happens *inside* the confirmation, so the rows it loads are
+        already in place when the changes retire. Retiring first would repaint
+        the pre-change snapshot with nothing left on top of it, flashing a
+        departed row back for a frame.
+        """
+        async with self._syncs:
+            self._set_syncing(True)
+            try:
+                async with self._outbox.syncing():
+                    await self._repo.refresh()
+                    if self._active_server_query is not None:  # keep the filter live
+                        await self._repo.refresh_filtered(self._active_server_query)
+                    await self._reload(self._view)
+            except Exception:  # offline or sync failed: keep the cached view
+                pass
+            finally:  # also runs on worker cancellation, so ⟳ never sticks
+                self._set_syncing(False)
+
+    def _spawn(self, coroutine: Coroutine[object, object, None]) -> None:
+        self.run_worker(coroutine, group="outbox")
+
+    def _queue(self, work: list[tuple[Step, Step | None]]) -> None:
+        """Apply `work` to the view at once and send it in order, newest last.
+
+        Each entry pairs a change with its reversal, or None where there is none
+        to make (a delete is permanent). The reversals go on the undo stack as one
+        batch; a step the server rejects takes its own reversal back out.
+        """
+        undo = [back for _, back in work if back is not None]
+        self._batching = True
         try:
-            await self._repo.refresh()
-            if self._active_server_query is not None:  # keep the open filter live
-                await self._repo.refresh_filtered(self._active_server_query)
-            await self._reload(self._view)
-        except Exception:  # offline or sync failed: keep the cached view
-            pass
-        finally:  # also runs on worker cancellation, so ⟳ never sticks
-            self._set_syncing(False)
+            for forward, back in work:
+                self._outbox.queue(
+                    forward.mutation,
+                    forward.command,
+                    forward.label,
+                    partial(_forget, undo, back) if back is not None else None,
+                )
+        finally:
+            self._batching = False
+        if undo:
+            self._undo.append(undo)
+            del self._undo[:-_UNDO_DEPTH]
+        self._repaint()
+
+    def _send(self, command: Command, label: str) -> None:
+        """Queue a command that changes nothing on screen until the next sync."""
+        self._queue([(Step(None, command, label), None)])
 
     def action_refresh(self) -> None:
         self._sync_now()
@@ -555,73 +632,45 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         cursor_row = table.cursor_row  # follow the highlight down to the neighbour
-        closing = with_subtrees(self._rows, set(ids))
         closes: list[Close] = []
         claimed: set[str] = set()
         for task_id in ids:
             if task_id in claimed:  # a selected subtask closes with its parent, once
                 continue
-            subtree = with_subtrees(self._rows, {task_id}) - claimed
+            subtree = with_subtrees(self._visible, {task_id}) - claimed
             # view order, so a parent precedes the subtasks it takes with it
-            rows = [row for row in self._rows if str(row.id) in subtree]
+            rows = [row for row in self._visible if str(row.id) in subtree]
             claimed |= subtree
-            for row in rows:
-                self._pending_close[str(row.id)] = row.due
             closes.append(Close(TaskId(task_id), rows))
-        # optimistic: drop them from the model and repaint, sync in the background
-        self._rows = prune(self._rows, lambda r: str(r.id) in closing)
         self._selected.clear()
-        self._repaint()
+        self._queue(
+            [(_close_step(self._repo, c), self._reopen_step(c)) for c in closes]
+        )
         self._focus_task_at(table, cursor_row)
-        self._complete(closes)
 
-    @work
-    async def _complete(self, closes: list[Close]) -> None:
-        done: list[tuple[TaskId, TaskRow]] = []  # confirmed closes, reversible by z
-        for index, close in enumerate(closes):
-            try:
-                await complete_task(self._repo, close.task_id)
-            except Exception as error:  # command rejected: unhide it, resync, report
-                for stayed in closes[index:]:  # this one failed, the rest never ran
-                    for row in stayed.rows:  # a subtree stays open with its root
-                        self._pending_close.pop(str(row.id), None)
-                self._last_undo = done  # only what actually closed stays undoable
-                await self._reload(self._view)
-                self._set_status(f"Failed to complete task: {error}")
-                return
-            done.extend((TaskId(str(row.id)), row) for row in close.rows)
-        self._last_undo = done  # the whole confirmed batch reverses as one undo
-        self._sync_now()  # pull server delta so the view reflects the close
+    def _reopen_step(self, close: Close) -> Step:
+        return Step(
+            restore(close.rows), partial(self._reopen, close.rows), "Failed to undo"
+        )
+
+    async def _reopen(self, rows: list[TaskRow]) -> None:
+        # item_uncomplete restores ancestors only, so each closed child reopens itself
+        for row in rows:
+            await uncomplete_task(self._repo, TaskId(str(row.id)))
 
     def action_undo(self) -> None:
-        if not self._last_undo:
-            return
-        batch = self._last_undo
-        self._last_undo = []  # single-level: each undo reverses the last close
-        for task_id, row in batch:
-            self._pending_close.pop(str(task_id), None)  # reopened: stop filtering it
-            if all(str(r.id) != str(task_id) for r in self._rows):
-                self._rows = [*self._rows, row]
-        self._repaint()
-        self._uncomplete([task_id for task_id, _ in batch])
-
-    @work
-    async def _uncomplete(self, task_ids: list[TaskId]) -> None:
-        for task_id in task_ids:
-            try:
-                await uncomplete_task(self._repo, task_id)
-            except Exception as error:  # command rejected: resync, then report
-                await self._reload(self._view)
-                self._set_status(f"Failed to undo: {error}")
+        while self._undo:
+            batch = self._undo.pop()
+            if batch:  # a batch the server rejected outright has nothing left to undo
+                self._queue([(step, None) for step in reversed(batch)])
                 return
-        self._sync_now()  # pull server delta so the view reflects the reopen
 
     def action_delete(self) -> None:
         table = self.query_one(TaskTable)
         pairs = [
             (TaskId(task_id), row)
             for task_id in self._targets(table)
-            if (row := next((r for r in self._rows if str(r.id) == task_id), None))
+            if (row := next((r for r in self._visible if str(r.id) == task_id), None))
             is not None
         ]
         if not pairs:  # empty table or cursor on a group header
@@ -646,28 +695,21 @@ class TodoistApp(App[None]):
         if not confirmed:  # dialog cancelled: leave the tasks and selection untouched
             return
         table = self.query_one(TaskTable)
-        # optimistic: hide them (delete is permanent — no undo) and sync in the bg;
-        # keep them hidden across reloads until the server confirms they're gone
-        dropped = {str(task_id) for task_id, _ in pairs}
-        for task_id, row in pairs:
-            self._pending_close[str(task_id)] = row.due
-        self._rows = prune(self._rows, lambda r: str(r.id) in dropped)
         self._selected.clear()
-        self._repaint()
+        self._queue(  # delete is permanent, so there is no reversal to record
+            [
+                (
+                    Step(
+                        hide([str(task_id)]),
+                        partial(delete_task, self._repo, task_id),
+                        "Failed to delete task",
+                    ),
+                    None,
+                )
+                for task_id, _ in pairs
+            ]
+        )
         self._focus_task_at(table, cursor_row)
-        self._delete([task_id for task_id, _ in pairs])
-
-    @work
-    async def _delete(self, task_ids: list[TaskId]) -> None:
-        for task_id in task_ids:
-            try:
-                await delete_task(self._repo, task_id)
-            except Exception as error:  # command rejected: unhide it, resync, report
-                self._pending_close.pop(str(task_id), None)
-                await self._reload(self._view)
-                self._set_status(f"Failed to delete task: {error}")
-                return
-        self._sync_now()  # pull server delta so the view reflects the delete
 
     def action_set_priority(self, name: str) -> None:
         table = self.query_one(TaskTable)
@@ -675,30 +717,24 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         priority = Priority[name]
-        targets = set(ids)
-        for task_id in ids:
-            self._record_edit(task_id, priority=priority)
-        # optimistic: re-arrange now so the tasks jump to their new priority group
-        # (and their dots repaint), then sync in the background
-        self._rows = [
-            replace(row, priority=priority) if str(row.id) in targets else row
-            for row in self._rows
-        ]
+        rows = self._rows_of(ids)
         self._selected.clear()
-        self._repaint()
-        self._set_priority([TaskId(i) for i in ids], priority)
+        self._queue(
+            [
+                (
+                    self._priority_step(str(row.id), priority),
+                    self._priority_step(str(row.id), row.priority),
+                )
+                for row in rows
+            ]
+        )
 
-    @work
-    async def _set_priority(self, task_ids: list[TaskId], priority: Priority) -> None:
-        for task_id in task_ids:
-            try:
-                await set_priority(self._repo, task_id, priority)
-            except Exception as error:  # command rejected: resync, then report
-                self._forget_edit(str(task_id), "priority")
-                await self._reload(self._view)
-                self._set_status(f"Failed to set priority: {error}")
-                return
-        self._sync_now()  # pull server delta; re-arranges if grouped/sorted by priority
+    def _priority_step(self, task_id: str, priority: Priority) -> Step:
+        return Step(
+            edit([task_id], priority=priority),
+            partial(set_priority, self._repo, TaskId(task_id), priority),
+            "Failed to set priority",
+        )
 
     def action_set_due(self) -> None:
         table = self.query_one(TaskTable)
@@ -706,7 +742,7 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         # one target keeps its date prefilled; a selection opens on a blank date
-        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        row = next((r for r in self._visible if str(r.id) == ids[0]), None)
         current = row.due.date if len(ids) == 1 and row and row.due else None
         current_time = row.due.time if len(ids) == 1 and row and row.due else None
         self.push_screen(
@@ -719,7 +755,7 @@ class TodoistApp(App[None]):
         ids = self._targets(table)
         if not ids:  # empty table or cursor on a group header
             return
-        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        row = next((r for r in self._visible if str(r.id) == ids[0]), None)
         current = row.deadline.date if len(ids) == 1 and row and row.deadline else None
         self.push_screen(
             ScheduleScreen(self._clock.today(), current, kind="deadline"),
@@ -829,19 +865,10 @@ class TodoistApp(App[None]):
             return
         if parent_id is not None:  # else the new subtask lands out of sight
             self._expanded.add(TaskId(parent_id))
-        self._add_task(text, project_id, section_id, parent_id, due)
-
-    @work
-    async def _add_task(
-        self,
-        text: TaskText,
-        project_id: str | None,
-        section_id: str | None,
-        parent_id: str | None,
-        due: Due | None,
-    ) -> None:
-        try:
-            await add_task(
+        # the create returns no id, so the row only arrives with the drain's sync
+        self._send(
+            partial(
+                add_task,
                 self._repo,
                 text.content,
                 text.description,
@@ -849,11 +876,9 @@ class TodoistApp(App[None]):
                 section_id=section_id,
                 parent_id=parent_id,
                 due=due,
-            )
-        except Exception as error:  # command rejected: report, nothing was added
-            self._set_status(f"Failed to add task: {error}")
-            return
-        self._sync_now()  # the create returns no id, so the row arrives with the sync
+            ),
+            "Failed to add task",
+        )
 
     def action_edit_task(self) -> None:
         row = self._cursor_row()
@@ -876,71 +901,53 @@ class TodoistApp(App[None]):
         ):
             edited = replace(row, content=text.content, description=text.description)
             task_id = str(row.id)
-            self._record_edit(
-                task_id, content=text.content, description=text.description
+            self._queue(
+                [
+                    (
+                        self._text_step(task_id, text.content, text.description),
+                        self._text_step(task_id, row.content, row.description),
+                    )
+                ]
             )
-            self._rows = [  # optimistic: repaint the title cell now
-                edited if str(r.id) == task_id else r for r in self._rows
-            ]
-            self._rows = self._drop_departed({task_id})
-            self._repaint()
-            self._set_text(task_id, text)
         if from_detail:  # came from the card: land back on it, showing the edit
             self._open_detail(edited)
 
-    @work
-    async def _set_text(self, task_id: str, text: TaskText) -> None:
-        try:
-            await set_text(self._repo, TaskId(task_id), text.content, text.description)
-        except Exception as error:  # command rejected: resync, then report
-            self._forget_edit(task_id, "content", "description")
-            await self._reload(self._view)
-            self._set_status(f"Failed to edit task: {error}")
-            return
-        self._sync_now()  # pull server delta; re-runs a live filter/search view
+    def _text_step(self, task_id: str, content: str, description: str) -> Step:
+        return Step(
+            edit([task_id], content=content, description=description),
+            partial(set_text, self._repo, TaskId(task_id), content, description),
+            "Failed to edit task",
+        )
 
     def _cursor_row(self) -> TaskRow | None:
         task_id = self._cursor_task_id(self.query_one(TaskTable))
         if task_id is None:
             return None
-        return next((r for r in self._rows if str(r.id) == task_id), None)
+        return next((r for r in self._visible if str(r.id) == task_id), None)
 
     def _on_scheduled(self, task_ids: list[TaskId], result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
             return
-        targets = {str(t) for t in task_ids}
+        rows = self._rows_of(str(t) for t in task_ids)
+        self._selected.clear()
         # graft the picked date onto each task's own rule so a recurring task keeps
         # recurring (moves its next occurrence) instead of losing the rule
-        edits: list[tuple[TaskId, Due | None]] = []
-        for task_id in task_ids:
-            original = next(
-                (row.due for row in self._rows if str(row.id) == str(task_id)), None
-            )
-            new_due = reschedule(original, result.due)
-            self._record_edit(str(task_id), due=new_due)
-            edits.append((task_id, new_due))
-        # optimistic: repaint the due cells (and re-group if grouped by due) now
-        by_id = {str(task_id): due for task_id, due in edits}
-        self._rows = [
-            replace(row, due=by_id[str(row.id)]) if str(row.id) in targets else row
-            for row in self._rows
-        ]
-        self._rows = self._drop_departed(targets)
-        self._selected.clear()
-        self._repaint()
-        self._set_due(edits)
+        self._queue(
+            [
+                (
+                    self._due_step(str(row.id), reschedule(row.due, result.due)),
+                    self._due_step(str(row.id), row.due),
+                )
+                for row in rows
+            ]
+        )
 
-    @work
-    async def _set_due(self, edits: list[tuple[TaskId, Due | None]]) -> None:
-        for task_id, due in edits:
-            try:
-                await set_due(self._repo, task_id, due)
-            except Exception as error:  # command rejected: resync, then report
-                self._forget_edit(str(task_id), "due")
-                await self._reload(self._view)
-                self._set_status(f"Failed to set due: {error}")
-                return
-        self._sync_now()  # pull server delta; re-arranges if grouped/sorted by due
+    def _due_step(self, task_id: str, due: Due | None) -> Step:
+        return Step(
+            edit([task_id], due=due),
+            partial(set_due, self._repo, TaskId(task_id), due),
+            "Failed to set due",
+        )
 
     def _on_deadline(self, task_ids: list[TaskId], result: DueResult | None) -> None:
         if result is None:  # picker was cancelled
@@ -949,30 +956,24 @@ class TodoistApp(App[None]):
         new_deadline = (
             Deadline(date=result.due.date) if result.due is not None else None
         )
-        targets = {str(t) for t in task_ids}
-        for task_id in task_ids:
-            self._record_edit(str(task_id), deadline=new_deadline)
-        self._rows = [  # optimistic: repaint the deadline cells now
-            replace(row, deadline=new_deadline) if str(row.id) in targets else row
-            for row in self._rows
-        ]
+        rows = self._rows_of(str(t) for t in task_ids)
         self._selected.clear()
-        self._repaint()
-        self._set_deadline(task_ids, new_deadline)
+        self._queue(
+            [
+                (
+                    self._deadline_step(str(row.id), new_deadline),
+                    self._deadline_step(str(row.id), row.deadline),
+                )
+                for row in rows
+            ]
+        )
 
-    @work
-    async def _set_deadline(
-        self, task_ids: list[TaskId], deadline: Deadline | None
-    ) -> None:
-        for task_id in task_ids:
-            try:
-                await set_deadline(self._repo, task_id, deadline)
-            except Exception as error:  # command rejected: resync, then report
-                self._forget_edit(str(task_id), "deadline")
-                await self._reload(self._view)
-                self._set_status(f"Failed to set deadline: {error}")
-                return
-        self._sync_now()
+    def _deadline_step(self, task_id: str, deadline: Deadline | None) -> Step:
+        return Step(
+            edit([task_id], deadline=deadline),
+            partial(set_deadline, self._repo, TaskId(task_id), deadline),
+            "Failed to set deadline",
+        )
 
     async def action_move_task(self) -> None:
         if self._picking_project:  # already loading or picker already open
@@ -982,7 +983,7 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         # one target prefills its project/section; a selection opens unanchored
-        row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+        row = next((r for r in self._visible if str(r.id) == ids[0]), None)
         single = row if len(ids) == 1 else None
         self._picking_project = True
         try:
@@ -1006,55 +1007,51 @@ class TodoistApp(App[None]):
         self._picking_project = False
         if target is None:  # picker was cancelled
             return
-        targets = {str(t) for t in task_ids}
-        for task_id in task_ids:
-            self._record_edit(
-                str(task_id),
-                project_name=target.project_name,
-                project_id=target.project_id,
-                section_id=target.section_id,
-                section_name=target.section_name,
-            )
-        # optimistic: repaint the project cells (and re-group if grouped by project)
-        self._rows = [
-            replace(
-                row,
-                project_name=target.project_name,
-                project_id=target.project_id,
-                section_id=target.section_id,
-                section_name=target.section_name,
-            )
-            if str(row.id) in targets
-            else row
-            for row in self._rows
-        ]
-        if self._view.key == "inbox":  # moved out of Inbox: it no longer lists them
-            self._rows = prune(self._rows, lambda r: str(r.id) in targets)
-        else:
-            self._rows = self._drop_departed(targets)
+        rows = self._rows_of(str(t) for t in task_ids)
         self._selected.clear()
-        self._repaint()
-        self._move_task(task_ids, target.project_id, target.section_id)
-
-    @work
-    async def _move_task(
-        self, task_ids: list[TaskId], project_id: str, section_id: str | None
-    ) -> None:
-        for task_id in task_ids:
-            try:
-                await move_task(self._repo, task_id, project_id, section_id)
-            except Exception as error:  # command rejected: resync, then report
-                self._forget_edit(
-                    str(task_id),
-                    "project_name",
-                    "project_id",
-                    "section_id",
-                    "section_name",
+        self._queue(
+            [
+                (
+                    self._move_step(
+                        str(row.id),
+                        target.project_id,
+                        target.project_name,
+                        target.section_id,
+                        target.section_name,
+                    ),
+                    self._move_step(
+                        str(row.id),
+                        row.project_id,
+                        row.project_name,
+                        row.section_id,
+                        row.section_name,
+                    )
+                    if row.project_id is not None
+                    else None,
                 )
-                await self._reload(self._view)
-                self._set_status(f"Failed to move task: {error}")
-                return
-        self._sync_now()  # pull server delta; re-arranges if grouped by project
+                for row in rows
+            ]
+        )
+
+    def _move_step(
+        self,
+        task_id: str,
+        project_id: str,
+        project_name: str | None,
+        section_id: str | None,
+        section_name: str | None,
+    ) -> Step:
+        return Step(
+            edit(
+                [task_id],
+                project_id=project_id,
+                project_name=project_name,
+                section_id=section_id,
+                section_name=section_name,
+            ),
+            partial(move_task, self._repo, TaskId(task_id), project_id, section_id),
+            "Failed to move task",
+        )
 
     async def action_duplicate(self) -> None:
         if self._picking_duplicate:  # already loading or a step already open
@@ -1090,23 +1087,18 @@ class TodoistApp(App[None]):
             return
         source = target.section_name or target.project_name
         self._set_status(f"Duplicating {source}…")
-        self._duplicate(target, name)
+        # the copies only appear once the drain's sync pulls them in
+        self._send(partial(self._duplicate, target, name), "Failed to duplicate")
 
-    @work
     async def _duplicate(self, target: MoveTarget, name: str) -> None:
-        try:
-            if target.section_id is not None:
-                sections = await self._repo.sections()
-                section = next((s for s in sections if s.id == target.section_id), None)
-                if section is None:
-                    raise LookupError(f"section {target.section_id} not found")
-                await duplicate_section(self._repo, section, name)
-            else:
-                await duplicate_project(self._repo, target.project_id, name)
-        except Exception as error:  # command rejected: report, keep the view
-            self._set_status(f"Failed to duplicate: {error}")
+        if target.section_id is None:
+            await duplicate_project(self._repo, target.project_id, name)
             return
-        self._sync_now()  # pull the real new entities into the view
+        sections = await self._repo.sections()
+        section = next((s for s in sections if s.id == target.section_id), None)
+        if section is None:
+            raise LookupError(f"section {target.section_id} not found")
+        await duplicate_section(self._repo, section, name)
 
     async def action_delete_section(self) -> None:
         if self._picking_delete_section:  # already loading or a step already open
@@ -1148,16 +1140,11 @@ class TodoistApp(App[None]):
         if not confirmed:
             return
         self._set_status(f"Deleting {name}…")
-        self._delete_section(section_id)
-
-    @work
-    async def _delete_section(self, section_id: str) -> None:
-        try:
-            await delete_section(self._repo, section_id)
-        except Exception as error:  # command rejected: report, keep the view
-            self._set_status(f"Failed to delete section: {error}")
-            return
-        self._sync_now()  # the section and its tasks leave the view with the delta
+        # the section and its tasks leave the view with the drain's sync
+        self._send(
+            partial(delete_section, self._repo, section_id),
+            "Failed to delete section",
+        )
 
     async def action_set_labels(self) -> None:
         if self._picking_labels:  # already loading or editor already open
@@ -1166,7 +1153,7 @@ class TodoistApp(App[None]):
         rows = [
             row
             for task_id in self._targets(table)
-            if (row := next((r for r in self._rows if str(r.id) == task_id), None))
+            if (row := next((r for r in self._visible if str(r.id) == task_id), None))
         ]
         if not rows:  # empty table or cursor on a group header
             return
@@ -1198,49 +1185,39 @@ class TodoistApp(App[None]):
         self._picking_labels = False
         if chosen is None:  # cancelled
             return
-        targets = {str(t) for t in task_ids}
-        new_labels: dict[str, tuple[str, ...]] = {}
-        for row in self._rows:
-            if str(row.id) not in targets:
-                continue
+        edited: list[tuple[TaskRow, tuple[str, ...]]] = []
+        for row in self._rows_of(str(t) for t in task_ids):
             merged = (
                 row.labels + tuple(n for n in chosen if n not in row.labels)
                 if add
                 else tuple(chosen)
             )
             if merged != row.labels:  # skip tasks the edit leaves unchanged
-                new_labels[str(row.id)] = merged
-        if not new_labels:  # nothing to add / unchanged
+                edited.append((row, merged))
+        if not edited:  # nothing to add / unchanged
             return
         create = tuple(name for name in chosen if name not in catalog)
-        for task_id, labels in new_labels.items():
-            self._record_edit(task_id, labels=labels)
-        self._rows = [  # optimistic: repaint the labels cells now
-            replace(row, labels=new_labels[str(row.id)])
-            if str(row.id) in new_labels
-            else row
-            for row in self._rows
-        ]
-        self._rows = self._drop_departed(set(new_labels))
         self._selected.clear()
-        self._repaint()
-        self._set_labels(list(new_labels.items()), create)
-
-    @work
-    async def _set_labels(
-        self, edits: list[tuple[str, tuple[str, ...]]], create: tuple[str, ...]
-    ) -> None:
-        for index, (task_id, labels) in enumerate(edits):
-            try:  # create any new labels once, on the first command
-                await set_labels(
-                    self._repo, TaskId(task_id), labels, create if index == 0 else ()
+        self._queue(
+            [
+                (  # any new labels are registered once, with the first command
+                    self._labels_step(
+                        str(row.id), merged, create if index == 0 else ()
+                    ),
+                    self._labels_step(str(row.id), row.labels, ()),
                 )
-            except Exception as error:  # command rejected: resync, then report
-                self._forget_edit(task_id, "labels")
-                await self._reload(self._view)
-                self._set_status(f"Failed to set labels: {error}")
-                return
-        self._sync_now()  # pull server delta; re-runs a live filter/search view
+                for index, (row, merged) in enumerate(edited)
+            ]
+        )
+
+    def _labels_step(
+        self, task_id: str, labels: tuple[str, ...], create: tuple[str, ...]
+    ) -> Step:
+        return Step(
+            edit([task_id], labels=labels),
+            partial(set_labels, self._repo, TaskId(task_id), labels, create),
+            "Failed to set labels",
+        )
 
     def action_reminders(self) -> None:
         table = self.query_one(TaskTable)
@@ -1248,7 +1225,7 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         if len(ids) == 1:
-            row = next((r for r in self._rows if str(r.id) == ids[0]), None)
+            row = next((r for r in self._visible if str(r.id) == ids[0]), None)
             if row is None:
                 return
             allow_relative = self._has_due_time(ids[0])
@@ -1288,7 +1265,7 @@ class TodoistApp(App[None]):
             self._add_reminders(eligible, template)
 
     def _has_due_time(self, task_id: str) -> bool:
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        row = next((r for r in self._visible if str(r.id) == task_id), None)
         return row is not None and row.due is not None and row.due.time is not None
 
     def _on_reminder_absolute(self, ids: list[str], result: DueResult | None) -> None:
@@ -1297,94 +1274,77 @@ class TodoistApp(App[None]):
         template = Reminder(id="", item_id="", type="absolute", due=result.due)
         self._add_reminders(ids, template)
 
-    @work
-    async def _add_reminders(self, ids: list[str], template: Reminder) -> None:
-        for task_id in ids:
-            try:
-                await add_reminder(self._repo, replace(template, item_id=task_id))
-            except Exception as error:  # command rejected: resync, then report
-                await self._reload(self._view)
-                self._set_status(f"Failed to add reminder: {error}")
-                return
+    def _add_reminders(self, ids: list[str], template: Reminder) -> None:
         self._selected.clear()
-        self._sync_now()  # pull the new reminders so the bell count updates
+        # the bell count only updates once the drain's sync brings the reminders in
+        for task_id in ids:
+            self._send(
+                partial(add_reminder, self._repo, replace(template, item_id=task_id)),
+                "Failed to add reminder",
+            )
 
-    @work
-    async def _delete_reminder(self, reminder_id: str) -> None:
-        try:
-            await delete_reminder(self._repo, reminder_id)
-        except Exception as error:  # command rejected: resync, then report
-            await self._reload(self._view)
-            self._set_status(f"Failed to delete reminder: {error}")
-            return
-        self._sync_now()
+    def _delete_reminder(self, reminder_id: str) -> None:
+        self._send(
+            partial(delete_reminder, self._repo, reminder_id),
+            "Failed to delete reminder",
+        )
 
     async def _reload(self, view: View) -> None:
         try:
             rows = await load_view(self._repo, view)
+            projects = await self._repo.projects()
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
             return
+        self._inbox_id = next((p.id for p in projects if p.is_inbox), None)
         arrangement = await self._arrangements.get(view.key, view.default_arrangement)
         if arrangement != self._arrangement:
             self._collapsed.clear()  # regrouping makes the folded label paths stale
         self._arrangement = arrangement
-        rows = self._drop_closed(rows)
-        rows = self._apply_pending_edits(rows)
-        self._rows = rows  # retained so a priority keypress can re-arrange locally
-        self._selected &= {str(r.id) for r in rows}  # drop ids gone from the view
-        self._render(self._arrange(rows), view)
+        self._rows = rows
+        self._repaint()
 
-    def _record_edit(self, task_id: str, **fields: object) -> None:
-        self._pending_edits.setdefault(task_id, {}).update(fields)  # last write wins
+    def _rows_of(self, task_ids: Iterable[str]) -> list[TaskRow]:
+        """The named rows as they look now, in display order."""
+        wanted = set(task_ids)
+        return [row for row in self._visible if str(row.id) in wanted]
 
-    def _forget_edit(self, task_id: str, *fields: str) -> None:
-        pending = self._pending_edits.get(task_id)
-        if pending is None:
-            return
-        for name in fields:
-            pending.pop(name, None)
-        if not pending:
-            del self._pending_edits[task_id]
+    def _members(self, rows: list[TaskRow]) -> list[TaskRow]:
+        """The rows the open view still wants once the local changes are on.
 
-    def _apply_pending_edits(self, rows: list[TaskRow]) -> list[TaskRow]:
-        """Re-apply locally-edited fields the server hasn't confirmed yet, and
-        forget a field once the snapshot matches it — or the task leaves the
-        view — so an edit isn't held forever."""
-        present = {str(row.id) for row in rows}
-        self._pending_edits = {
-            tid: fields for tid, fields in self._pending_edits.items() if tid in present
-        }
-        result: list[TaskRow] = []
-        for row in rows:
-            pending = self._pending_edits.get(str(row.id))
-            if not pending:
-                result.append(row)
-                continue
-            unconfirmed = {
-                name: value
-                for name, value in pending.items()
-                if getattr(row, name) != value
-            }
-            if unconfirmed:
-                self._pending_edits[str(row.id)] = unconfirmed
-                row = replace(row, **unconfirmed)
-            else:
-                del self._pending_edits[str(row.id)]
-            result.append(row)
-        return result
+        A row leaves only if the change is what took it out — it belonged before
+        and doesn't after. Judging the result alone would evict rows the server
+        put here despite the rule, since a Todoist query is wider than anything
+        reproducible client-side ("today" also hands back everything overdue).
 
-    def _drop_closed(self, rows: list[TaskRow]) -> list[TaskRow]:
-        """Hide locally-closed tasks the server hasn't confirmed yet, and forget
-        a closed task once the snapshot reflects it — gone, or (recurring) with a
-        changed due — so it isn't hidden forever."""
-        present = {str(row.id): row.due for row in rows}
-        self._pending_close = {
-            tid: due
-            for tid, due in self._pending_close.items()
-            if tid in present and present[tid] == due
-        }
-        return prune(rows, lambda row: str(row.id) in self._pending_close)
+        A saved filter's membership only the server can decide, so a row changed
+        there keeps its place until the next refresh answers — it must never blink
+        out and back in.
+        """
+        changed = touched(self._outbox.pending)
+        belongs = self._membership()
+        if not changed or belongs is None:
+            return rows
+        before = {str(row.id): row for row in self._rows}
+
+        def departed(row: TaskRow) -> bool:
+            was = before.get(str(row.id))
+            if str(row.id) not in changed or was is None:
+                return False
+            return belongs(was) and not belongs(row)
+
+        return prune(rows, departed)
+
+    def _membership(self) -> Callable[[TaskRow], bool] | None:
+        """The open view's own rule, where it has one it can apply itself."""
+        keeps = self._view.keeps
+        if keeps is not None:
+            today = self._clock.today()
+            return lambda row: keeps(row, today)
+        if self._view.key == INBOX.key and self._inbox_id is not None:
+            inbox_id = self._inbox_id
+            return lambda row: row.project_id == inbox_id
+        return None
 
     def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
         return arrange(
@@ -1431,25 +1391,11 @@ class TodoistApp(App[None]):
         if parent_id is not None:
             self._move_cursor_to_task(table, parent_id)
 
-    def _drop_departed(self, edited: set[str]) -> list[TaskRow]:
-        """The rows left after an edit to `edited`: those the view still wants.
-
-        A filter's membership needs the server, so the edited tasks are assumed
-        gone and the background refresh restores any that still match.
-        """
-        if self._view.keeps is not None:  # membership is decidable here and now
-            today = self._clock.today()
-            keeps = self._view.keeps
-            return prune(self._rows, lambda row: not keeps(row, today))
-        if self._active_server_query is not None:
-            return prune(self._rows, lambda row: str(row.id) in edited)
-        return self._rows
-
     def _has_children(self, task_id: str) -> bool:
-        return any(row.parent_id == task_id for row in self._rows)
+        return any(row.parent_id == task_id for row in self._visible)
 
     def _parent_of(self, task_id: str) -> str | None:
-        row = next((r for r in self._rows if str(r.id) == task_id), None)
+        row = next((r for r in self._visible if str(r.id) == task_id), None)
         return row.parent_id if row is not None else None
 
     def _move_cursor_to_group(self, table: TaskTable, path: GroupPath) -> None:
@@ -1466,8 +1412,12 @@ class TodoistApp(App[None]):
                 return
 
     def _repaint(self) -> None:
-        """Redraw the open view from the rows already loaded."""
-        self._render(self._arrange(self._rows), self._view)
+        """Redraw the open view: the loaded rows with the outbox replayed on top."""
+        if self._batching:  # a batch of changes paints once, when all of it is in
+            return
+        self._visible = self._members(apply(self._rows, self._outbox.pending))
+        self._selected &= {str(r.id) for r in self._visible}  # drop ids now gone
+        self._render(self._arrange(self._visible), self._view)
 
     def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:
         try:
@@ -1479,6 +1429,7 @@ class TodoistApp(App[None]):
         # at render time, not import: the styles follow the live theme
         styles = tier_styles(table)
         priorities = priority_styles(table)
+        unconfirmed = touched(self._outbox.pending)
         today = self._clock.today()
         first_row_of: dict[str, int] = {}
         header_row_of: dict[GroupPath, int] = {}
@@ -1512,7 +1463,11 @@ class TodoistApp(App[None]):
                 continue
             row = item.row
             marked = str(row.id) in self._selected
-            cells: list[Text | str] = [_title_cell(item, marked, styles, priorities)]
+            cells: list[Text | str] = [
+                _title_cell(
+                    item, marked, str(row.id) in unconfirmed, styles, priorities
+                )
+            ]
             if show_labels:
                 cells.append(_labels_cell(row.labels, styles[Tier.MUTED]))
             if show_due:
@@ -1552,7 +1507,7 @@ class TodoistApp(App[None]):
             table.move_cursor(row=first_task_row)  # never rest on a leading header
         # the view's own tasks, not the visible lines: collapsing a parent or
         # revealing a subtask pulled in for context must not move the number
-        matched = sum(1 for row in self._rows if row.matched)
+        matched = sum(1 for row in self._visible if row.matched)
         self._set_count_status(view.title, matched)
 
     def _focus_task_at(self, table: TaskTable, row: int) -> None:
@@ -1573,7 +1528,7 @@ class TodoistApp(App[None]):
         """The task ids an action applies to: the selection if any (in display
         order), else the cursor row, else nothing."""
         if self._selected:
-            return [str(r.id) for r in self._rows if str(r.id) in self._selected]
+            return [str(r.id) for r in self._visible if str(r.id) in self._selected]
         task_id = self._cursor_task_id(table)
         return [task_id] if task_id is not None else []
 
@@ -1625,6 +1580,7 @@ _RECURRING_GLYPH = " ↻"
 def _title_cell(
     line: TaskLine[TaskRow],
     marked: bool,
+    unconfirmed: bool,
     styles: Mapping[Tier, Style],
     priorities: Mapping[Priority, Style],
 ) -> Text:
@@ -1643,8 +1599,24 @@ def _title_cell(
     title.append_text(render_links(row.content))
     if marker := description_marker(row.description):
         title.append(marker, style=styles[Tier.MUTED])
+    if unconfirmed:  # this row's change is still on its way to Todoist
+        title.append(PENDING_MARK, style=styles[Tier.MUTED])
     cell.append_text(title)
     return cell
+
+
+def _close_step(repo: TaskRepository, close: Close) -> Step:
+    return Step(
+        hide([str(row.id) for row in close.rows]),
+        partial(complete_task, repo, close.task_id),
+        "Failed to complete task",
+    )
+
+
+def _forget(undo: list[Step], step: Step) -> None:
+    """Drop a reversal the server never gave us anything to reverse."""
+    if step in undo:
+        undo.remove(step)
 
 
 def _column_widths(

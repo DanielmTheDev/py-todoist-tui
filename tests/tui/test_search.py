@@ -186,7 +186,8 @@ async def test_rescheduling_keeps_a_still_matching_row_in_place() -> None:
         await pilot.pause()
         await pilot.press("m")  # tomorrow
         await pilot.pause()
-        assert _contents(app) == ["Buy milk"], _state(app)
+        # it holds its place, marked unconfirmed until the blocked resync answers
+        assert _contents(app) == ["Buy milk ⟳"], _state(app)
 
 
 @pytest.mark.anyio
@@ -210,7 +211,8 @@ async def test_moving_keeps_a_still_matching_row_in_place() -> None:
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
         await pilot.pause()
-        assert _contents(app) == ["Buy milk"]
+        # it holds its place, marked unconfirmed until the blocked resync answers
+        assert _contents(app) == ["Buy milk ⟳"]
 
 
 @pytest.mark.anyio

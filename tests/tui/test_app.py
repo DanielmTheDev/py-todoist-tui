@@ -19,7 +19,14 @@ from tests.tui.tiers import (
     tier_at,
     title_cell,
 )
-from todoist_tui.domain.arrange import Arrangement, Field, SortKey
+from todoist_tui.application.views import TaskRow, View
+from todoist_tui.domain.arrange import (
+    Arrangement,
+    Field,
+    RenderRow,
+    SortKey,
+    TaskLine,
+)
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -87,6 +94,7 @@ class FakeRepository:
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
+        self._removed_pool: dict[TaskId, Task] = {}
         self.today_calls = 0
         self.refresh_calls = 0
         self.refresh_filtered_queries: list[str] = []
@@ -143,15 +151,33 @@ class FakeRepository:
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
-        self._removed.update({t.id: t for t in self._tasks if t.id == task_id})
-        self._tasks = [t for t in self._tasks if t.id != task_id]
-        self._pool = [t for t in self._pool if t.id != task_id]
+        closing = self._subtree(task_id)  # item_close takes the whole subtree
+        self._removed.update({t.id: t for t in self._tasks if t.id in closing})
+        self._removed_pool.update({t.id: t for t in self._pool if t.id in closing})
+        self._tasks = [t for t in self._tasks if t.id not in closing]
+        self._pool = [t for t in self._pool if t.id not in closing]
+
+    def _subtree(self, task_id: TaskId) -> set[TaskId]:
+        found = {task_id}
+        while True:
+            grown = found | {
+                t.id
+                for t in [*self._tasks, *self._inbox, *self._pool]
+                if t.parent_id is not None and TaskId(t.parent_id) in found
+            }
+            if grown == found:
+                return found
+            found = grown
 
     async def uncomplete(self, task_id: TaskId) -> None:
+        # item_uncomplete restores only the named task, never its descendants
         self.uncompleted.append(task_id)
         restored = self._removed.pop(task_id, None)
         if restored is not None:
             self._tasks = [*self._tasks, restored]
+        pooled = self._removed_pool.pop(task_id, None)
+        if pooled is not None:
+            self._pool = [*self._pool, pooled]
 
     async def delete(self, task_id: TaskId) -> None:
         self.deleted.append(task_id)
@@ -648,7 +674,7 @@ async def test_a_rejected_close_unhides_the_whole_subtree() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_rejected_close_unhides_the_batch_it_cut_short() -> None:
+async def test_a_rejected_close_does_not_hold_up_the_rest_of_the_batch() -> None:
     repo = FailingOnCompleteRepository([_row("A"), _row("B")], [], fail_id=TaskId("A"))
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
@@ -656,13 +682,13 @@ async def test_a_rejected_close_unhides_the_batch_it_cut_short() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.press("x")  # select A, cursor -> B
         await pilot.press("x")  # select B
-        await pilot.press("e")  # A is rejected, so B is never even attempted
+        await pilot.press("e")  # A is rejected; B is independent and still closes
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        assert repo.completed == []
+        assert repo.completed == [TaskId("B")]
         table = app.query_one(DataTable[object])
-        assert [c.strip() for c in _content_col(table)] == ["A", "B"]
+        assert [c.strip() for c in _content_col(table)] == ["A"]  # only A comes back
 
 
 @pytest.mark.anyio
@@ -1917,6 +1943,78 @@ async def test_pressing_delete_confirmed_deletes_optimistically() -> None:
         assert app.query_one(DataTable[object]).row_count == 0
 
 
+class TodayFilteringRepository(FakeRepository):
+    """today() evaluates the due date, the way the real snapshot repository does,
+    so a task rescheduled away actually leaves the view on the next load."""
+
+    async def today(self) -> list[Task]:
+        self.today_calls += 1
+        return [t for t in self._tasks if t.due is not None and t.due.date == _TODAY]
+
+
+class PaintRecordingApp(TodoistApp):
+    """Records the ids on screen at every paint, so a one-frame flash shows up."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self.paints: list[list[str]] = []
+
+    def _render(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, render_rows: list[RenderRow[TaskRow]], view: View
+    ) -> None:
+        super()._render(render_rows, view)
+        self.paints.append(
+            [str(item.row.id) for item in render_rows if isinstance(item, TaskLine)]
+        )
+
+
+@pytest.mark.anyio
+async def test_rescheduling_out_of_today_never_flashes_the_row_back() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    repo = TodayFilteringRepository([task], [Project(id="220", name="Errands")])
+    app = PaintRecordingApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow: it leaves Today
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues == [(TaskId("6X4"), Due(date=_TOMORROW))]
+        assert app.query_one(DataTable[object]).row_count == 0
+        left = next(i for i, ids in enumerate(app.paints) if "6X4" not in ids)
+        # once it has gone it must stay gone: no repaint may put it back
+        assert all("6X4" not in ids for ids in app.paints[left:]), app.paints
+
+
+@pytest.mark.anyio
+async def test_completing_never_flashes_the_row_back() -> None:
+    repo = TodayFilteringRepository(
+        [_due_today("A"), _due_today("B")], [Project(id="220", name="Errands")]
+    )
+    app = PaintRecordingApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("A")]
+        left = next(i for i, ids in enumerate(app.paints) if "A" not in ids)
+        assert all("A" not in ids for ids in app.paints[left:]), app.paints
+
+
 class GatedRefreshRepository(FakeRepository):
     """refresh() blocks until released, so the syncing state is observable."""
 
@@ -2066,9 +2164,10 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
         # optimistic, before the network resolves: it jumped to a fresh P1 group
         col2 = _content_col(table)
         assert "P1" in col2[0]
-        assert col2[1].strip() == "Buy milk"
+        # ⟳ trails it: the jump is local, the server hasn't confirmed the change
+        assert col2[1].strip() == "Buy milk ⟳"
         assert not any("P4" in c for c in col2)
-        assert _title(table, table.cursor_row).strip() == "Buy milk"  # <-
+        assert _title(table, table.cursor_row).strip() == "Buy milk ⟳"  # <-
 
         repo.release.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
@@ -2135,48 +2234,48 @@ async def test_set_priority_failure_is_surfaced_and_resyncs() -> None:
         assert priority_of(app.query_one(TaskTable), 0) is None
 
 
-class LaggingEditRepository(FakeRepository):
-    """Todoist eventual consistency: an edit is accepted but the sync snapshot
-    keeps returning the old field value until the server catches up."""
+class HeldEditRepository(FakeRepository):
+    """The edit is accepted but held in flight, so a sync can begin — and land —
+    before the server has acknowledged it.
+
+    Todoist is read-your-writes: a snapshot fetched *after* an ack always carries
+    the change. So this interleaving, not a lagging snapshot, is the one that can
+    revert an optimistic edit.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self.hold = asyncio.Event()
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
-        self.priorities.append((task_id, priority))  # recorded, not yet reflected
+        await self.hold.wait()
+        await super().set_priority(task_id, priority)
 
     async def set_due(self, task_id: TaskId, due: Due | None) -> None:
-        self.dues.append((task_id, due))
+        await self.hold.wait()
+        await super().set_due(task_id, due)
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
-        self.deadlines.append((task_id, deadline))
+        await self.hold.wait()
+        await super().set_deadline(task_id, deadline)
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
-        self.moves.append((task_id, project_id, section_id))
+        await self.hold.wait()
+        await super().set_project(task_id, project_id, section_id)
 
-    def catch_up(self) -> None:
-        for tid, priority in self.priorities:
-            self._tasks = [
-                replace(t, priority=priority) if t.id == tid else t for t in self._tasks
-            ]
-        for tid, due in self.dues:
-            self._tasks = [
-                replace(t, due=due) if t.id == tid else t for t in self._tasks
-            ]
-        for tid, deadline in self.deadlines:
-            self._tasks = [
-                replace(t, deadline=deadline) if t.id == tid else t for t in self._tasks
-            ]
-        for tid, project_id, section_id in self.moves:
-            self._tasks = [
-                replace(t, project_id=project_id, section_id=section_id)
-                if t.id == tid
-                else t
-                for t in self._tasks
-            ]
+
+async def _settle(pilot: Pilot[None], turns: int = 12) -> None:
+    """Run the scheduled workers out. Nothing behind the fakes does real I/O, so
+    a fixed number of turns drains them deterministically — unlike
+    `wait_for_complete`, this does not block on a command still being held."""
+    for _ in range(turns):
+        await pilot.pause()
 
 
 @pytest.mark.anyio
-async def test_priority_survives_a_lagging_sync() -> None:
+async def test_priority_survives_a_sync_that_began_before_the_command_landed() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Buy milk",
@@ -2184,7 +2283,7 @@ async def test_priority_survives_a_lagging_sync() -> None:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id="220",
     )
-    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    repo = HeldEditRepository([task], [Project(id="220", name="Errands")])
     app = TodoistApp(repo)
 
     async with app.run_test() as pilot:
@@ -2194,16 +2293,15 @@ async def test_priority_survives_a_lagging_sync() -> None:
 
         await pilot.press("1")
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.pause()  # the success sync lands, still lists P4
 
-        # optimistic P1 must not be reverted by the lagging snapshot
+        await pilot.press("r")  # a whole sync lands while the command is in flight
+        await _settle(pilot)
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
 
-        repo.catch_up()  # server finally reflects the change
-        await pilot.press("r")
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
+        assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
 
 
@@ -2216,7 +2314,7 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id="220",
     )
-    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    repo = HeldEditRepository([task], [Project(id="220", name="Errands")])
     app = TodoistApp(repo)
 
     async with app.run_test() as pilot:
@@ -2225,26 +2323,22 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
         await pilot.pause()
 
         await pilot.press("1")
-        await pilot.press("2")  # second set before the first's sync settles
-        assert priority_of(app.query_one(TaskTable), 0) is Priority.P2  # P2
+        await pilot.press("2")  # second set before the first's command resolves
+        assert priority_of(app.query_one(TaskTable), 0) is Priority.P2
+
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        assert repo.priorities == [
+        assert repo.priorities == [  # in the order they were pressed, never swapped
             (TaskId("6X4"), Priority.P1),
             (TaskId("6X4"), Priority.P2),
         ]
-        assert priority_of(app.query_one(TaskTable), 0) is Priority.P2  # holds P2
-
-        repo.catch_up()
-        await pilot.press("r")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.pause()
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P2
 
 
 @pytest.mark.anyio
-async def test_due_survives_a_lagging_sync() -> None:
+async def test_due_survives_a_sync_that_began_before_the_command_landed() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Buy milk",
@@ -2252,30 +2346,32 @@ async def test_due_survives_a_lagging_sync() -> None:
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id="9",
     )
-    repo = LaggingEditRepository([task], [Project(id="9", name="Work")])
+    repo = HeldEditRepository([task], [Project(id="9", name="Work")])
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")  # open the Work project view (keeps=project)
+        await pilot.press("enter")  # the Work project view: a due change can't evict
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-
         await pilot.press("t")
         await pilot.pause()
-        await pilot.press("m")  # tomorrow: 2026-07-29
+        await pilot.press("m")  # tomorrow
+
+        await pilot.press("r")  # a sync lands while the command is in flight
+        await _settle(pilot)
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Tomorrow"
+
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
-        # the lagging snapshot still says 21 Jul; the optimistic due must hold
-        assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Tomorrow"
 
 
 @pytest.mark.anyio
-async def test_deadline_survives_a_lagging_sync() -> None:
+async def test_deadline_survives_a_sync_that_began_before_the_command_landed() -> None:
     task = Task(
         id=TaskId("6X4"),
         content="Ship it",
@@ -2283,7 +2379,7 @@ async def test_deadline_survives_a_lagging_sync() -> None:
         due=Due(date=_TODAY),  # stays in Today regardless of the deadline
         project_id="220",
     )
-    repo = LaggingEditRepository([task], [Project(id="220", name="Errands")])
+    repo = HeldEditRepository([task], [Project(id="220", name="Errands")])
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
@@ -2292,16 +2388,20 @@ async def test_deadline_survives_a_lagging_sync() -> None:
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("m")  # tomorrow
+
+        await pilot.press("r")
+        await _settle(pilot)
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
+
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-
-        # the lagging snapshot has no deadline; the optimistic one must hold
-        assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
+        assert repo.deadlines == [(TaskId("6X4"), Deadline(date=_TOMORROW))]
 
 
 @pytest.mark.anyio
-async def test_move_survives_a_lagging_sync() -> None:
-    repo = LaggingEditRepository(
+async def test_move_survives_a_sync_that_began_before_the_command_landed() -> None:
+    repo = HeldEditRepository(
         [_row("t1", "220")],
         [Project(id="220", name="Errands"), Project(id="9", name="Work")],
     )
@@ -2314,11 +2414,15 @@ async def test_move_survives_a_lagging_sync() -> None:
         await pilot.pause()
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
+
+        await pilot.press("r")
+        await _settle(pilot)
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
+
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-
         assert repo.moves == [(TaskId("t1"), "9", None)]
-        # the lagging snapshot still lists Errands; the optimistic project must hold
         assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
 
 
@@ -2452,44 +2556,44 @@ async def test_delete_failure_is_surfaced_and_unhides() -> None:
         assert app.query_one(DataTable[object]).row_count == 1  # unhidden
 
 
-class LaggingCompleteRepository(FakeRepository):
-    """Todoist eventual consistency: a closed task keeps coming back from
-    today()/by_project() until the server catches up."""
+class HeldCloseRepository(FakeRepository):
+    """complete() is accepted but held in flight, so a sync can begin — and land —
+    before the server has acknowledged the close."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self.hold = asyncio.Event()
 
     async def complete(self, task_id: TaskId) -> None:
-        self.completed.append(task_id)  # recorded, but it still syncs back
-
-    def catch_up(self) -> None:
-        self._tasks = [t for t in self._tasks if t.id not in self.completed]
+        await self.hold.wait()
+        await super().complete(task_id)
 
 
 @pytest.mark.anyio
-async def test_completed_task_stays_gone_while_server_lags() -> None:
-    repo = LaggingCompleteRepository(
-        [_row("Buy milk")], [Project(id="220", name="Errands")]
-    )
+async def test_a_completed_task_stays_gone_while_its_close_is_in_flight() -> None:
+    repo = HeldCloseRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
     app = TodoistApp(repo)
 
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.pause()  # a sync that still lists the closed task landed
+        assert app.query_one(DataTable[object]).row_count == 0
 
-        assert repo.completed == [TaskId("Buy milk")]
+        await pilot.press("r")  # a sync that still lists the task lands
+        await _settle(pilot)
         assert app.query_one(DataTable[object]).row_count == 0  # must not flash back
 
-        repo.catch_up()  # server finally drops it
-        await pilot.press("r")
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
+        assert repo.completed == [TaskId("Buy milk")]
         assert app.query_one(DataTable[object]).row_count == 0
 
 
 @pytest.mark.anyio
 async def test_rapid_completes_do_not_reappear() -> None:
-    repo = LaggingCompleteRepository(
+    repo = HeldCloseRepository(
         [_row("First"), _row("Second")], [Project(id="220", name="Errands")]
     )
     app = TodoistApp(repo)
@@ -2499,19 +2603,23 @@ async def test_rapid_completes_do_not_reappear() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert app.query_one(DataTable[object]).row_count == 2
         await pilot.press("e")
-        await pilot.press("e")  # second close before the first's sync settles
+        await pilot.press("e")  # second close before the first's command resolves
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        await pilot.press("r")  # a sync that still lists both lands
+        await _settle(pilot)
+        assert app.query_one(DataTable[object]).row_count == 0  # neither reappears
+
+        repo.hold.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
-
-        assert set(repo.completed) == {TaskId("First"), TaskId("Second")}
-        assert app.query_one(DataTable[object]).row_count == 0  # neither reappears
+        assert repo.completed == [TaskId("First"), TaskId("Second")]  # in press order
+        assert app.query_one(DataTable[object]).row_count == 0
 
 
 @pytest.mark.anyio
-async def test_undo_restores_a_completed_task_even_while_server_lags() -> None:
-    repo = LaggingCompleteRepository(
-        [_row("Buy milk")], [Project(id="220", name="Errands")]
-    )
+async def test_undo_restores_a_completed_task_the_server_has_already_dropped() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
     app = TodoistApp(repo)
 
     async with app.run_test() as pilot:
@@ -2522,7 +2630,8 @@ async def test_undo_restores_a_completed_task_even_while_server_lags() -> None:
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
 
-        await pilot.press("z")  # reopen: it must not stay filtered out
+        await pilot.press("z")  # the row comes back from the undo, not from a sync
+        assert app.query_one(DataTable[object]).row_count == 1
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
@@ -2530,6 +2639,114 @@ async def test_undo_restores_a_completed_task_even_while_server_lags() -> None:
         table = app.query_one(DataTable[object])
         assert table.row_count == 1
         assert _title(table, 0) == "Buy milk"
+
+
+@pytest.mark.anyio
+async def test_undo_walks_back_one_action_at_a_time() -> None:
+    repo = FakeRepository(
+        [_row("First"), _row("Second")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")  # close First
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("e")  # close Second
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert app.query_one(DataTable[object]).row_count == 0
+
+        await pilot.press("z")  # most recent first
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert repo.uncompleted == [TaskId("Second")]
+
+        await pilot.press("z")  # and then the one before it
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert repo.uncompleted == [TaskId("Second"), TaskId("First")]
+        assert app.query_one(DataTable[object]).row_count == 2
+
+        await pilot.press("z")  # nothing left to walk back
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert repo.uncompleted == [TaskId("Second"), TaskId("First")]
+
+
+@pytest.mark.anyio
+async def test_undo_reverses_a_reschedule() -> None:
+    task = Task(
+        id=TaskId("6X4"),
+        content="Buy milk",
+        priority=Priority.P2,
+        due=Due(date=datetime.date(2026, 7, 21)),
+        project_id="9",
+    )
+    repo = FakeRepository([task], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # the Work project view
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("m")  # tomorrow
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues == [
+            (TaskId("6X4"), Due(date=datetime.date(2026, 7, 29))),
+            (TaskId("6X4"), Due(date=datetime.date(2026, 7, 21))),  # put back
+        ]
+
+
+@pytest.mark.anyio
+async def test_undo_reverses_a_priority_change_per_task() -> None:
+    first = Task(
+        id=TaskId("a"),
+        content="a",
+        priority=Priority.P4,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    second = Task(
+        id=TaskId("b"),
+        content="b",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        project_id="220",
+    )
+    repo = FakeRepository([first, second], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("x")  # select a, cursor -> b
+        await pilot.press("x")  # select b
+        await pilot.press("1")  # both to P1
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        # each task goes back to the priority it had, not to a shared one
+        assert repo.priorities[-2:] == [
+            (TaskId("b"), Priority.P2),
+            (TaskId("a"), Priority.P4),
+        ]
 
 
 class RecurringCompleteRepository(FakeRepository):
@@ -2929,7 +3146,9 @@ async def test_calendar_pick_applies_optimistically() -> None:
 
 
 @pytest.mark.anyio
-async def test_reschedule_on_filter_view_drops_task_immediately() -> None:
+async def test_reschedule_on_filter_view_keeps_the_task_until_the_server_answers() -> (
+    None
+):
     task = Task(
         id=TaskId("6X4"),
         content="Overdue thing",
@@ -2937,8 +3156,9 @@ async def test_reschedule_on_filter_view_drops_task_immediately() -> None:
         due=Due(date=_TODAY),
         project_id="220",
     )
-    # a filter's membership can't be evaluated locally, so a reschedule drops the
-    # edited task at once and the background refresh restores it if it still fits
+    # a filter's membership can only be evaluated by the server, so the edited row
+    # holds its place — marked unconfirmed — until the refresh answers. Dropping it
+    # on spec would make it blink out and straight back in whenever it still fits.
     repo = GatedRefreshRepository(
         [task],
         [Project(id="220", name="Errands")],
@@ -2960,12 +3180,17 @@ async def test_reschedule_on_filter_view_drops_task_immediately() -> None:
 
         await pilot.press("t")
         await pilot.pause()
-        await pilot.press("m")  # reschedule: it leaves the filter immediately
-        assert app.query_one(DataTable[object]).row_count == 0
+        await pilot.press("m")  # reschedule: the row stays, pending the answer
+        table = app.query_one(TaskTable)
+        assert table.row_count == 1
+        assert _title(table, 0).strip() == "Overdue thing ⟳"
 
         repo.release.set()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
+        # the refresh answered and confirmed it: the mark clears
+        assert _title(app.query_one(TaskTable), 0).strip() == "Overdue thing"
 
 
 @pytest.mark.anyio
@@ -4013,10 +4238,15 @@ async def test_editing_another_task_leaves_a_pulled_in_subtask_alone() -> None:
 @pytest.mark.anyio
 async def test_a_reload_hides_the_subtask_of_a_not_yet_confirmed_close() -> None:
     class UnconfirmedCloseRepository(GatedRefreshRepository):
-        """complete() is accepted but the server keeps listing the task."""
+        """complete() is held in flight, so a reload lands before the ack."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+            self.hold = asyncio.Event()
 
         async def complete(self, task_id: TaskId) -> None:
-            self.completed.append(task_id)
+            await self.hold.wait()
+            await super().complete(task_id)
 
     sub = Task(
         id=TaskId("sub"),
@@ -4042,10 +4272,14 @@ async def test_a_reload_hides_the_subtask_of_a_not_yet_confirmed_close() -> None
         await pilot.pause()
         await pilot.press("e")  # close the parent
         await pilot.pause()
-        await pilot.press("r")  # reload: the close is not confirmed yet
-        await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("r")  # a reload lands before the close is acknowledged
+        await _settle(pilot)
 
+        assert [c.strip() for c in _content_col(table)] == ["b other"]
+
+        repo.hold.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
         assert [c.strip() for c in _content_col(table)] == ["b other"]
 
 
