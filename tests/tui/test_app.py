@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 from dataclasses import replace
+from functools import partial
 
 import pytest
 from rich.cells import cell_len
@@ -9,7 +10,15 @@ from rich.text import Text
 from textual.content import Content
 from textual.coordinate import Coordinate
 from textual.pilot import Pilot
-from textual.widgets import DataTable, Footer, Input, Rule, Static, TextArea
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Input,
+    OptionList,
+    Rule,
+    Static,
+    TextArea,
+)
 
 from tests.tui.tiers import (
     cell_tier,
@@ -52,6 +61,7 @@ from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.edit import TaskEditScreen
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
+from todoist_tui.tui.screens.parent_picker import ParentPickerScreen
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
@@ -92,6 +102,7 @@ class FakeRepository:
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.parents: list[tuple[TaskId, str]] = []
         self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
         self._removed_pool: dict[TaskId, Task] = {}
@@ -212,14 +223,33 @@ class FakeRepository:
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
         self.moves.append((task_id, project_id, section_id))
+        # a project/section move also lifts the task out of any parent, as Todoist does
         self._tasks = [
-            replace(t, project_id=project_id, section_id=section_id)
+            replace(t, project_id=project_id, section_id=section_id, parent_id=None)
             if t.id == task_id
             else t
             for t in self._tasks
         ]
         inbox_id = next((p.id for p in self._projects if p.is_inbox), None)
         if project_id != inbox_id:  # left the inbox: it no longer lists the task
+            self._inbox = [t for t in self._inbox if t.id != task_id]
+
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        self.parents.append((task_id, parent_id))
+        pool = [*self._tasks, *self._inbox, *self._pool]
+        parent = next(t for t in pool if str(t.id) == parent_id)
+        # as Todoist does it: the subtask inherits the parent's project + section
+        nested = partial(
+            replace,
+            parent_id=parent_id,
+            project_id=parent.project_id,
+            section_id=parent.section_id,
+        )
+        self._tasks = [nested(t) if t.id == task_id else t for t in self._tasks]
+        inbox_id = next((p.id for p in self._projects if p.is_inbox), None)
+        if parent.project_id == inbox_id:
+            self._inbox = [nested(t) if t.id == task_id else t for t in self._inbox]
+        else:  # followed the parent out of the inbox, which no longer lists it
             self._inbox = [t for t in self._inbox if t.id != task_id]
 
     async def reminders(self) -> list[Reminder]:
@@ -3530,6 +3560,261 @@ async def test_cancelling_project_picker_leaves_task_unchanged() -> None:
         await pilot.pause()
         assert not isinstance(app.screen, ProjectPickerScreen)
         assert repo.moves == []
+
+
+@pytest.mark.anyio
+async def test_shift_v_opens_parent_picker() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        assert isinstance(app.screen, ParentPickerScreen)
+
+
+@pytest.mark.anyio
+async def test_shift_v_pick_nests_the_task_under_the_parent() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")  # narrow to "parent"
+        await pilot.press("down")  # past the top-level entry
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+        table = app.query_one(TaskTable)
+        # the parent expanded to show its new child, indented beneath it
+        assert _content_col(table) == ["▾ parent", "  kid"]
+
+
+@pytest.mark.anyio
+async def test_shift_v_moves_every_selected_task() -> None:
+    repo = FakeRepository(
+        [_row("kid1"), _row("kid2"), _row("parent")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("x", "x")  # mark t1 and t2
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid1"), "parent"), (TaskId("kid2"), "parent")]
+
+
+@pytest.mark.anyio
+async def test_shift_v_top_level_entry_un_parents_a_subtask() -> None:
+    repo = FakeRepository(
+        [_row("parent"), _row("kid", parent_id="parent")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # expand the parent
+        await pilot.pause()
+        await pilot.press("j")  # cursor onto the subtask
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("enter")  # the top-level entry heads the list
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("kid"), "220", None)]
+        assert _content_col(app.query_one(TaskTable)) == ["kid", "parent"]
+
+
+@pytest.mark.anyio
+async def test_the_parent_picker_offers_neither_the_task_nor_its_subtasks() -> None:
+    repo = FakeRepository(
+        [_row("boss"), _row("its kid", parent_id="boss"), _row("other")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()  # cursor rests on "boss", the first row
+        await pilot.press("V")
+        await pilot.pause()
+        options = app.screen.query_one(OptionList)
+        labels = [
+            str(options.get_option_at_index(i).prompt)
+            for i in range(options.option_count)
+        ]
+        # a task cannot nest under itself or under its own subtask
+        assert [
+            label for label in labels if label.startswith(("boss", "its kid"))
+        ] == []
+        assert any(label.startswith("other") for label in labels)
+
+
+@pytest.mark.anyio
+async def test_undo_returns_a_re_parented_task_to_the_top_level() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("kid"), "220", None)]
+        assert _content_col(app.query_one(TaskTable)) == ["kid", "parent"]
+
+
+@pytest.mark.anyio
+async def test_undo_returns_an_un_parented_task_under_its_old_parent() -> None:
+    repo = FakeRepository(
+        [_row("parent"), _row("kid", parent_id="parent")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        await pilot.press("j")
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("enter")  # top level
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+        assert _content_col(app.query_one(TaskTable)) == ["▾ parent", "  kid"]
+
+
+@pytest.mark.anyio
+async def test_shift_v_on_a_group_header_does_nothing() -> None:
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        table.move_cursor(row=0)  # cursor never rests here; force it for the guard
+        await pilot.press("V")
+        await pilot.pause()
+        assert not isinstance(app.screen, ParentPickerScreen)
+
+
+@pytest.mark.anyio
+async def test_shift_v_while_picker_open_does_not_stack_screens() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("V")  # second press must not stack a second picker
+        await pilot.pause()
+        pickers = [s for s in app.screen_stack if isinstance(s, ParentPickerScreen)]
+        assert len(pickers) == 1
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_parent_picker_leaves_the_task_unchanged() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ParentPickerScreen)
+        assert repo.parents == []
+
+
+@pytest.mark.anyio
+async def test_shift_v_in_the_detail_card_opens_the_parent_picker() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskDetailScreen)
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+
+
+class FailingParentRepository(FakeRepository):
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_re_parent_failure_is_surfaced_and_the_row_snaps_back() -> None:
+    repo = FailingParentRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert "Failed to move task: boom" in str(
+            app.query_one("#status", Static).render()
+        )
+        assert _content_col(app.query_one(TaskTable)) == ["kid", "parent"]
 
 
 class FailingMoveRepository(FakeRepository):

@@ -1,6 +1,6 @@
 import pytest
 
-from todoist_tui.application.move_task import move_task
+from todoist_tui.application.move_task import move_task, move_to_parent
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -16,6 +16,7 @@ from todoist_tui.domain.task import Task, TaskId
 class FakeRepository:
     def __init__(self) -> None:
         self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.parents: list[tuple[TaskId, str]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -68,6 +69,9 @@ class FakeRepository:
     ) -> None:
         self.moves.append((task_id, project_id, section_id))
 
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        self.parents.append((task_id, parent_id))
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...
@@ -104,3 +108,12 @@ async def test_move_task_forwards_section_id() -> None:
     await move_task(repo, TaskId("6X4"), "220", "77")
 
     assert repo.moves == [(TaskId("6X4"), "220", "77")]
+
+
+@pytest.mark.anyio
+async def test_move_to_parent_delegates_to_repo() -> None:
+    repo = FakeRepository()
+
+    await move_to_parent(repo, TaskId("6X4"), "6P9")
+
+    assert repo.parents == [(TaskId("6X4"), "6P9")]

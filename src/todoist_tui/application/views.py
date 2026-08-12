@@ -72,6 +72,8 @@ _SEARCH_PREFIX = "search:"
 
 TODAY = View("Today", "today", lambda repo: repo.today(), keeps=_due_today)
 INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
+# not a browsable view: the pool a picker chooses from, straight off the snapshot
+ALL = View("All", "all", lambda repo: repo.all_tasks())
 
 
 def filter_view(f: Filter) -> View:

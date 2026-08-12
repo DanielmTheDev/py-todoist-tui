@@ -293,10 +293,16 @@ async def test_a_closes_the_view_asking_for_a_subtask() -> None:
 
 
 @pytest.mark.anyio
+async def test_shift_v_closes_the_view_asking_for_a_new_parent() -> None:
+    assert await _result_of(_row(), "V") == [DetailOutcome.MOVE_PARENT]
+
+
+@pytest.mark.anyio
 async def test_hint_advertises_the_edit_and_subtask_keys() -> None:
     shown = await _shown(_row())
 
     assert "a subtask" in shown
+    assert "V parent" in shown
     assert "ctrl+e edit" in shown
 
 

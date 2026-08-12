@@ -111,6 +111,9 @@ class ApiTaskRepository:
     ) -> None:
         await self._client.move_item(str(task_id), project_id, section_id)
 
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        await self._client.move_item_under(str(task_id), parent_id)
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:

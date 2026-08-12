@@ -9,3 +9,7 @@ async def move_task(
     section_id: str | None = None,
 ) -> None:
     await repo.set_project(task_id, project_id, section_id)
+
+
+async def move_to_parent(repo: TaskRepository, task_id: TaskId, parent_id: str) -> None:
+    await repo.set_parent(task_id, parent_id)

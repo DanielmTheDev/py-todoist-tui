@@ -152,6 +152,10 @@ class SnapshotTaskRepository:
         await self._inner.set_project(task_id, project_id, section_id)
         await self._invalidate()
 
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        await self._inner.set_parent(task_id, parent_id)
+        await self._invalidate()
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:

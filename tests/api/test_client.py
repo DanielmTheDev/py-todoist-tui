@@ -422,6 +422,25 @@ async def test_move_item_with_section_sends_section_id_only() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_move_item_under_sends_parent_id_only() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.move_item_under("6X4", "6P9")
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {"type": "item_move", "uuid": "u-1", "args": {"id": "6X4", "parent_id": "6P9"}}
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_move_item_raises_on_command_error() -> None:
     respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(

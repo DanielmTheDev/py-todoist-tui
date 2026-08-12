@@ -24,7 +24,7 @@ from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
 from todoist_tui.application.duplicate import duplicate_project, duplicate_section
-from todoist_tui.application.move_task import move_task
+from todoist_tui.application.move_task import move_task, move_to_parent
 from todoist_tui.application.mutation import (
     Mutation,
     apply,
@@ -40,6 +40,7 @@ from todoist_tui.application.set_labels import set_labels
 from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.set_text import set_text
 from todoist_tui.application.views import (
+    ALL,
     INBOX,
     TODAY,
     TaskRow,
@@ -97,6 +98,7 @@ from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
 from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
+from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
@@ -329,6 +331,7 @@ class TodoistApp(App[None]):
         Binding("t", "set_due", "Due", show=False),
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
+        Binding("V", "move_parent", "Move under parent", show=False),
         Binding("Y", "duplicate", "Duplicate project/section", show=False),
         Binding("D", "delete_section", "Delete section", show=False),
         Binding("at", "set_labels", "Labels", show=False),
@@ -389,6 +392,7 @@ class TodoistApp(App[None]):
         self._inbox_id: str | None = None  # so a move out of the Inbox drops the row
         self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
+        self._picking_parent = False  # guards against stacking parent pickers
         self._picking_duplicate = False  # guards the duplicate picker + name prompt
         # guards the section-delete picker + its confirmation
         self._picking_delete_section = False
@@ -819,6 +823,8 @@ class TodoistApp(App[None]):
             self._open_editor(row, from_detail=True)
         elif outcome is DetailOutcome.ADD_SUBTASK:
             self._open_add("New subtask", row.project_id, parent_id=str(row.id))
+        elif outcome is DetailOutcome.MOVE_PARENT:
+            self.run_worker(self._open_parent_picker([str(row.id)]))
 
     def action_add_task(self) -> None:
         row = self._cursor_row()
@@ -1052,6 +1058,94 @@ class TodoistApp(App[None]):
             partial(move_task, self._repo, TaskId(task_id), project_id, section_id),
             "Failed to move task",
         )
+
+    async def action_move_parent(self) -> None:
+        table = self.query_one(TaskTable)
+        ids = self._targets(table)
+        if not ids:  # empty table or cursor on a group header
+            return
+        await self._open_parent_picker(ids)
+
+    async def _open_parent_picker(self, ids: list[str]) -> None:
+        if self._picking_parent:  # already loading or picker already open
+            return
+        self._picking_parent = True
+        try:
+            candidates = await load_view(self._repo, ALL)
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load tasks: {error}")
+            self._picking_parent = False
+            return
+        # a task can nest under neither itself nor anything already beneath it
+        blocked = with_subtrees(candidates, set(ids))
+        self.push_screen(
+            ParentPickerScreen([r for r in candidates if str(r.id) not in blocked]),
+            lambda target: self._on_parent_chosen(ids, target),
+        )
+
+    def _on_parent_chosen(
+        self, task_ids: list[str], target: ParentTarget | None
+    ) -> None:
+        self._picking_parent = False
+        if target is None:  # picker was cancelled
+            return
+        parent = target.row
+        if parent is not None:  # else the new subtask lands out of sight
+            self._expanded.add(parent.id)
+        rows = self._rows_of(task_ids)
+        self._selected.clear()
+        work: list[tuple[Step, Step | None]] = []
+        for row in rows:
+            forward = (
+                self._parent_step(row, parent)
+                if parent is not None
+                else self._where_it_was_step(row)
+            )
+            if forward is not None:
+                work.append((forward, self._restore_parent_step(row)))
+        self._queue(work)
+
+    def _parent_step(self, row: TaskRow, parent: TaskRow) -> Step:
+        """Nest `row` under `parent`. Todoist hands the subtask — and its own
+        subtree — the parent's project and section."""
+        return Step(
+            edit(
+                [str(row.id)],
+                parent_id=str(parent.id),
+                project_id=parent.project_id,
+                project_name=parent.project_name,
+                section_id=parent.section_id,
+                section_name=parent.section_name,
+            ),
+            partial(move_to_parent, self._repo, row.id, str(parent.id)),
+            "Failed to move task",
+        )
+
+    def _where_it_was_step(self, row: TaskRow) -> Step | None:
+        """Put `row` at the top level of the project and section it names — a
+        plain move un-parents a task, so this both lifts and restores it."""
+        if row.project_id is None:  # nowhere to move it to
+            return None
+        return Step(
+            edit(
+                [str(row.id)],
+                parent_id=None,
+                project_id=row.project_id,
+                project_name=row.project_name,
+                section_id=row.section_id,
+                section_name=row.section_name,
+            ),
+            partial(move_task, self._repo, row.id, row.project_id, row.section_id),
+            "Failed to move task",
+        )
+
+    def _restore_parent_step(self, row: TaskRow) -> Step | None:
+        """The reversal of a re-parent: back under the parent `row` hung from,
+        or back to where it stood on its own."""
+        old_parent = self._rows_of([row.parent_id]) if row.parent_id else []
+        if old_parent:
+            return self._parent_step(row, old_parent[0])
+        return self._where_it_was_step(row)
 
     async def action_duplicate(self) -> None:
         if self._picking_duplicate:  # already loading or a step already open

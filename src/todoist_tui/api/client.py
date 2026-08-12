@@ -173,6 +173,11 @@ class TodoistClient:
         )
         await self._command("item_move", args)
 
+    async def move_item_under(self, task_id: str, parent_id: str) -> None:
+        # Todoist takes exactly one of parent_id/section_id/project_id; the task
+        # and its own subtree inherit the parent's project and section.
+        await self._command("item_move", {"id": task_id, "parent_id": parent_id})
+
     async def create_entities(
         self, specs: list[tuple[str, str, dict[str, Any]]]
     ) -> None:

@@ -66,6 +66,7 @@ class FakeInner:
         self.dues: list[tuple[TaskId, Due | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
+        self.parents: list[tuple[TaskId, str]] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.text_edits: list[tuple[TaskId, str, str]] = []
         self.applied: list[CreationPlan] = []
@@ -133,6 +134,9 @@ class FakeInner:
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
         self.moves.append((task_id, project_id, section_id))
+
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
+        self.parents.append((task_id, parent_id))
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -400,6 +404,22 @@ async def test_set_project_delegates_then_invalidates_filter_cache() -> None:
     await repo.filtered("a")
 
     assert inner.moves == [(TaskId("x"), "9", None)]
+    assert inner.filtered_queries == ["a", "a"]
+
+
+@pytest.mark.anyio
+async def test_set_parent_delegates_then_invalidates_filter_cache() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.set_parent(TaskId("x"), "p")  # mutation invalidates cache
+    await repo.filtered("a")
+
+    assert inner.parents == [(TaskId("x"), "p")]
     assert inner.filtered_queries == ["a", "a"]
 
 

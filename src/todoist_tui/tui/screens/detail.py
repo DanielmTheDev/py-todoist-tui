@@ -102,7 +102,7 @@ class DetailCard(Static):
 
     def _hint(self) -> str:
         links = "1-9 open link  o open  " if self._links else ""
-        return f"{links}a subtask  ctrl+e edit  esc close"
+        return f"{links}a subtask  V parent  ctrl+e edit  esc close"
 
     def _due(self, styles: Mapping[Tier, Style]) -> Text:
         due = self._row.due
@@ -151,11 +151,12 @@ class DetailOutcome(Enum):
     CLOSE = auto()
     EDIT = auto()
     ADD_SUBTASK = auto()
+    MOVE_PARENT = auto()
 
 
 class TaskDetailScreen(ModalScreen[DetailOutcome]):
-    """Read-only card for a single task. Any of escape/enter/q closes it; ctrl+e
-    and `a` close it asking for the editor / a new subtask.
+    """Read-only card for a single task. Any of escape/enter/q closes it; ctrl+e,
+    `a` and `V` close it asking for the editor / a new subtask / a new parent.
     Links in the title/description are numbered; 1-9 or `o` open them."""
 
     DEFAULT_CSS = """
@@ -205,6 +206,8 @@ class TaskDetailScreen(ModalScreen[DetailOutcome]):
             self.dismiss(DetailOutcome.EDIT)
         elif event.key == "a":
             self.dismiss(DetailOutcome.ADD_SUBTASK)
+        elif event.key == "V":
+            self.dismiss(DetailOutcome.MOVE_PARENT)
         elif event.key == "o":
             self._open(1)
         elif event.character and event.character.isdigit():

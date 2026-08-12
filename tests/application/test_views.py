@@ -4,6 +4,7 @@ import datetime
 import pytest
 
 from todoist_tui.application.views import (
+    ALL,
     INBOX,
     TODAY,
     TaskRow,
@@ -97,6 +98,8 @@ class FakeRepository:
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None: ...
 
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...
@@ -177,6 +180,22 @@ async def test_load_inbox_view_uses_inbox_tasks() -> None:
     rows = await load_view(repo, INBOX)
 
     assert [row.content for row in rows] == ["Inbox thing"]
+
+
+@pytest.mark.anyio
+async def test_load_all_view_uses_every_open_task() -> None:
+    repo = FakeRepository(
+        [_task("Today thing", "220")],
+        [_task("Inbox thing", "9")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+
+    rows = await load_view(repo, ALL)
+
+    assert [(row.content, row.project_name) for row in rows] == [
+        ("Today thing", "Errands"),
+        ("Inbox thing", "Work"),
+    ]
 
 
 @pytest.mark.anyio
@@ -669,6 +688,8 @@ class BarrierRepository:
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None: ...
+
+    async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
