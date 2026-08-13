@@ -9,7 +9,7 @@ import respx
 from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
@@ -1305,4 +1305,23 @@ async def test_apply_creation_omits_child_order_when_unset() -> None:
         "content": "new",
         "project_id": "P",
         "priority": 1,
+    }
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_due_text_sends_the_string_alone_for_the_server_to_parse() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_due(TaskId("6X4"), DueText("every mon until Dec 31"))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {
+        "id": "6X4",
+        "due": {"string": "every mon until Dec 31"},
     }

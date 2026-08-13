@@ -1,13 +1,13 @@
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import Input, Static
 
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.schedule import (
@@ -23,11 +23,14 @@ Kind = Literal["due", "deadline"]
 
 @dataclass(frozen=True, slots=True)
 class DueResult:
-    """A chosen date. `due is None` means "clear it" (distinct from a cancelled
-    modal, which dismisses with None instead of a DueResult). In deadline mode
-    the carried `Due` is date-only — the caller reads its `date`."""
+    """A chosen date. `text` set means the user typed natural language for
+    Todoist to parse and wins over `due`; otherwise `due is None` means "clear
+    it" (distinct from a cancelled modal, which dismisses with None instead of a
+    DueResult). In deadline mode the carried `Due` is date-only — the caller
+    reads its `date`."""
 
-    due: Due | None
+    due: Due | None = None
+    text: str | None = None
 
 
 # Quick-key row: key -> (quick kind, label shown in the hint).
@@ -64,6 +67,9 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
     """Pick a due date: quick keys commit at once, or arrow the calendar and
     press enter. Escape cancels (dismisses None)."""
 
+    # "" disables auto-focus: the calendar owns the keys until `s` focuses the Input
+    AUTO_FOCUS: ClassVar[str | None] = ""
+
     DEFAULT_CSS = """
     ScheduleScreen {
         align: center middle;
@@ -75,6 +81,11 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         padding: 1 2;
         border: round $primary;
     }
+    ScheduleScreen Input {
+        width: 70%;
+        max-width: 80;
+        border: round $primary;
+    }
     """
 
     def __init__(
@@ -83,10 +94,14 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         current: datetime.date | None = None,
         current_time: datetime.time | None = None,
         kind: Kind = "due",
+        allow_text: bool = False,
+        current_text: str | None = None,
     ) -> None:
         super().__init__()
         self._today = today
         self._kind = kind
+        self._allow_text = allow_text
+        self._current_text = current_text or ""
         self._cursor = current or today  # calendar starts on the task's date
         # Time-of-day buffer as typed digits (HHMM); "" means all-day. Deadlines
         # are date-only, so the buffer is always empty and the time UI is hidden.
@@ -97,8 +112,27 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
 
     def compose(self) -> ComposeResult:
         yield Static(self._content(), id="schedule")
+        if self._allow_text:
+            yield Input(
+                value=self._current_text,
+                placeholder="every mon until Dec 31",
+                # keep a prefilled rule: focusing a selecting Input wipes it on
+                # the first keypress
+                select_on_focus=False,
+                id="due-text",
+            )
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        if text:  # an empty phrase says nothing: stay open
+            self.dismiss(DueResult(text=text))
 
     def on_key(self, event: events.Key) -> None:
+        if self._typing:
+            if event.key == "escape":  # back to the calendar, keeping the text
+                self.set_focus(None)
+                event.stop()
+            return
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
@@ -106,6 +140,8 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         elif event.key in _QUICK_KEYS:  # quick keys are all-day, ignore any time
             kind, _label = _QUICK_KEYS[event.key]
             self.dismiss(DueResult(quick_due(kind, self._today)))
+        elif self._allow_text and event.key == "s":
+            self.query_one("#due-text", Input).focus()
         elif (
             self._kind == "due"
             and event.character
@@ -138,6 +174,10 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self._refresh()
             return
         self.dismiss(DueResult(Due(date=self._cursor, time=time)))
+
+    @property
+    def _typing(self) -> bool:
+        return isinstance(self.focused, Input)
 
     def _refresh(self) -> None:
         self.query_one("#schedule", Static).update(self._content())
@@ -172,6 +212,8 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             hint += "  digits time"
             if self._time:
                 hint += "  r remove time"
+        if self._allow_text:
+            hint += "  s type"
         hint += "  enter pick  esc cancel"
         text.append(hint, style="dim")
         return text

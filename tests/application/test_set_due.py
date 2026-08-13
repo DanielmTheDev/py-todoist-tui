@@ -5,7 +5,7 @@ import pytest
 from todoist_tui.application.set_due import set_due
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -17,7 +17,7 @@ from todoist_tui.domain.task import Task, TaskId
 
 class FakeRepository:
     def __init__(self) -> None:
-        self.dues: list[tuple[TaskId, Due | None]] = []
+        self.dues: list[tuple[TaskId, Due | DueText | None]] = []
 
     async def today(self) -> list[Task]:
         return []
@@ -59,7 +59,7 @@ class FakeRepository:
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         self.dues.append((task_id, due))
 
     async def set_deadline(
@@ -109,3 +109,13 @@ async def test_set_due_clear_passes_none() -> None:
     await set_due(repo, TaskId("6X4"), None)
 
     assert repo.dues == [(TaskId("6X4"), None)]
+
+
+@pytest.mark.anyio
+async def test_set_due_passes_natural_language_through() -> None:
+    repo = FakeRepository()
+    text = DueText("every mon until Dec 31")
+
+    await set_due(repo, TaskId("6X4"), text)
+
+    assert repo.dues == [(TaskId("6X4"), text)]

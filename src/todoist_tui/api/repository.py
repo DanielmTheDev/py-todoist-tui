@@ -4,7 +4,7 @@ from typing import Any
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -98,7 +98,7 @@ class ApiTaskRepository:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._client.update_item(str(task_id), priority.to_api)
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         await self._client.update_item_due(str(task_id), due.to_api if due else None)
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:

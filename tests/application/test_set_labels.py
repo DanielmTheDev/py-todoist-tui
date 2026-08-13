@@ -3,7 +3,7 @@ import pytest
 from todoist_tui.application.set_labels import set_labels
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -57,7 +57,7 @@ class FakeRepository:
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None: ...
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None: ...
 
     async def set_deadline(
         self, task_id: TaskId, deadline: Deadline | None

@@ -1,6 +1,6 @@
 import datetime
 
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 
 
 def test_from_api_date_only() -> None:
@@ -77,3 +77,9 @@ def test_to_api_non_recurring_omits_string_even_if_present() -> None:
     due = Due(date=datetime.date(2026, 7, 21), string="every day")
 
     assert due.to_api == {"date": "2026-07-21"}
+
+
+def test_due_text_sends_only_the_string_for_todoist_to_parse() -> None:
+    assert DueText("every mon until Dec 31").to_api == {
+        "string": "every mon until Dec 31"
+    }

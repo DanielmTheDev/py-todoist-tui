@@ -5,7 +5,7 @@ import pytest
 
 from todoist_tui.domain.creation import CreationPlan, NewProject
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -63,7 +63,7 @@ class FakeInner:
         self.deleted: list[TaskId] = []
         self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
-        self.dues: list[tuple[TaskId, Due | None]] = []
+        self.dues: list[tuple[TaskId, Due | DueText | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
@@ -124,7 +124,7 @@ class FakeInner:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         self.dues.append((task_id, due))
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:

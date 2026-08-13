@@ -38,7 +38,7 @@ from todoist_tui.domain.arrange import (
 )
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
@@ -99,7 +99,7 @@ class FakeRepository:
         self.deleted: list[TaskId] = []
         self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
-        self.dues: list[tuple[TaskId, Due | None]] = []
+        self.dues: list[tuple[TaskId, Due | DueText | None]] = []
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
@@ -207,10 +207,11 @@ class FakeRepository:
             replace(t, priority=priority) if t.id == task_id else t for t in self._tasks
         ]
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         self.dues.append((task_id, due))
+        stored = _parsed(due) if isinstance(due, DueText) else due
         self._tasks = [
-            replace(t, due=due) if t.id == task_id else t for t in self._tasks
+            replace(t, due=stored) if t.id == task_id else t for t in self._tasks
         ]
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
@@ -302,6 +303,7 @@ class FakeClock:
 
 
 _TODAY = datetime.date(2026, 7, 28)  # a Tuesday
+_PARSED_DATE = datetime.date(2026, 8, 3)  # what the fake server makes of a typed due
 _YESTERDAY = _TODAY - datetime.timedelta(days=1)
 _TOMORROW = _TODAY + datetime.timedelta(days=1)
 
@@ -2281,7 +2283,7 @@ class HeldEditRepository(FakeRepository):
         await self.hold.wait()
         await super().set_priority(task_id, priority)
 
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         await self.hold.wait()
         await super().set_due(task_id, due)
 
@@ -3272,12 +3274,11 @@ async def test_d_on_recurring_task_reschedules_keeping_the_rule() -> None:
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
 
-        (task_id, due) = repo.dues[-1]
-        assert task_id == TaskId("6X4")
-        assert due is not None
-        assert due.date == datetime.date(2026, 7, 29)  # next occurrence moved
-        assert due.is_recurring is True  # rule kept
-        assert due.string == "every day"
+        assert repo.dues[-1] == (
+            TaskId("6X4"),
+            # next occurrence moved, rule kept
+            Due(date=datetime.date(2026, 7, 29), is_recurring=True, string="every day"),
+        )
 
 
 @pytest.mark.anyio
@@ -3338,7 +3339,7 @@ async def test_d_on_a_group_header_does_nothing() -> None:
 
 
 class FailingSetDueRepository(FakeRepository):
-    async def set_due(self, task_id: TaskId, due: Due | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         raise RuntimeError("boom")
 
 
@@ -3962,6 +3963,79 @@ async def test_set_labels_failure_is_surfaced_and_resyncs() -> None:
         )
         # failed command resyncs to server truth: the cell reverts to just "@work"
         assert str(_cell(app.query_one(DataTable[object]), 0, "Labels")) == "@work"
+
+
+@pytest.mark.anyio
+async def test_typed_due_text_goes_to_the_server_to_parse() -> None:
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("s", *_typing("every mon until Dec 31"), "enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues == [(TaskId("A"), DueText("every mon until Dec 31"))]
+
+
+@pytest.mark.anyio
+async def test_typed_due_holds_the_old_date_until_the_server_answers() -> None:
+    # Todoist parses the phrase, so the new date is unknowable locally: the row
+    # keeps what it had and only carries the unconfirmed mark.
+    repo = GatedRefreshRepository([_row("A")], [Project(id="220", name="Errands")])
+    repo.release.set()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        repo.release.clear()  # block the sync that follows the change
+
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("s", *_typing("every mon"), "enter")
+        await pilot.pause()
+
+        table = app.query_one(TaskTable)
+        assert _title(table, 0).strip() == "A ⟳"
+        assert str(_cell(table, 0, "Due")) == "21 Jul"
+
+        repo.release.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert _title(table, 0).strip() == "A"  # the answer retired the change
+        assert str(_cell(table, 0, "Due")) == "Monday ↻"  # the parsed rule
+
+
+@pytest.mark.anyio
+async def test_undoing_a_typed_due_restores_the_previous_one() -> None:
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("s", *_typing("every mon"), "enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues[-1] == (TaskId("A"), Due(date=datetime.date(2026, 7, 21)))
+
+
+def _typing(text: str) -> list[str]:
+    """Textual key names for typing `text` into a field."""
+    return ["space" if character == " " else character for character in text]
+
+
+def _parsed(due: DueText) -> Due:
+    """Todoist's answer to a typed phrase: it resolves the date server-side."""
+    return Due(date=_PARSED_DATE, is_recurring=True, string=due.text)
 
 
 def _row(content: str, project_id: str = "220", parent_id: str | None = None) -> Task:

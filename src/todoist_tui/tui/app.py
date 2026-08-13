@@ -65,7 +65,7 @@ from todoist_tui.domain.arrange import (
 )
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
@@ -747,10 +747,15 @@ class TodoistApp(App[None]):
             return
         # one target keeps its date prefilled; a selection opens on a blank date
         row = next((r for r in self._visible if str(r.id) == ids[0]), None)
-        current = row.due.date if len(ids) == 1 and row and row.due else None
-        current_time = row.due.time if len(ids) == 1 and row and row.due else None
+        single = row.due if len(ids) == 1 and row else None
         self.push_screen(
-            ScheduleScreen(self._clock.today(), current, current_time),
+            ScheduleScreen(
+                self._clock.today(),
+                single.date if single else None,
+                single.time if single else None,
+                allow_text=True,
+                current_text=single.string if single and single.is_recurring else None,
+            ),
             lambda result: self._on_scheduled([TaskId(i) for i in ids], result),
         )
 
@@ -941,7 +946,9 @@ class TodoistApp(App[None]):
         self._queue(
             [
                 (
-                    self._due_step(str(row.id), reschedule(row.due, result.due)),
+                    self._due_text_step(str(row.id), result.text)
+                    if result.text is not None
+                    else self._due_step(str(row.id), reschedule(row.due, result.due)),
                     self._due_step(str(row.id), row.due),
                 )
                 for row in rows
@@ -952,6 +959,15 @@ class TodoistApp(App[None]):
         return Step(
             edit([task_id], due=due),
             partial(set_due, self._repo, TaskId(task_id), due),
+            "Failed to set due",
+        )
+
+    def _due_text_step(self, task_id: str, text: str) -> Step:
+        # Todoist parses the phrase, so the resulting date is unknowable here: the
+        # empty patch changes nothing and only marks the row as unconfirmed.
+        return Step(
+            edit([task_id]),
+            partial(set_due, self._repo, TaskId(task_id), DueText(text)),
             "Failed to set due",
         )
 

@@ -3,6 +3,23 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
+class DueText:
+    """A due written in Todoist's own natural language ("every mon until Dec 31").
+
+    Todoist parses it server-side and answers with the resolved occurrence, so
+    the date — and whether the task ends up recurring — is unknown locally.
+    Sending it replaces any existing rule; a one-off phrase drops the rule.
+    """
+
+    text: str
+
+    @property
+    def to_api(self) -> dict[str, str]:
+        """A Sync `due` object with no `date`: Todoist fills that in."""
+        return {"string": self.text}
+
+
+@dataclass(frozen=True, slots=True)
 class Due:
     """When a task is due. `time` is None for all-day (date-only) due dates."""
 

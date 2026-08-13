@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 from textual.app import App
-from textual.widgets import Static
+from textual.widgets import Input, Static
 
 from todoist_tui.domain.due import Due
 from todoist_tui.tui.screens.schedule import DueResult, Kind, ScheduleScreen
@@ -19,6 +19,8 @@ class _Host(App[None]):
         current: datetime.date | None = None,
         current_time: datetime.time | None = None,
         kind: Kind = "due",
+        allow_text: bool = False,
+        current_text: str | None = None,
     ) -> None:
         super().__init__()
         self._today = today
@@ -26,12 +28,26 @@ class _Host(App[None]):
         self._current = current
         self._current_time = current_time
         self._kind: Kind = kind
+        self._allow_text = allow_text
+        self._current_text = current_text
 
     def on_mount(self) -> None:
         self.push_screen(
-            ScheduleScreen(self._today, self._current, self._current_time, self._kind),
+            ScheduleScreen(
+                self._today,
+                self._current,
+                self._current_time,
+                self._kind,
+                allow_text=self._allow_text,
+                current_text=self._current_text,
+            ),
             self._on_result,
         )
+
+
+def _keys(text: str) -> list[str]:
+    """Textual key names for typing `text` into a field."""
+    return ["space" if character == " " else character for character in text]
 
 
 async def _press(
@@ -40,9 +56,13 @@ async def _press(
     current: datetime.date | None = None,
     current_time: datetime.time | None = None,
     kind: Kind = "due",
+    allow_text: bool = False,
+    current_text: str | None = None,
 ) -> DueResult | None:
     results: list[DueResult | None] = []
-    host = _Host(today, results.append, current, current_time, kind)
+    host = _Host(
+        today, results.append, current, current_time, kind, allow_text, current_text
+    )
     async with host.run_test() as pilot:
         await pilot.pause()
         for key in keys:
@@ -238,3 +258,54 @@ async def test_deadline_mode_navigates_and_picks() -> None:
     assert await _press("l", "enter", kind="deadline") == DueResult(
         Due(date=datetime.date(2026, 7, 29))
     )
+
+
+@pytest.mark.anyio
+async def test_typed_text_dismisses_with_the_phrase_for_the_server_to_parse() -> None:
+    result = await _press(
+        "s", *_keys("every mon until Dec 31"), "enter", allow_text=True
+    )
+
+    assert result == DueResult(text="every mon until Dec 31")
+
+
+@pytest.mark.anyio
+async def test_quick_keys_still_work_while_the_text_field_is_unfocused() -> None:
+    assert await _press("t", allow_text=True) == DueResult(Due(date=_TUESDAY))
+
+
+@pytest.mark.anyio
+async def test_escape_leaves_the_text_field_for_the_calendar() -> None:
+    result = await _press(
+        "s", "1", "escape", "0", "9", "3", "0", "enter", allow_text=True
+    )
+
+    assert result == DueResult(Due(date=_TUESDAY, time=datetime.time(9, 30)))
+
+
+@pytest.mark.anyio
+async def test_text_field_is_prefilled_with_the_current_rule() -> None:
+    result = await _press("s", "enter", allow_text=True, current_text="every day")
+
+    assert result == DueResult(text="every day")
+
+
+@pytest.mark.anyio
+async def test_blank_text_keeps_the_picker_open() -> None:
+    results: list[DueResult | None] = []
+    host = _Host(_TUESDAY, results.append, allow_text=True)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("s", "enter")
+        await pilot.pause()
+
+        assert results == []
+
+
+@pytest.mark.anyio
+async def test_no_text_field_when_text_is_not_allowed() -> None:
+    host = _Host(_TUESDAY, lambda _result: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+
+        assert not host.screen.query(Input)
