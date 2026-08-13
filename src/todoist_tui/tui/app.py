@@ -10,7 +10,7 @@ from typing import ClassVar
 from rich.cells import cell_len
 from rich.style import Style
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
@@ -45,9 +45,8 @@ from todoist_tui.application.views import (
     TODAY,
     TaskRow,
     View,
-    filter_view,
+    all_views,
     load_view,
-    project_view,
     prune,
     query_for_key,
     search_view,
@@ -66,20 +65,19 @@ from todoist_tui.domain.arrange import (
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
-from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
-from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import (
     ArrangementStore,
-    HomeViewStore,
     TaskRepository,
+    ViewSlotStore,
 )
 from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.format import (
     date_tier,
     description_marker,
@@ -95,16 +93,15 @@ from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import DetailOutcome, TaskDetailScreen
 from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
-from todoist_tui.tui.screens.filters import FilterScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
-from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
 from todoist_tui.tui.screens.search import SearchScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
+from todoist_tui.tui.screens.views import ViewsOutcome, ViewsScreen
 from todoist_tui.tui.theme import (
     PALETTE_CLASSES,
     PALETTE_CSS,
@@ -194,17 +191,17 @@ class InMemoryArrangements:
         self._by_key[view_key] = arrangement
 
 
-class InMemoryHome:
-    """Session-only home-view store (the default when none is injected)."""
+class InMemoryViewSlots:
+    """Session-only view-slot store (the default when none is injected)."""
 
     def __init__(self) -> None:
-        self._key: str | None = None
+        self._slots = ViewSlots()
 
-    async def get(self) -> str | None:
-        return self._key
+    async def get(self) -> ViewSlots:
+        return self._slots
 
-    async def save(self, view_key: str) -> None:
-        self._key = view_key
+    async def save(self, slots: ViewSlots) -> None:
+        self._slots = slots
 
 
 class StatusBand(Static):
@@ -318,13 +315,9 @@ class TodoistApp(App[None]):
         Binding("e", "complete", "Complete", show=False),
         Binding("delete", "delete", "Delete", show=False),
         Binding("z", "undo", "Undo", show=False),
-        Binding(".", "view_today", "Today", show=False),
         Binding("i", "view_inbox", "Inbox", show=False),
-        Binding("f", "view_filters", "Filters", show=False),
         Binding("slash", "search", "Search", show=False),
-        Binding("p", "view_project_list", "Projects", show=False),
-        Binding("H", "set_home", "Set home", show=False),
-        Binding("m", "go_home", "Home", show=False),
+        Binding("p", "views", "Views", show=False),
         Binding("g", "arrange_group", "Group", show=False),
         Binding("s", "arrange_sort", "Sort", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -356,14 +349,14 @@ class TodoistApp(App[None]):
         arrangements: ArrangementStore | None = None,
         clock: Clock | None = None,
         link_opener: LinkOpener | None = None,
-        home: HomeViewStore | None = None,
+        slots: ViewSlotStore | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(TODOIST_THEME)
         self.theme = TODOIST_THEME.name
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
-        self._home = home or InMemoryHome()
+        self._slots = slots or InMemoryViewSlots()
         self._clock = clock or SystemClock()
         self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
@@ -389,14 +382,15 @@ class TodoistApp(App[None]):
         self._undo: list[list[Step]] = []  # reversals, one batch per action
         self._batching = False  # a batch paints once, when all of it is queued
         self._syncs = asyncio.Lock()  # one snapshot fetch at a time
+        self._slot_writes = asyncio.Lock()  # one jump-key write at a time
         self._inbox_id: str | None = None  # so a move out of the Inbox drops the row
-        self._picking_filter = False  # guards against stacking filter pickers
         self._picking_project = False  # guards against stacking project pickers
         self._picking_parent = False  # guards against stacking parent pickers
         self._picking_duplicate = False  # guards the duplicate picker + name prompt
         # guards the section-delete picker + its confirmation
         self._picking_delete_section = False
-        self._picking_project_list = False  # guards against stacking the project list
+        self._picking_views = False  # guards against stacking the views screen
+        self._bound = ViewSlots()  # jump keys, reloaded from the store on mount
         self._picking_labels = False  # guards against stacking the labels editor
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
@@ -427,7 +421,8 @@ class TodoistApp(App[None]):
         table.cursor_foreground_priority = "renderable"
         table.show_header = False  # ColumnHeader draws them, so a rule can follow
         table.cell_padding = 0  # so a group divider runs unbroken across columns
-        self._view, self._active_server_query = await self._resolve_home()
+        self._bound = await self._slots.get()
+        self._view, self._active_server_query = await self._resolve_startup()
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
         self.set_interval(self.SYNC_INTERVAL, self._sync_now)
@@ -512,23 +507,10 @@ class TodoistApp(App[None]):
         if self._view is view:  # user may have switched away before this ran
             await self._reload(view)  # picks the saved arrangement back up
 
-    async def action_set_home(self) -> None:
-        await self._home.save(self._view.key)
-        self._set_status(f"Home set to {self._view.title}")
-
-    async def action_go_home(self) -> None:
-        view, query = await self._resolve_home()
-        self._active_server_query = query
-        if query is not None:  # a filter home: revalidate it live like the picker
-            self._view = view
-            self._open_filter(view, query)
-        else:
-            self._switch_to(view)
-
-    async def _resolve_home(self) -> tuple[View, str | None]:
-        """The startup/home view and its server query (None unless a filter or a
-        search), falling back to Today when unset or its target no longer exists."""
-        key = await self._home.get()
+    async def _resolve_startup(self) -> tuple[View, str | None]:
+        """The view the slots open on and its server query (None unless a filter or
+        a search), falling back to Today when unmarked or its target is gone."""
+        key = self._bound.startup
         if key is None:
             return TODAY, None
         try:
@@ -541,37 +523,49 @@ class TodoistApp(App[None]):
             return TODAY, None
         return view, query_for_key(key, filters)
 
-    def action_view_today(self) -> None:
-        self._active_server_query = None
-        self._switch_to(TODAY)
-
     def action_view_inbox(self) -> None:
         self._active_server_query = None
         self._switch_to(INBOX)
 
-    async def action_view_filters(self) -> None:
-        if self._picking_filter:  # already loading or picker already open
+    async def action_views(self) -> None:
+        if self._picking_views:  # already loading or the screen is already open
             return
-        self._picking_filter = True
+        self._picking_views = True
         try:
+            projects = await self._repo.projects()
             filters = await self._repo.filters()
         except Exception as error:  # offline / sync failed: report, stay put
-            self._set_status(f"Failed to load filters: {error}")
-            self._picking_filter = False
+            self._set_status(f"Failed to load views: {error}")
+            self._picking_views = False
             return
-        if not filters:
-            self._set_status("No saved filters")
-            self._picking_filter = False
-            return
-        self.push_screen(FilterScreen(filters), self._on_filter_chosen)
+        self.push_screen(
+            ViewsScreen(all_views(projects, filters), self._bound, self._taken_keys()),
+            self._on_views_closed,
+        )
 
-    def _on_filter_chosen(self, chosen: Filter | None) -> None:
-        self._picking_filter = False
-        if chosen is None:  # picker was cancelled
+    def _taken_keys(self) -> dict[str, str]:
+        """Every key a binding already owns, named by what it does — a jump key that
+        shadowed one would silently disable it, so the screen refuses those."""
+        return {
+            key: active.binding.description or active.binding.action
+            for key, active in self.active_bindings.items()
+        }
+
+    def _on_views_closed(self, outcome: ViewsOutcome | None) -> None:
+        self._picking_views = False
+        if outcome is None:  # dismissed with no result
             return
-        self._active_server_query = chosen.query
-        self._view = filter_view(chosen)
-        self._open_filter(self._view, chosen.query)
+        if outcome.slots != self._bound:
+            self._bound = outcome.slots
+            self.run_worker(self._save_bound())
+        if outcome.jump is not None:
+            self.run_worker(self._go_to(outcome.jump.key))
+
+    async def _save_bound(self) -> None:
+        """One write at a time, each carrying what is bound when it starts: writes
+        that overtook each other would put an earlier edit's slots back."""
+        async with self._slot_writes:
+            await self._slots.save(self._bound)
 
     def action_search(self) -> None:
         screen = SearchScreen(self._search, self._clock.today())
@@ -588,28 +582,42 @@ class TodoistApp(App[None]):
         self._view = search_view(term)
         self._open_filter(self._view, term.query)
 
-    async def action_view_project_list(self) -> None:
-        if self._picking_project_list:  # already loading or picker already open
+    def on_key(self, event: events.Key) -> None:
+        """Jump keys are bound at runtime rather than declared, so they are matched
+        here. App-level keys also arrive under a modal, where they must stand down."""
+        if self.screen is not self.screen_stack[0]:
             return
-        self._picking_project_list = True
+        if event.character is None:  # only printable keys can be bound
+            return
+        view_key = self._bound.view_key_for(event.character)
+        if view_key is None:
+            return
+        event.stop()
+        event.prevent_default()
+        self.run_worker(self._jump(event.character, view_key))
+
+    async def _jump(self, key: str, view_key: str) -> None:
+        if not await self._go_to(view_key):
+            self._set_status(f"{key} no longer opens anything")
+
+    async def _go_to(self, view_key: str) -> bool:
+        """Open the view a stored key names; False when its target is gone."""
         try:
             projects = await self._repo.projects()
-        except Exception as error:  # offline / sync failed: report, stay put
-            self._set_status(f"Failed to load projects: {error}")
-            self._picking_project_list = False
-            return
-        if not any(not p.is_inbox for p in projects):
-            self._set_status("No projects")
-            self._picking_project_list = False
-            return
-        self.push_screen(ProjectListScreen(projects), self._on_project_list_chosen)
-
-    def _on_project_list_chosen(self, chosen: Project | None) -> None:
-        self._picking_project_list = False
-        if chosen is None:  # picker was cancelled
-            return
-        self._active_server_query = None  # a project view isn't a saved filter
-        self._switch_to(project_view(chosen))
+            filters = await self._repo.filters()
+        except Exception:  # offline before the first sync
+            return False
+        view = view_from_key(view_key, projects, filters)
+        if view is None:  # the project or filter it named was deleted
+            return False
+        query = query_for_key(view_key, filters)
+        self._active_server_query = query
+        if query is None:
+            self._switch_to(view)
+        else:  # a filter or search: revalidate it live
+            self._view = view
+            self._open_filter(view, query)
+        return True
 
     @work(exclusive=True, group="reload")
     async def _open_filter(self, view: View, query: str) -> None:
@@ -805,11 +813,25 @@ class TodoistApp(App[None]):
         self._selected.clear()
         self._repaint()
 
-    def action_help(self) -> None:
+    async def action_help(self) -> None:
         if isinstance(self.screen, HelpScreen):  # already open
             return
         rows = shortcut_rows(TodoistApp.BINDINGS, TaskTable.BINDINGS)
-        self.push_screen(HelpScreen(rows))
+        self.push_screen(HelpScreen(rows + await self._jump_rows()))
+
+    async def _jump_rows(self) -> list[tuple[str, str]]:
+        """The jump keys, so `?` lists them beside the built-in shortcuts."""
+        try:
+            projects = await self._repo.projects()
+            filters = await self._repo.filters()
+        except Exception:  # offline: the built-in shortcuts still stand
+            return []
+        rows: list[tuple[str, str]] = []
+        for key, view_key in self._bound.by_key.items():
+            view = view_from_key(view_key, projects, filters)
+            if view is not None:  # a deleted project's key has nothing to name
+                rows.append((key, f"Open {view.title}"))
+        return rows
 
     def action_open_detail(self) -> None:
         row = self._cursor_row()

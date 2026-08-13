@@ -3,11 +3,12 @@ import asyncio
 import pytest
 from textual.widgets import DataTable, Input, Static
 
-from tests.tui.test_app import FakeRepository
+from tests.tui.test_app import FakeRepository, open_view
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.tui.app import MARKER_SLOT, InMemoryHome, TodoistApp
+from todoist_tui.domain.view_slots import ViewSlots
+from todoist_tui.tui.app import MARKER_SLOT, InMemoryViewSlots, TodoistApp
 from todoist_tui.tui.screens.search import SearchScreen
 
 _PROJECTS = [Project(id="220", name="Errands")]
@@ -138,7 +139,7 @@ async def test_leaving_a_search_view_stops_refreshing_it() -> None:
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press(".")  # back to Today
+        await open_view(pilot, "today")  # back to Today
         await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
@@ -231,30 +232,20 @@ async def test_cancelling_the_search_keeps_the_current_view() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_search_view_can_be_set_as_home_and_reopened() -> None:
-    home = InMemoryHome()
+async def test_a_stored_search_view_reopens_on_startup() -> None:
+    """No gesture stores one any more — the Views screen lists no ad-hoc searches —
+    but a key kept from before must still resolve rather than crash."""
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().with_startup("search:milk"))
     repo = SearchingRepository([_task("Buy milk")])
-    app = TodoistApp(repo, home=home)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("slash")
-        await pilot.pause()
-        await pilot.press("m", "i", "l", "k")
-        await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("H")
-        await pilot.pause()
-    assert await home.get() == "search:milk"
-
-    reopened = SearchingRepository([_task("Buy milk")])
-    app = TodoistApp(reopened, home=home)
+    app = TodoistApp(repo, slots=slots)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         assert _contents(app) == ["Buy milk"]
         assert "Search: milk" in _status(app)
-        assert reopened.refresh_filtered_queries == ["search: milk"]
+        assert repo.refresh_filtered_queries == ["search: milk"]
 
 
 @pytest.mark.anyio

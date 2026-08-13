@@ -8,6 +8,7 @@ from todoist_tui.application.views import (
     INBOX,
     TODAY,
     TaskRow,
+    all_views,
     filter_view,
     load_view,
     project_view,
@@ -716,3 +717,36 @@ async def test_load_view_fetches_tasks_and_projects_concurrently() -> None:
     rows = await asyncio.wait_for(load_view(BarrierRepository(), TODAY), timeout=1.0)
 
     assert [row.content for row in rows] == ["Buy milk"]
+
+
+def test_all_views_lists_filters_then_projects_then_today_and_inbox() -> None:
+    views = all_views(
+        [
+            Project(id="220", name="Eingang", is_inbox=True),
+            Project(id="9", name="Work"),
+            Project(id="7", name="Home"),
+        ],
+        [Filter(id="f1", name="Next", query="p1", order=1)],
+    )
+
+    assert [(v.title, v.key) for v in views] == [
+        ("Next", "filter:f1"),
+        ("Work", "project:9"),
+        ("Home", "project:7"),
+        ("Today", "today"),
+        ("Inbox", "inbox"),
+    ]
+
+
+def test_all_views_without_projects_or_filters_still_offers_today_and_inbox() -> None:
+    assert [v.key for v in all_views([], [])] == ["today", "inbox"]
+
+
+def test_all_views_keys_round_trip_back_through_view_from_key() -> None:
+    """Every listed view must be storable as a slot, i.e. rebuildable from its key."""
+    projects = [Project(id="9", name="Work")]
+    filters = [Filter(id="f1", name="Next", query="p1", order=1)]
+
+    for view in all_views(projects, filters):
+        rebuilt = view_from_key(view.key, projects, filters)
+        assert rebuilt is not None and rebuilt.title == view.title

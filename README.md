@@ -45,16 +45,23 @@ uv run todoist-tui # from a checkout
 ## Keys
 | Key | Action |
 |-----|--------|
-| `t` / `i` | Today / Inbox view |
-| `f` | Pick a saved filter (server-side, cached; ↑/↓ move, `Enter` select, `Esc` cancel) |
+| `i` | Inbox view |
+| `p` | Views: keys you bound, then saved filters, projects, Today and Inbox (type to filter, `Enter` opens) |
+| *your own keys* | Jump straight to a view you bound in the Views screen (Today included — it has no reserved key) |
 | `/` | Search every task by title or description; matches preview as you type, `Enter` opens them as a view |
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |
 | `j`/`↓` `k`/`↑` | Move the cursor down / up |
 | `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor |
+| `?` | Every shortcut, including the keys you bound |
 
-Saved filters sync from your Todoist account; selecting one runs its query on
+Inside the Views screen (`p`): `ctrl+b` binds the highlighted view to a key you
+then press — any key no shortcut already owns, `Backspace` unbinds it, `Esc`
+cancels. `ctrl+s` marks the view the app opens into (`★`); pressing it again
+clears the mark and startup falls back to Today.
+
+Saved filters sync from your Todoist account; opening one runs its query on
 Todoist (full fidelity) and caches the result, refreshing in the background.
 
 ## Development

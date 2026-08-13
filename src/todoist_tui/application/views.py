@@ -107,6 +107,20 @@ def project_view(p: Project) -> View:
     )
 
 
+def all_views(projects: list[Project], filters: list[Filter]) -> list[View]:
+    """Every view a slot key can be bound to, in the order they are listed.
+
+    Saved filters lead, then projects; Today and Inbox come last because they
+    already have keys of their own. The Inbox project is skipped, INBOX covers it.
+    """
+    return [
+        *(filter_view(f) for f in filters),
+        *(project_view(p) for p in projects if not p.is_inbox),
+        TODAY,
+        INBOX,
+    ]
+
+
 def view_from_key(
     key: str, projects: list[Project], filters: list[Filter]
 ) -> View | None:

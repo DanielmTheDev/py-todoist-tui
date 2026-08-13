@@ -46,11 +46,12 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.app import (
     MARKER_SLOT,
     ColumnHeader,
     InMemoryArrangements,
-    InMemoryHome,
+    InMemoryViewSlots,
     StatusBand,
     TaskTable,
     TodoistApp,
@@ -59,14 +60,14 @@ from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import TaskDetailScreen
 from todoist_tui.tui.screens.edit import TaskEditScreen
-from todoist_tui.tui.screens.filters import FilterScreen
+from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen
-from todoist_tui.tui.screens.project_list import ProjectListScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
+from todoist_tui.tui.screens.views import ViewsScreen
 from todoist_tui.tui.theme import Tier
 
 
@@ -321,11 +322,20 @@ async def test_footer_shows_only_the_help_hint() -> None:
         }
         assert "question_mark" in shown
         # all hidden, including the new multi-select keys
-        assert not ({"e", "z", "t", "i", "f", "p", "r", "v", "x", "asterisk"} & shown)
+        assert not ({"e", "z", "t", "i", "p", "r", "v", "x", "asterisk"} & shown)
 
 
 def _status(app: TodoistApp) -> str:
     return str(app.query_one("#status", Static).render())
+
+
+async def open_view(pilot: Pilot[None], title: str) -> None:
+    """Open a view by name through the Views screen — proof against its ordering."""
+    await pilot.press("p")
+    await pilot.pause()
+    await pilot.press(*title)
+    await pilot.press("enter")
+    await pilot.pause()
 
 
 @pytest.mark.anyio
@@ -1259,71 +1269,13 @@ async def test_labels_over_a_selection_add_to_each_task() -> None:
         assert "selected" not in _status(app)
 
 
-@pytest.mark.anyio
-async def test_f_opens_filter_screen_then_selection_switches_view() -> None:
-    task = Task(
-        id=TaskId("6X4"),
-        content="Filtered task",
-        priority=Priority.P2,
-        due=Due(date=datetime.date(2026, 7, 21)),
-        project_id="220",
-    )
-    repo = FakeRepository(
-        [task],
-        [Project(id="220", name="Errands")],
-        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
-    )
-    app = TodoistApp(repo)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("f")
-        await pilot.pause()
-        assert isinstance(app.screen, FilterScreen)
-
-        await pilot.press("enter")
-        await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.pause()
-
-        assert not isinstance(app.screen, FilterScreen)  # picker dismissed
-        table = app.query_one(DataTable[object])
-        assert table.row_count == 1
-        assert _title(table, 0) == "Filtered task"
-        status = str(app.query_one("#status", Static).render())
-        assert "My Filter" in status
-
-
-@pytest.mark.anyio
-async def test_f_with_no_saved_filters_reports_and_opens_nothing() -> None:
-    app = TodoistApp(FakeRepository([], [], filters=[]))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("f")
-        await pilot.pause()
-        assert not isinstance(app.screen, FilterScreen)
-        status = str(app.query_one("#status", Static).render())
-        assert "No saved filters" in status
-
-
 class FailingFiltersRepository(FakeRepository):
     async def filters(self) -> list[Filter]:
         raise RuntimeError("offline")
 
 
 @pytest.mark.anyio
-async def test_f_reports_when_filters_fail_to_load() -> None:
-    app = TodoistApp(FailingFiltersRepository([], []))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("f")
-        await pilot.pause()
-        assert not isinstance(app.screen, FilterScreen)
-        status = str(app.query_one("#status", Static).render())
-        assert "Failed to load filters: offline" in status
-
-
-@pytest.mark.anyio
-async def test_selecting_filter_revalidates_in_background() -> None:
+async def test_selecting_a_filter_from_views_revalidates_in_background() -> None:
     repo = FakeRepository(
         [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
     )
@@ -1331,15 +1283,14 @@ async def test_selecting_filter_revalidates_in_background() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("f")
+        await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")
+        await pilot.press("enter")  # My Filter leads the list
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         assert "p1" in repo.refresh_filtered_queries
-        status = str(app.query_one("#status", Static).render())
-        assert "⟳" not in status  # sync indicator cleared after revalidation
+        assert "⟳" not in _status(app)  # sync indicator cleared after revalidation
 
 
 @pytest.mark.anyio
@@ -1351,12 +1302,12 @@ async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("f")
+        await pilot.press("p")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press(".")  # back to Today clears the active filter
+        await open_view(pilot, "today")  # back to Today clears the active filter
         await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
@@ -1367,116 +1318,31 @@ async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
 
 
 @pytest.mark.anyio
-async def test_f_while_picker_open_does_not_stack_screens() -> None:
-    repo = FakeRepository(
-        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
-    )
-    app = TodoistApp(repo)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("f")
-        await pilot.pause()
-        await pilot.press("f")  # second press must not stack a second picker
-        await pilot.pause()
-        pickers = [s for s in app.screen_stack if isinstance(s, FilterScreen)]
-        assert len(pickers) == 1
-
-
-@pytest.mark.anyio
-async def test_cancelling_filter_picker_keeps_current_view() -> None:
-    repo = FakeRepository(
-        [], [], filters=[Filter(id="f1", name="My Filter", query="p1", order=1)]
-    )
-    app = TodoistApp(repo)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("f")
-        await pilot.pause()
-        assert isinstance(app.screen, FilterScreen)
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, FilterScreen)
-        status = str(app.query_one("#status", Static).render())
-        assert "Today" in status  # unchanged from the startup view
-
-
-@pytest.mark.anyio
-async def test_p_opens_project_list_then_selection_switches_view() -> None:
-    task = Task(
-        id=TaskId("6X4"),
-        content="Work task",
-        priority=Priority.P2,
-        due=Due(date=datetime.date(2026, 7, 21)),
-        project_id="9",
-    )
-    repo = FakeRepository(
-        [task],
-        [
-            Project(id="220", name="Eingang", is_inbox=True),
-            Project(id="9", name="Work"),
-        ],
-    )
-    app = TodoistApp(repo)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, ProjectListScreen)
-
-        await pilot.press("enter")
-        await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.pause()
-
-        assert not isinstance(app.screen, ProjectListScreen)  # picker dismissed
-        table = app.query_one(DataTable[object])
-        assert table.row_count == 1
-        assert _title(table, 0) == "Work task"
-        status = str(app.query_one("#status", Static).render())
-        assert "Work" in status
-
-
-@pytest.mark.anyio
-async def test_p_with_no_projects_reports_and_opens_nothing() -> None:
-    repo = FakeRepository([], [Project(id="220", name="Eingang", is_inbox=True)])
-    app = TodoistApp(repo)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        assert not isinstance(app.screen, ProjectListScreen)
-        status = str(app.query_one("#status", Static).render())
-        assert "No projects" in status
-
-
-@pytest.mark.anyio
-async def test_p_while_picker_open_does_not_stack_screens() -> None:
+async def test_p_while_the_views_screen_is_open_does_not_stack_screens() -> None:
     repo = FakeRepository([], [Project(id="9", name="Work")])
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("p")  # second press must not stack a second picker
+        await pilot.press("p")  # second press must not stack a second screen
         await pilot.pause()
-        pickers = [s for s in app.screen_stack if isinstance(s, ProjectListScreen)]
-        assert len(pickers) == 1
+        assert len([s for s in app.screen_stack if isinstance(s, ViewsScreen)]) == 1
 
 
 @pytest.mark.anyio
-async def test_cancelling_project_list_keeps_current_view() -> None:
+async def test_cancelling_the_views_screen_keeps_the_current_view() -> None:
     repo = FakeRepository([], [Project(id="9", name="Work")])
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        assert isinstance(app.screen, ProjectListScreen)
+        assert isinstance(app.screen, ViewsScreen)
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, ProjectListScreen)
-        status = str(app.query_one("#status", Static).render())
-        assert "Today" in status  # unchanged from the startup view
+        assert not isinstance(app.screen, ViewsScreen)
+        assert "Today" in _status(app)  # unchanged from the startup view
 
 
 @pytest.mark.anyio
@@ -2385,7 +2251,8 @@ async def test_due_survives_a_sync_that_began_before_the_command_landed() -> Non
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")  # the Work project view: a due change can't evict
+        # the Work project view: a due change cannot evict a row from it
+        await pilot.press("enter")
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         await pilot.press("t")
@@ -2723,7 +2590,7 @@ async def test_undo_reverses_a_reschedule() -> None:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")  # the Work project view
+        await pilot.press("enter")  # the Work project view leads the list
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         await pilot.press("t")
@@ -2818,7 +2685,7 @@ async def test_recurring_completion_reappears_with_its_next_due() -> None:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")  # open the Work project view
+        await pilot.press("enter")  # the Work project view leads the list
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
@@ -3202,9 +3069,9 @@ async def test_reschedule_on_filter_view_keeps_the_task_until_the_server_answers
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        await pilot.press("f")
+        await pilot.press("p")
         await pilot.pause()
-        await pilot.press("enter")  # enter the Overdue filter view
+        await pilot.press("enter")  # the Overdue filter leads the list
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert app.query_one(DataTable[object]).row_count == 1
@@ -4958,7 +4825,8 @@ async def test_pressing_i_switches_to_inbox() -> None:
 
 
 @pytest.mark.anyio
-async def test_pressing_t_switches_back_to_today() -> None:
+async def test_today_is_reachable_from_the_views_screen() -> None:
+    """Today has no key of its own any more — every key is the user's to bind."""
     repo = FakeRepository([_row("Today thing")], [], inbox=[_row("Inbox thing")])
     app = TodoistApp(repo)
 
@@ -4966,7 +4834,8 @@ async def test_pressing_t_switches_back_to_today() -> None:
         await pilot.pause()
         await pilot.press("i")
         await pilot.pause()
-        await pilot.press(".")
+        await open_view(pilot, "today")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         table = app.query_one(DataTable[object])
         assert _title(table, 0) == "Today thing"
@@ -5141,10 +5010,10 @@ async def test_keys_do_not_leak_to_app_bindings_under_the_transient() -> None:
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("g")  # must not stack a second transient
-        await pilot.press("f")  # must not open the filter picker underneath
+        await pilot.press("p")  # must not open the views screen underneath
         await pilot.pause()
         assert len([s for s in app.screen_stack if isinstance(s, ArrangeScreen)]) == 1
-        assert not any(isinstance(s, FilterScreen) for s in app.screen_stack)
+        assert not any(isinstance(s, ViewsScreen) for s in app.screen_stack)
 
 
 @pytest.mark.anyio
@@ -5271,109 +5140,266 @@ async def test_arrangement_is_restored_per_view() -> None:
             "──" in c for c in _content_col(app.query_one(DataTable[object]))
         )
 
-        await pilot.press(".")  # back to Today → its grouping returns
+        await open_view(pilot, "today")  # its grouping returns
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert any("──" in c for c in _content_col(app.query_one(DataTable[object])))
 
 
 @pytest.mark.anyio
-async def test_pressing_H_sets_current_view_as_home() -> None:
-    home = InMemoryHome()
+async def test_pressing_p_opens_the_views_screen() -> None:
     repo = FakeRepository(
         [_row("w1", "9")],
         [
             Project(id="220", name="Eingang", is_inbox=True),
             Project(id="9", name="Work"),
         ],
+        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
     )
-    app = TodoistApp(repo, home=home)
+    app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")  # browse into the Work project
-        await pilot.press("enter")
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, ViewsScreen)
+        options = app.screen.query_one(OptionList)
+        labels = [
+            str(options.get_option_at_index(i).prompt)
+            for i in range(options.option_count)
+        ]
+        assert labels == ["My Filter (filter)", "Work (project)", "Today", "Inbox"]
+
+
+@pytest.mark.anyio
+async def test_opening_a_project_from_the_views_screen_switches_to_it() -> None:
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # the Work project leads the list
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-
-        await pilot.press("H")  # pin it as home
-        await pilot.pause()
-        assert await home.get() == "project:9"
-        assert "Home set to Work" in str(app.query_one("#status", Static).render())
+        assert "Work" in _status(app)
 
 
 @pytest.mark.anyio
-async def test_startup_opens_the_stored_home_view() -> None:
-    home = InMemoryHome()
-    await home.save("inbox")
-    repo = FakeRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands")],
-        inbox=[_row("i1", "220")],
-    )
-    app = TodoistApp(repo, home=home)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        table = app.query_one(DataTable[object])
-        assert _title(table, 0) == "i1"
-        assert "Inbox" in str(app.query_one("#status", Static).render())
-
-
-@pytest.mark.anyio
-async def test_startup_falls_back_to_today_when_home_target_gone() -> None:
-    home = InMemoryHome()
-    await home.save("project:999")  # a project that no longer exists
-    repo = FakeRepository([_row("t1", "220")], [Project(id="220", name="Errands")])
-    app = TodoistApp(repo, home=home)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        assert "Today" in str(app.query_one("#status", Static).render())
-
-
-@pytest.mark.anyio
-async def test_pressing_m_returns_to_the_home_view() -> None:
-    home = InMemoryHome()
-    await home.save("inbox")
-    repo = FakeRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands")],
-        inbox=[_row("i1", "220")],
-    )
-    app = TodoistApp(repo, home=home)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press(".")  # go to Today
-        await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert "Today" in str(app.query_one("#status", Static).render())
-
-        await pilot.press("m")  # jump home
-        await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert "Inbox" in str(app.query_one("#status", Static).render())
-
-
-@pytest.mark.anyio
-async def test_home_filter_view_refreshes_live() -> None:
-    home = InMemoryHome()
-    await home.save("filter:f1")
+async def test_opening_a_filter_from_the_views_screen_refreshes_it_live() -> None:
     repo = FakeRepository(
         [_row("t1", "220")],
         [Project(id="220", name="Errands")],
         filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
     )
-    app = TodoistApp(repo, home=home)
+    app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press(".")  # leave for Today
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # the filter leads the list
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "My Filter" in _status(app)
+        assert "p1" in repo.refresh_filtered_queries
+
+
+@pytest.mark.anyio
+async def test_a_key_bound_in_the_views_screen_is_persisted() -> None:
+    slots = InMemoryViewSlots()
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("ctrl+b", "w")  # Work leads the list
+        await pilot.press("escape")
+        await pilot.pause()
+    assert (await slots.get()).view_key_for("w") == "project:9"
+
+
+class ReorderedViewSlots(InMemoryViewSlots):
+    """Makes the first save finish last, as a slower disk write would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.overtaken = asyncio.Event()
+        self.calls = 0
+
+    async def save(self, slots: ViewSlots) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            await self.overtaken.wait()
+        await super().save(slots)
+
+
+@pytest.mark.anyio
+async def test_a_slow_save_cannot_undo_a_later_edit() -> None:
+    slots = ReorderedViewSlots()
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("ctrl+b", "w")  # Work leads the list
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.press("p")  # edit again while the first save is still in flight
+        await pilot.pause()
+        await pilot.press("ctrl+s")  # the bound Work leads the list
+        await pilot.press("escape")
+        await pilot.pause()
+
+        slots.overtaken.set()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+    assert await slots.get() == ViewSlots().assign("w", "project:9").with_startup(
+        "project:9"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_bound_key_jumps_straight_to_its_view() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign("w", "project:9"))
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "Today" in _status(app)
+
+        await pilot.press("w")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "Work" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_full_stop_is_free_to_bind_like_any_other_key() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign(".", "project:9"))
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("full_stop")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "Work" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_a_bound_filter_key_refreshes_it_live() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign("n", "filter:f1"))
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
+    )
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
-        await pilot.press("m")  # back to the filter home
+        await pilot.press("n")
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
-        assert "My Filter" in str(app.query_one("#status", Static).render())
-        assert "p1" in repo.refresh_filtered_queries  # live-refreshed as a filter
+        assert "My Filter" in _status(app)
+        assert "p1" in repo.refresh_filtered_queries
+
+
+@pytest.mark.anyio
+async def test_a_bound_key_whose_view_is_gone_reports_instead_of_jumping() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign("w", "project:999"))
+    repo = FakeRepository([_row("t1", "220")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("w")
+        await pilot.pause()
+        assert "w no longer opens anything" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_a_bound_key_does_nothing_while_a_modal_is_open() -> None:
+    """App-level key handling runs even under a modal, so it has to stand down."""
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign("w", "project:9"))
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")  # any modal will do
+        await pilot.pause()
+        await pilot.press("w")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert isinstance(app.screen, HelpScreen)
+        assert "Work" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_startup_opens_the_view_marked_in_the_slots() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().with_startup("inbox"))
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        inbox=[_row("i1", "220")],
+    )
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable[object])
+        assert _title(table, 0) == "i1"
+        assert "Inbox" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_startup_falls_back_to_today_when_its_view_is_gone() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().with_startup("project:999"))
+    repo = FakeRepository([_row("t1", "220")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "Today" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_a_startup_filter_view_refreshes_live() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().with_startup("filter:f1"))
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands")],
+        filters=[Filter(id="f1", name="My Filter", query="p1", order=1)],
+    )
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        assert "My Filter" in _status(app)
+        assert "p1" in repo.refresh_filtered_queries
+
+
+@pytest.mark.anyio
+async def test_the_help_screen_lists_the_bound_keys() -> None:
+    slots = InMemoryViewSlots()
+    await slots.save(ViewSlots().assign("w", "project:9"))
+    repo = FakeRepository([_row("w1", "9")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, slots=slots)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        rendered = str(app.screen.query_one("#help", Static).render())
+        assert "Work" in rendered
 
 
 def _noted(content: str, description: str = "") -> Task:

@@ -17,6 +17,7 @@ from todoist_tui.domain.reminder import Reminder, ReminderType
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.view_slots import ViewSlots
 
 # Dropped and recreated on every save: the snapshot is disposable and fully
 # rewritten each time, so this also migrates any older column layout in place.
@@ -214,44 +215,71 @@ class SqliteArrangementStore:
             conn.commit()
 
 
-_HOME_SCHEMA = """
-CREATE TABLE IF NOT EXISTS home (
+_VIEW_SLOT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS view_slot (
+    key TEXT PRIMARY KEY, slot_order INTEGER NOT NULL, view_key TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS startup_view (
     id INTEGER PRIMARY KEY CHECK (id = 1), view_key TEXT NOT NULL
 );
+DROP TABLE IF EXISTS home;
 """
 
 
-class SqliteHomeViewStore:
-    """Persists the single startup view key in SQLite (a one-row table)."""
+class SqliteViewSlotStore:
+    """Persists the jump keys and the startup view in SQLite (two tables).
+
+    `slot_order` keeps the order slots were assigned in; SQLite would otherwise
+    return them by primary key, reshuffling the list on every restart.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    async def get(self) -> str | None:
+    async def get(self) -> ViewSlots:
         return await asyncio.to_thread(self._get)
 
-    async def save(self, view_key: str) -> None:
-        await asyncio.to_thread(self._save, view_key)
+    async def save(self, slots: ViewSlots) -> None:
+        await asyncio.to_thread(self._save, slots)
 
-    def _get(self) -> str | None:
+    def _get(self) -> ViewSlots:
         if not self._path.is_file():
-            return None
+            return ViewSlots()
         with closing(sqlite3.connect(self._path)) as conn:
             try:
-                row = conn.execute("SELECT view_key FROM home WHERE id = 1").fetchone()
-            except sqlite3.OperationalError:  # table not created yet
-                return None
-        return row[0] if row is not None else None
+                rows = conn.execute(
+                    "SELECT key, view_key FROM view_slot ORDER BY slot_order"
+                ).fetchall()
+                startup = conn.execute(
+                    "SELECT view_key FROM startup_view WHERE id = 1"
+                ).fetchone()
+            except sqlite3.OperationalError:  # tables not created yet
+                return ViewSlots()
+        return ViewSlots(
+            {key: view_key for key, view_key in rows},
+            startup[0] if startup is not None else None,
+        )
 
-    def _save(self, view_key: str) -> None:
+    def _save(self, slots: ViewSlots) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self._path)) as conn:
-            conn.executescript(_HOME_SCHEMA)
-            conn.execute(
-                "INSERT INTO home (id, view_key) VALUES (1, ?)"
-                " ON CONFLICT(id) DO UPDATE SET view_key = excluded.view_key",
-                (view_key,),
+            conn.executescript(_VIEW_SLOT_SCHEMA)
+            conn.execute("DELETE FROM view_slot")  # the given slots are the whole set
+            conn.executemany(
+                "INSERT INTO view_slot (key, slot_order, view_key) VALUES (?, ?, ?)",
+                [
+                    (key, order, view_key)
+                    for order, (key, view_key) in enumerate(slots.by_key.items())
+                ],
             )
+            if slots.startup is None:
+                conn.execute("DELETE FROM startup_view")
+            else:
+                conn.execute(
+                    "INSERT INTO startup_view (id, view_key) VALUES (1, ?)"
+                    " ON CONFLICT(id) DO UPDATE SET view_key = excluded.view_key",
+                    (slots.startup,),
+                )
             conn.commit()
 
 

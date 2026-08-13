@@ -104,6 +104,6 @@ async def test_help_does_not_stack() -> None:
         await pilot.pause()
         await pilot.press("question_mark")
         await pilot.pause()
-        app.action_help()  # re-entry while already open
+        await app.action_help()  # re-entry while already open
         await pilot.pause()
         assert sum(isinstance(s, HelpScreen) for s in app.screen_stack) == 1

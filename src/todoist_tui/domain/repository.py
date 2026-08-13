@@ -11,6 +11,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.view_slots import ViewSlots
 
 if TYPE_CHECKING:
     from todoist_tui.domain.creation import CreationPlan
@@ -133,9 +134,12 @@ class ArrangementStore(Protocol):
     async def save(self, view_key: str, arrangement: Arrangement) -> None: ...
 
 
-class HomeViewStore(Protocol):
-    """Persists the single view key loaded on startup. `None` when unset."""
+class ViewSlotStore(Protocol):
+    """Persists the keys that jump to a view, and which view opens on startup.
 
-    async def get(self) -> str | None: ...
+    `save` replaces the whole set — the slots are edited as one value object.
+    """
 
-    async def save(self, view_key: str) -> None: ...
+    async def get(self) -> ViewSlots: ...
+
+    async def save(self, slots: ViewSlots) -> None: ...
