@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 import pytest
 from textual.app import App
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.priority import Priority
@@ -58,9 +58,9 @@ async def test_lists_the_top_level_entry_then_every_task_with_its_context() -> N
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == [
-            "— No parent (top level)",
-            "Refactor the client — Work",
-            "Write docs — Personal / Later",
+            "1 — No parent (top level)",
+            "2 Refactor the client — Work",
+            "3 Write docs — Personal / Later",
         ]
 
 
@@ -72,8 +72,8 @@ async def test_typing_matches_task_content() -> None:
         await pilot.press("d", "o", "c")
         await pilot.pause()
         assert _labels(host) == [
-            "— No parent (top level)",
-            "Write docs — Personal / Later",
+            "1 — No parent (top level)",
+            "2 Write docs — Personal / Later",
         ]
 
 
@@ -85,8 +85,8 @@ async def test_typing_matches_the_project_context() -> None:
         await pilot.press("l", "a", "t", "e", "r")
         await pilot.pause()
         assert _labels(host) == [
-            "— No parent (top level)",
-            "Write docs — Personal / Later",
+            "1 — No parent (top level)",
+            "2 Write docs — Personal / Later",
         ]
 
 
@@ -123,3 +123,53 @@ async def test_escape_dismisses_with_none() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert chosen == [None]
+
+
+@pytest.mark.anyio
+async def test_rows_are_numbered_from_the_top_level_entry_down() -> None:
+    host = _Host(_ROWS, lambda _t: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host) == [
+            "1 — No parent (top level)",
+            "2 Refactor the client — Work",
+            "3 Write docs — Personal / Later",
+        ]
+
+
+@pytest.mark.anyio
+async def test_a_digit_picks_that_row() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+        assert chosen == [ParentTarget(_ROWS[1])]
+
+
+@pytest.mark.anyio
+async def test_the_first_digit_un_parents() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("1")
+        await pilot.pause()
+        assert chosen == [ParentTarget(None)]
+
+
+@pytest.mark.anyio
+async def test_a_digit_never_reaches_the_filter() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d", "9", "o")  # the 9 numbers no row here
+        await pilot.pause()
+        assert chosen == []
+        assert host.screen.query_one(Input).value == "do"
+        assert _labels(host) == [
+            "1 — No parent (top level)",
+            "2 Write docs — Personal / Later",
+        ]

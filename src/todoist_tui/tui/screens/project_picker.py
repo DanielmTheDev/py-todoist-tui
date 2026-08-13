@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.screen import ModalScreen
@@ -9,6 +10,7 @@ from textual.widgets.option_list import Option
 
 from todoist_tui.domain.project import Project, sorted_projects
 from todoist_tui.domain.section import Section, sorted_sections
+from todoist_tui.tui.screens.picking import PickFilter, numbered, row_for_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +24,9 @@ class MoveTarget:
 
 
 class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
-    """Pick a move target — a project root or one of its sections — by typing.
-    Dismisses the chosen `MoveTarget`, or None on cancel."""
+    """Pick a move target — a project root or one of its sections — by typing, or
+    by the number the row carries. Dismisses the chosen `MoveTarget`, or None on
+    cancel."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "cancel", "Cancel"),
@@ -53,42 +56,34 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
         self,
         projects: list[Project],
         sections: list[Section],
-        current_project: str | None = None,
-        current_section: str | None = None,
         placeholder: str = "Move to project or section…",
         sections_only: bool = False,
     ) -> None:
         super().__init__()
         self._targets = _targets(projects, sections, sections_only)
         self._visible = list(self._targets)
-        self._current_project = current_project
-        self._current_section = current_section
         self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder=self._placeholder)
-        yield OptionList(*(_option(t) for t in self._targets))
+        yield PickFilter(placeholder=self._placeholder)
+        yield OptionList(*_options(self._targets))
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
-        index = next(
-            (
-                i
-                for i, t in enumerate(self._targets)
-                if t.project_id == self._current_project
-                and t.section_id == self._current_section
-            ),
-            None,
-        )
-        if index is not None:
-            self.query_one(OptionList).highlighted = index
+
+    def on_key(self, event: events.Key) -> None:
+        index = row_for_key(event.key)
+        if index is None or index >= len(self._visible):
+            return  # a key that numbers no row leaves the picker as it was
+        event.stop()
+        self.dismiss(self._visible[index])
 
     def on_input_changed(self, event: Input.Changed) -> None:
         query = event.value.casefold()
         self._visible = [t for t in self._targets if query in _label(t).casefold()]
         options = self.query_one(OptionList)
         options.clear_options()
-        options.add_options([_option(t) for t in self._visible])
+        options.add_options(_options(self._visible))
         if self._visible:
             options.highlighted = 0
 
@@ -136,5 +131,5 @@ def _label(target: MoveTarget) -> str:
     return f"{target.project_name} / {target.section_name}"
 
 
-def _option(target: MoveTarget) -> Option:
-    return Option(_label(target))
+def _options(targets: list[MoveTarget]) -> list[Option]:
+    return [Option(label) for label in numbered(_label(t) for t in targets)]

@@ -1026,9 +1026,6 @@ class TodoistApp(App[None]):
         ids = self._targets(table)
         if not ids:  # empty table or cursor on a group header
             return
-        # one target prefills its project/section; a selection opens unanchored
-        row = next((r for r in self._visible if str(r.id) == ids[0]), None)
-        single = row if len(ids) == 1 else None
         self._picking_project = True
         try:
             projects = await self._repo.projects()
@@ -1041,8 +1038,6 @@ class TodoistApp(App[None]):
             ProjectPickerScreen(
                 projects,
                 sections,
-                current_project=single.project_id if single else None,
-                current_section=single.section_id if single else None,
             ),
             lambda target: self._on_moved([TaskId(i) for i in ids], target),
         )

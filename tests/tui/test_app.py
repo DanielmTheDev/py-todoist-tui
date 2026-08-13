@@ -3529,11 +3529,10 @@ async def test_the_parent_picker_offers_neither_the_task_nor_its_subtasks() -> N
             str(options.get_option_at_index(i).prompt)
             for i in range(options.option_count)
         ]
+        names = [label.split(" ", 1)[1] for label in labels]  # drop the pick number
         # a task cannot nest under itself or under its own subtask
-        assert [
-            label for label in labels if label.startswith(("boss", "its kid"))
-        ] == []
-        assert any(label.startswith("other") for label in labels)
+        assert [name for name in names if name.startswith(("boss", "its kid"))] == []
+        assert any(name.startswith("other") for name in names)
 
 
 @pytest.mark.anyio
@@ -5855,3 +5854,41 @@ async def test_cancelling_the_add_editor_creates_nothing() -> None:
         await pilot.pause()
 
         assert repo.applied == []
+
+
+@pytest.mark.anyio
+async def test_a_numbered_row_moves_the_task_straight_from_the_picker() -> None:
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("2")  # 1 Errands, 2 Work
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "9", None)]
+        assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
+
+
+@pytest.mark.anyio
+async def test_a_numbered_row_nests_the_task_under_that_parent() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")  # cursor on "kid"
+        await pilot.pause()
+        await pilot.press("2")  # 1 un-parents, 2 is "parent", the only candidate
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]

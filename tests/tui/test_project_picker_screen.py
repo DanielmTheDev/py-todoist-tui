@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 import pytest
 from textual.app import App
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList
 
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
@@ -23,7 +23,6 @@ _WORK = MoveTarget(project_id="9", project_name="Work")
 _WORK_PLANNING = MoveTarget("9", "Work", "s1", "Planning")
 _WORK_PROGRESS = MoveTarget("9", "Work", "s2", "In progress")
 _ERRANDS = MoveTarget(project_id="220", project_name="Errands")
-_PERSONAL = MoveTarget(project_id="5", project_name="Personal")
 
 
 class _Host(App[None]):
@@ -32,16 +31,12 @@ class _Host(App[None]):
         projects: list[Project],
         sections: list[Section],
         on_result: Callable[[MoveTarget | None], None],
-        current_project: str | None = None,
-        current_section: str | None = None,
         sections_only: bool = False,
     ) -> None:
         super().__init__()
         self._choices = projects  # not self._projects: keep off App-owned names
         self._sections = sections
         self._on_result = on_result
-        self._current_project = current_project
-        self._current_section = current_section
         self._sections_only = sections_only
 
     def on_mount(self) -> None:
@@ -49,8 +44,6 @@ class _Host(App[None]):
             ProjectPickerScreen(
                 self._choices,
                 self._sections,
-                current_project=self._current_project,
-                current_section=self._current_section,
                 sections_only=self._sections_only,
             ),
             self._on_result,
@@ -69,11 +62,11 @@ async def test_lists_projects_then_their_sections_flat() -> None:
         await pilot.pause()
         # Work (order 0) and its sections first, then Errands, then Personal
         assert _labels(host) == [
-            "Work",
-            "Work / Planning",
-            "Work / In progress",
-            "Errands",
-            "Personal",
+            "1 Work",
+            "2 Work / Planning",
+            "3 Work / In progress",
+            "4 Errands",
+            "5 Personal",
         ]
 
 
@@ -84,7 +77,7 @@ async def test_typing_matches_project_and_section_labels() -> None:
         await pilot.pause()
         await pilot.press("p", "l", "a")  # "pla" only in "Work / Planning"
         await pilot.pause()
-        assert _labels(host) == ["Work / Planning"]
+        assert _labels(host) == ["1 Work / Planning"]
 
 
 @pytest.mark.anyio
@@ -111,27 +104,15 @@ async def test_selecting_a_section_returns_its_target() -> None:
 
 
 @pytest.mark.anyio
-async def test_current_project_and_section_are_preselected() -> None:
+async def test_the_first_row_is_highlighted_whatever_the_task_is_in() -> None:
+    """The numbers count from the top, so the highlight starts there too."""
     chosen: list[MoveTarget | None] = []
-    host = _Host(
-        _PROJECTS, _SECTIONS, chosen.append, current_project="9", current_section="s2"
-    )
+    host = _Host(_PROJECTS, _SECTIONS, chosen.append)
     async with host.run_test() as pilot:
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert chosen == [_WORK_PROGRESS]  # current section wins over sort order
-
-
-@pytest.mark.anyio
-async def test_current_project_root_is_preselected() -> None:
-    chosen: list[MoveTarget | None] = []
-    host = _Host(_PROJECTS, _SECTIONS, chosen.append, current_project="5")
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert chosen == [_PERSONAL]
+        assert chosen == [_WORK]
 
 
 @pytest.mark.anyio
@@ -143,7 +124,7 @@ async def test_inbox_is_not_a_move_target() -> None:
     host = _Host(projects, [], lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host) == ["Work"]  # Inbox has its own `i` key, not a target
+        assert _labels(host) == ["1 Work"]  # Inbox has its own `i` key, not a target
 
 
 @pytest.mark.anyio
@@ -151,7 +132,7 @@ async def test_sections_only_drops_the_project_roots() -> None:
     host = _Host(_PROJECTS, _SECTIONS, lambda _t: None, sections_only=True)
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host) == ["Work / Planning", "Work / In progress"]
+        assert _labels(host) == ["1 Work / Planning", "2 Work / In progress"]
 
 
 @pytest.mark.anyio
@@ -161,7 +142,7 @@ async def test_sections_only_keeps_inbox_sections() -> None:
     host = _Host(projects, sections, lambda _t: None, sections_only=True)
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host) == ["Inbox / Later"]  # only the root is not a target
+        assert _labels(host) == ["1 Inbox / Later"]  # only the root is not a target
 
 
 @pytest.mark.anyio
@@ -186,6 +167,69 @@ async def test_enter_with_no_match_is_a_noop() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert chosen == []  # nothing highlighted, so nothing dismissed
+        await pilot.press("escape")
+        await pilot.pause()
+        assert chosen == [None]
+
+
+@pytest.mark.anyio
+async def test_rows_are_numbered_so_a_digit_can_pick_them() -> None:
+    host = _Host(_PROJECTS, _SECTIONS, lambda _t: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host) == [
+            "1 Work",
+            "2 Work / Planning",
+            "3 Work / In progress",
+            "4 Errands",
+            "5 Personal",
+        ]
+
+
+@pytest.mark.anyio
+async def test_a_digit_picks_that_row_without_highlighting_it() -> None:
+    chosen: list[MoveTarget | None] = []
+    host = _Host(_PROJECTS, _SECTIONS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("4")
+        await pilot.pause()
+        assert chosen == [_ERRANDS]
+
+
+@pytest.mark.anyio
+async def test_digits_number_the_filtered_rows_afresh() -> None:
+    chosen: list[MoveTarget | None] = []
+    host = _Host(_PROJECTS, _SECTIONS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("w", "o", "r")
+        await pilot.pause()
+        assert _labels(host) == ["1 Work", "2 Work / Planning", "3 Work / In progress"]
+        await pilot.press("3")
+        await pilot.pause()
+        assert chosen == [_WORK_PROGRESS]
+
+
+@pytest.mark.anyio
+async def test_a_digit_never_reaches_the_filter() -> None:
+    host = _Host(_PROJECTS, _SECTIONS, lambda _t: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("w", "9", "o")  # the 9 picks nothing: only five rows
+        await pilot.pause()
+        assert host.screen.query_one(Input).value == "wo"
+
+
+@pytest.mark.anyio
+async def test_a_digit_past_the_last_row_is_a_noop() -> None:
+    chosen: list[MoveTarget | None] = []
+    host = _Host(_PROJECTS, _SECTIONS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("6")
+        await pilot.pause()
+        assert chosen == []
         await pilot.press("escape")
         await pilot.pause()
         assert chosen == [None]

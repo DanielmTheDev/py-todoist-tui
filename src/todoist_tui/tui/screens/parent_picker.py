@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.screen import ModalScreen
@@ -8,6 +9,7 @@ from textual.widgets import Input, OptionList
 from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.tui.screens.picking import PickFilter, numbered, row_for_key
 
 _TOP_LEVEL = "— No parent (top level)"
 
@@ -20,9 +22,10 @@ class ParentTarget:
 
 
 class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
-    """Pick the task to nest under by typing. The top-level entry heads the list
-    and survives every filter, so un-parenting is always one keystroke away.
-    Dismisses the chosen `ParentTarget`, or None on cancel."""
+    """Pick the task to nest under by typing, or by the number the row carries. The
+    top-level entry heads the list and survives every filter, so un-parenting is
+    always one keystroke away. Dismisses the chosen `ParentTarget`, or None on
+    cancel."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "cancel", "Cancel"),
@@ -57,11 +60,19 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
         self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder=self._placeholder)
+        yield PickFilter(placeholder=self._placeholder)
         yield OptionList(*self._options())
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        index = row_for_key(event.key)
+        # one row more than `_visible`: the top-level entry heads the list as index 0
+        if index is None or index > len(self._visible):
+            return
+        event.stop()
+        self._dismiss_at(index)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         query = event.value.casefold()
@@ -84,12 +95,16 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
         self.dismiss(None)
 
     def _options(self) -> list[Option]:
-        return [Option(_TOP_LEVEL)] + [Option(_label(r)) for r in self._visible]
+        labels = numbered([_TOP_LEVEL] + [_label(r) for r in self._visible])
+        return [Option(label) for label in labels]
 
     def _select(self) -> None:
         index = self.query_one(OptionList).highlighted
         if index is None:
             return
+        self._dismiss_at(index)
+
+    def _dismiss_at(self, index: int) -> None:
         row = None if index == 0 else self._visible[index - 1]
         self.dismiss(ParentTarget(row))
 
