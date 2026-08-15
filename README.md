@@ -64,6 +64,12 @@ clears the mark and startup falls back to Today.
 Saved filters sync from your Todoist account; opening one runs its query on
 Todoist (full fidelity) and caches the result, refreshing in the background.
 
+Pasting a URL into a task's title makes the whole title the link
+(`[title](url)`), so the row shows the title and not the URL. Paste before there
+is a title and the link waits for the one you type. A title that already carries
+a link takes the URL bare instead of nesting, and the description takes every
+paste verbatim.
+
 ## Development
 ```sh
 uv run pytest          # unit tests (live-API tests excluded)

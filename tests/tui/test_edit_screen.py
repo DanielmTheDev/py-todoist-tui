@@ -1,10 +1,21 @@
 from collections.abc import Callable
 
 import pytest
+from textual import events
 from textual.app import App
-from textual.widgets import Input, TextArea
+from textual.widgets import Input, Static, TextArea
 
 from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
+
+
+def _paste(app: App[None], text: str) -> None:
+    """A bracketed paste, as the terminal delivers it: to the app, which forwards
+    it to whichever field has focus."""
+    app.post_message(events.Paste(text))
+
+
+def _link_hint(app: App[None]) -> str:
+    return str(app.screen.query_one("#link", Static).content)
 
 
 class _Host(App[None]):
@@ -157,3 +168,85 @@ async def test_blank_title_does_not_dismiss() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert edited == [None]
+
+
+@pytest.mark.anyio
+async def test_a_url_pasted_onto_a_title_makes_the_title_the_link() -> None:
+    host = _Host("review the PR", "", lambda _result: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        _paste(host, "https://example.com/pr/9")
+        await pilot.pause()
+        assert (
+            host.screen.query_one(Input).value
+            == "[review the PR](https://example.com/pr/9)"
+        )
+        assert _link_hint(host) == ""
+
+
+@pytest.mark.anyio
+async def test_a_url_pasted_onto_an_empty_title_waits_for_the_title() -> None:
+    edited: list[TaskText | None] = []
+    host = _Host("", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        _paste(host, "https://example.com/pr/9")
+        await pilot.pause()
+        assert host.screen.query_one(Input).value == ""
+        assert _link_hint(host) == "↳ link: https://example.com/pr/9"
+        await pilot.press("p", "r")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert edited == [TaskText("[pr](https://example.com/pr/9)", "")]
+
+
+@pytest.mark.anyio
+async def test_the_newest_pasted_url_replaces_a_waiting_one() -> None:
+    edited: list[TaskText | None] = []
+    host = _Host("", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        _paste(host, "https://example.com/old")
+        await pilot.pause()
+        _paste(host, "https://example.com/new")
+        await pilot.pause()
+        await pilot.press("p", "r")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert edited == [TaskText("[pr](https://example.com/new)", "")]
+
+
+@pytest.mark.anyio
+async def test_a_url_pasted_onto_an_already_linked_title_stays_bare() -> None:
+    host = _Host("[a](https://example.com/a)", "", lambda _result: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        _paste(host, "https://example.com/b")
+        await pilot.pause()
+        assert (
+            host.screen.query_one(Input).value
+            == "[a](https://example.com/a) https://example.com/b"
+        )
+
+
+@pytest.mark.anyio
+async def test_pasted_text_that_is_not_a_url_is_inserted_as_typed() -> None:
+    host = _Host("Buy", "", lambda _result: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        _paste(host, " oat milk")
+        await pilot.pause()
+        assert host.screen.query_one(Input).value == "Buy oat milk"
+        assert _link_hint(host) == ""
+
+
+@pytest.mark.anyio
+async def test_a_url_pasted_into_the_description_stays_a_plain_paste() -> None:
+    host = _Host("Buy milk", "", lambda _result: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("tab")
+        _paste(host, "https://example.com/x")
+        await pilot.pause()
+        assert host.screen.query_one(TextArea).text == "https://example.com/x"
+        assert _link_hint(host) == ""

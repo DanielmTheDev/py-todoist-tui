@@ -1,11 +1,15 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
+
+from todoist_tui.domain.links import attach, sole_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,11 +20,32 @@ class TaskText:
 
 class TitleInput(Input):
     """Textual maps ctrl+backspace to delete_right_word; every other editor
-    deletes the word to the left."""
+    deletes the word to the left. A pasted URL is folded into the title so the
+    whole title reads as the link instead of the URL eating the row."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+backspace,alt+backspace", "delete_left_word", show=False),
     ]
+
+    class LinkPasted(Message):
+        """A URL arrived with no title yet to hang it on; hold it until there is
+        one."""
+
+        def __init__(self, url: str) -> None:
+            super().__init__()
+            self.url = url
+
+    def _on_paste(self, event: events.Paste) -> None:
+        url = sole_url(event.text)
+        if url is None:
+            return  # Input's own handler, next in the MRO, inserts it verbatim
+        event.prevent_default()  # only this stops that handler running too
+        event.stop()
+        if self.value.strip():
+            self.value = attach(self.value, url)
+            self.cursor_position = len(self.value)
+        else:
+            self.post_message(self.LinkPasted(url))
 
 
 class DescriptionArea(TextArea):
@@ -49,6 +74,7 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
     TaskEditScreen Input { border: round $primary; }
     TaskEditScreen TextArea { height: 8; border: round $primary; }
     TaskEditScreen #hint { padding: 0 1; color: $text-muted; }
+    TaskEditScreen #link { padding: 0 1; color: $text-muted; }
     """
 
     def __init__(
@@ -58,6 +84,7 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
         self._content = content
         self._description = description
         self._heading = heading
+        self._pending_url: str | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="fields"):
@@ -66,6 +93,7 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
             yield Static("Title", classes="label")
             # select_on_focus would make the first keystroke wipe the title
             yield TitleInput(value=self._content.strip(), select_on_focus=False)
+            yield Static("", id="link")
             yield Static("Description", classes="label")
             yield DescriptionArea(self._description.strip())
             yield Static("tab switch · ctrl+s save · esc cancel", id="hint")
@@ -79,10 +107,17 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
         event.stop()
         self.action_save()
 
+    def on_title_input_link_pasted(self, event: TitleInput.LinkPasted) -> None:
+        event.stop()
+        self._pending_url = event.url  # a second paste means the first was wrong
+        self.query_one("#link", Static).update(f"↳ link: {event.url}")
+
     def action_save(self) -> None:
         content = self.query_one(Input).value.strip()
         if not content:  # a task must keep a title: stay open
             return
+        if self._pending_url is not None:
+            content = attach(content, self._pending_url)
         self.dismiss(TaskText(content, self.query_one(TextArea).text.strip()))
 
     def action_cancel(self) -> None:

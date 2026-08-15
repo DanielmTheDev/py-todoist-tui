@@ -78,6 +78,28 @@ def annotate(text: str, first_number: int) -> tuple[str, list[Link]]:
     return "".join(out), links
 
 
+def sole_url(text: str) -> str | None:
+    """The URL when `text` is nothing but one bare URL, else None. A paste is
+    deliberate, so punctuation inside it is kept — only the surrounding
+    whitespace goes."""
+    stripped = text.strip()
+    match = _LINK.fullmatch(stripped)
+    if match is None or match.group("url") is None:
+        return None
+    return stripped
+
+
+def attach(text: str, url: str) -> str:
+    """Fold `url` into `text` as a markdown link so the whole text reads as the
+    link. Appends the URL bare instead when `text` cannot serve as a label:
+    empty, already carrying a link, or holding a bracket that would break the
+    markdown."""
+    label = text.strip()
+    if not label or "[" in label or "]" in label or _LINK.search(label):
+        return f"{label} {url}".strip()
+    return f"[{label}]({url})"
+
+
 class LinkOpener(Protocol):
     """Port to the system URL handler; injected so tests never launch a browser."""
 

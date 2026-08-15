@@ -1,4 +1,4 @@
-from todoist_tui.domain.links import Link, annotate, plain
+from todoist_tui.domain.links import Link, annotate, attach, plain, sole_url
 
 
 def test_markdown_link_becomes_label_with_marker() -> None:
@@ -88,3 +88,48 @@ def test_plain_keeps_a_bare_url_whole() -> None:
 def test_plain_leaves_lone_asterisks_and_underscores_alone() -> None:
     # Todoist text legitimately contains these; only paired markers are markup
     assert plain("Birthdays _ Presents 2*3") == "Birthdays _ Presents 2*3"
+
+
+def test_sole_url_recognises_a_pasted_url() -> None:
+    assert sole_url("https://example.com/x") == "https://example.com/x"
+
+
+def test_sole_url_ignores_whitespace_around_the_paste() -> None:
+    assert sole_url("  https://example.com/x\n") == "https://example.com/x"
+
+
+def test_sole_url_keeps_punctuation_a_deliberate_paste_carries() -> None:
+    assert sole_url("https://example.com/x.") == "https://example.com/x."
+
+
+def test_sole_url_rejects_a_url_among_other_words() -> None:
+    assert sole_url("see https://example.com/x") is None
+
+
+def test_sole_url_rejects_two_urls() -> None:
+    assert sole_url("https://example.com/x https://example.com/y") is None
+
+
+def test_sole_url_rejects_a_markdown_link() -> None:
+    assert sole_url("[x](https://example.com/x)") is None
+
+
+def test_sole_url_rejects_a_non_web_scheme() -> None:
+    assert sole_url("ftp://example.com/x") is None
+
+
+def test_attach_folds_the_url_into_a_plain_title() -> None:
+    assert attach("review the PR", "http://x") == "[review the PR](http://x)"
+
+
+def test_attach_appends_bare_when_there_is_no_label_to_use() -> None:
+    assert attach("", "http://x") == "http://x"
+
+
+def test_attach_appends_bare_when_the_title_already_carries_a_link() -> None:
+    assert attach("[a](http://x)", "http://y") == "[a](http://x) http://y"
+    assert attach("see http://x", "http://y") == "see http://x http://y"
+
+
+def test_attach_appends_bare_when_a_bracket_would_break_the_label() -> None:
+    assert attach("fix [42] crash", "http://x") == "fix [42] crash http://x"
