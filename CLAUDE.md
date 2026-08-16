@@ -35,8 +35,11 @@ never calls httpx or the DB directly. Enforced by `import-linter`
   No production code without a test that drove it.
 - **No flaky tests.** A test must pass deterministically. If one is flaky, fix
   the root cause (usually a real race in the code, not just the test) — never
-  retry-loop, sleep-tune, or `xfail` around it. New/suspect async or timing
-  tests: hammer them (e.g. run ~30×) before calling done.
+  retry-loop, sleep-tune, or `xfail` around it. Hammer (~30×) only a test that
+  *introduces a new timing gate* (a worker, a deferred callback, a new async
+  coordination point) or that has flaked before — an async test merely awaiting
+  gates that already exist does not need it. Random order (`pytest-randomly`,
+  on by default) catches the more common failure: state leaking between tests.
 - **Testable by design.** All I/O (http, db, clock, filesystem) behind an
   injected interface. Pure domain logic has zero I/O.
 - **Concise & self-documenting.** Names carry intent. Comments explain *why* /
