@@ -16,6 +16,7 @@ from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.message import Message
+from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Rule, Static
 
 from todoist_tui.application.add_reminder import add_reminder
@@ -91,7 +92,11 @@ from todoist_tui.tui.format import (
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
-from todoist_tui.tui.screens.detail import DetailOutcome, TaskDetailScreen
+from todoist_tui.tui.screens.detail import (
+    CARD_BINDINGS,
+    FORWARDED,
+    TaskDetailScreen,
+)
 from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
@@ -134,6 +139,14 @@ def as_binding(entry: BindingType) -> Binding:
     return Binding(key, action, rest[0] if rest else "")
 
 
+_KEY_SYMBOLS = {"at": "@", "asterisk": "*", "question_mark": "?"}
+
+
+def _pressed(*keys: str) -> str:
+    """The keys as they are printed on the keyboard, not as Textual names them."""
+    return " / ".join(_KEY_SYMBOLS.get(key, key) for key in keys)
+
+
 def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
     """Flatten Textual binding definitions into (key, description) help rows,
     dropping entries with no description and the help binding itself. A binding
@@ -143,8 +156,22 @@ def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
         for binding in map(as_binding, bindings):
             if binding.action == "help" or not binding.description:
                 continue
-            rows.append((" / ".join(binding.key.split(",")), binding.description))
+            rows.append((_pressed(*binding.key.split(",")), binding.description))
     return rows
+
+
+def card_rows(bindings: list[BindingType]) -> list[tuple[str, str]]:
+    """The task card's shortcuts: the list actions it forwards, described as the
+    list describes them but keyed as the card reaches them, then what only the
+    card can do. Several keys onto one action list as one row."""
+    described = {b.action: b.description for b in map(as_binding, bindings)}
+    keys: dict[str, list[str]] = {}
+    for key, action in FORWARDED.items():
+        keys.setdefault(action, []).append(key)
+    forwarded = [
+        (_pressed(*pressed), described[action]) for action, pressed in keys.items()
+    ]
+    return forwarded + shortcut_rows(CARD_BINDINGS)
 
 
 @dataclass(frozen=True)
@@ -395,6 +422,9 @@ class TodoistApp(App[None]):
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
         self._active_server_query: str | None = None
+        # the task whose card started the action now running, and which the card
+        # will show again once that action has settled
+        self._detail_scope: str | None = None
 
     def compose(self) -> ComposeResult:
         yield StatusBand()
@@ -693,7 +723,7 @@ class TodoistApp(App[None]):
             if len(pairs) > 1
             else f"Delete “{pairs[0][1].content}”?"
         )
-        self.push_screen(
+        self._push(
             ConfirmScreen(prompt),
             lambda confirmed: self._on_delete_confirmed(pairs, cursor_row, confirmed),
         )
@@ -756,7 +786,7 @@ class TodoistApp(App[None]):
         # one target keeps its date prefilled; a selection opens on a blank date
         row = next((r for r in self._visible if str(r.id) == ids[0]), None)
         single = row.due if len(ids) == 1 and row else None
-        self.push_screen(
+        self._push(
             ScheduleScreen(
                 self._clock.today(),
                 single.date if single else None,
@@ -774,7 +804,7 @@ class TodoistApp(App[None]):
             return
         row = next((r for r in self._visible if str(r.id) == ids[0]), None)
         current = row.deadline.date if len(ids) == 1 and row and row.deadline else None
-        self.push_screen(
+        self._push(
             ScheduleScreen(self._clock.today(), current, kind="deadline"),
             lambda result: self._on_deadline([TaskId(i) for i in ids], result),
         )
@@ -819,6 +849,11 @@ class TodoistApp(App[None]):
         rows = shortcut_rows(TodoistApp.BINDINGS, TaskTable.BINDINGS)
         self.push_screen(HelpScreen(rows + await self._jump_rows()))
 
+    def on_task_detail_screen_help_requested(self) -> None:
+        """`?` over the card answers with the card's keys, laid over it — the
+        list's own shortcuts do not reach the task underneath."""
+        self.push_screen(HelpScreen(card_rows(TodoistApp.BINDINGS)))
+
     async def _jump_rows(self) -> list[tuple[str, str]]:
         """The jump keys, so `?` lists them beside the built-in shortcuts."""
         try:
@@ -842,16 +877,45 @@ class TodoistApp(App[None]):
     def _open_detail(self, row: TaskRow) -> None:
         self.push_screen(
             TaskDetailScreen(row, self._link_opener, self._clock.today()),
-            lambda edit: self._on_detail_closed(row, edit),
+            lambda action: self._on_detail_closed(row, action),
         )
 
-    def _on_detail_closed(self, row: TaskRow, outcome: DetailOutcome | None) -> None:
-        if outcome is DetailOutcome.EDIT:
-            self._open_editor(row, from_detail=True)
-        elif outcome is DetailOutcome.ADD_SUBTASK:
-            self._open_add("New subtask", row.project_id, parent_id=str(row.id))
-        elif outcome is DetailOutcome.MOVE_PARENT:
-            self.run_worker(self._open_parent_picker([str(row.id)]))
+    def _on_detail_closed(self, row: TaskRow, action: str | None) -> None:
+        if not action:  # the card was simply closed
+            return
+        # every action reads its subject off the cursor, which the card has left
+        # behind; scope it to the open task until the flow it starts is done
+        self._detail_scope = str(row.id)
+        self.run_worker(self._act_from_detail(action))
+
+    async def _act_from_detail(self, action: str) -> None:
+        try:
+            await self.run_action(action)
+        finally:
+            # an action that opened nothing (a priority, a complete) is over
+            # already; one that blew up must not leave the scope behind it
+            self.call_after_refresh(self._restore_detail)
+
+    def _restore_detail(self) -> None:
+        """Show the card again once the action it started has run its course,
+        carrying the task as it now stands. A task the action completed or
+        deleted has no card to come back to."""
+        if self._detail_scope is None or len(self.screen_stack) > 1:
+            return  # nothing pending, or a modal of the flow is still open
+        task_id, self._detail_scope = self._detail_scope, None
+        row = next((r for r in self._visible if str(r.id) == task_id), None)
+        if row is not None:
+            self._open_detail(row)
+
+    def _push[T](self, screen: Screen[T], callback: Callable[[T | None], None]) -> None:
+        """Push a modal a card may have opened, so the card returns once the flow
+        is done — including any modal this one goes on to push itself."""
+
+        def settled(result: T | None) -> None:
+            callback(result)
+            self.call_after_refresh(self._restore_detail)
+
+        self.push_screen(screen, settled)
 
     def action_add_task(self) -> None:
         row = self._cursor_row()
@@ -879,7 +943,7 @@ class TodoistApp(App[None]):
         parent_id: str | None = None,
         due: Due | None = None,
     ) -> None:
-        self.push_screen(
+        self._push(
             TaskEditScreen("", "", heading=heading),
             lambda text: self._on_new_task(
                 text, project_id, section_id, parent_id, due
@@ -917,33 +981,25 @@ class TodoistApp(App[None]):
         row = self._cursor_row()
         if row is None:  # empty table or cursor on a group header
             return
-        self._open_editor(row, from_detail=False)
-
-    def _open_editor(self, row: TaskRow, from_detail: bool) -> None:
-        self.push_screen(
+        self._push(
             TaskEditScreen(row.content, row.description),
-            lambda text: self._on_edited(row, text, from_detail),
+            lambda text: self._on_edited(row, text),
         )
 
-    def _on_edited(
-        self, row: TaskRow, text: TaskText | None, from_detail: bool
-    ) -> None:
-        edited = row
-        if text is not None and (
-            text.content != row.content or text.description != row.description
+    def _on_edited(self, row: TaskRow, text: TaskText | None) -> None:
+        if text is None or (
+            text.content == row.content and text.description == row.description
         ):
-            edited = replace(row, content=text.content, description=text.description)
-            task_id = str(row.id)
-            self._queue(
-                [
-                    (
-                        self._text_step(task_id, text.content, text.description),
-                        self._text_step(task_id, row.content, row.description),
-                    )
-                ]
-            )
-        if from_detail:  # came from the card: land back on it, showing the edit
-            self._open_detail(edited)
+            return  # cancelled, or saved without changing anything
+        task_id = str(row.id)
+        self._queue(
+            [
+                (
+                    self._text_step(task_id, text.content, text.description),
+                    self._text_step(task_id, row.content, row.description),
+                )
+            ]
+        )
 
     def _text_step(self, task_id: str, content: str, description: str) -> Step:
         return Step(
@@ -953,7 +1009,7 @@ class TodoistApp(App[None]):
         )
 
     def _cursor_row(self) -> TaskRow | None:
-        task_id = self._cursor_task_id(self.query_one(TaskTable))
+        task_id = self._detail_scope or self._cursor_task_id(self.query_one(TaskTable))
         if task_id is None:
             return None
         return next((r for r in self._visible if str(r.id) == task_id), None)
@@ -1034,7 +1090,7 @@ class TodoistApp(App[None]):
             self._set_status(f"Failed to load projects: {error}")
             self._picking_project = False
             return
-        self.push_screen(
+        self._push(
             ProjectPickerScreen(
                 projects,
                 sections,
@@ -1111,7 +1167,7 @@ class TodoistApp(App[None]):
             return
         # a task can nest under neither itself nor anything already beneath it
         blocked = with_subtrees(candidates, set(ids))
-        self.push_screen(
+        self._push(
             ParentPickerScreen([r for r in candidates if str(r.id) not in blocked]),
             lambda target: self._on_parent_chosen(ids, target),
         )
@@ -1297,7 +1353,7 @@ class TodoistApp(App[None]):
         # opens blank and its result is *added* to each task's own labels.
         add = len(rows) > 1
         seed: tuple[str, ...] = () if add else rows[0].labels
-        self.push_screen(
+        self._push(
             LabelsScreen(sorted(names), seed),
             lambda chosen: self._on_labels(task_ids, names, chosen, add),
         )
@@ -1363,9 +1419,7 @@ class TodoistApp(App[None]):
             screen = RemindersScreen(
                 self._clock.today(), allow_relative=True, mode="add"
             )
-        self.push_screen(
-            screen, lambda request: self._on_reminder_request(ids, request)
-        )
+        self._push(screen, lambda request: self._on_reminder_request(ids, request))
 
     def _on_reminder_request(
         self, ids: list[str], request: ReminderRequest | None
@@ -1373,7 +1427,7 @@ class TodoistApp(App[None]):
         if request is None:  # cancelled
             return
         if request.add_absolute:  # finish by picking the date + time
-            self.push_screen(
+            self._push(
                 ScheduleScreen(self._clock.today(), kind="due"),
                 lambda result: self._on_reminder_absolute(ids, result),
             )
@@ -1652,8 +1706,11 @@ class TodoistApp(App[None]):
             table.move_cursor(row=target)
 
     def _targets(self, table: TaskTable) -> list[str]:
-        """The task ids an action applies to: the selection if any (in display
-        order), else the cursor row, else nothing."""
+        """The task ids an action applies to: the open card's task if one started
+        the action, else the selection (in display order), else the cursor row,
+        else nothing."""
+        if self._detail_scope is not None:
+            return [self._detail_scope]
         if self._selected:
             return [str(r.id) for r in self._visible if str(r.id) in self._selected]
         task_id = self._cursor_task_id(table)

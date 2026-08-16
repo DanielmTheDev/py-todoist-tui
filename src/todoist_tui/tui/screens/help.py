@@ -3,6 +3,7 @@ from typing import ClassVar
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
@@ -12,6 +13,11 @@ class HelpScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss", "Close"),
+        # the filter box keeps focus, so the list is scrolled from here
+        Binding("down", "scroll(1)", "Down", show=False),
+        Binding("up", "scroll(-1)", "Up", show=False),
+        Binding("pagedown", "scroll(10)", "Page down", show=False),
+        Binding("pageup", "scroll(-10)", "Page up", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -23,12 +29,16 @@ class HelpScreen(ModalScreen[None]):
         max-width: 60;
         border: round $primary;
     }
-    HelpScreen Static {
+    HelpScreen VerticalScroll {
         width: 50%;
         max-width: 60;
         height: auto;
+        max-height: 80%;
         padding: 1 2;
         border: round $primary;
+    }
+    HelpScreen Static {
+        height: auto;
     }
     """
 
@@ -38,10 +48,16 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Filter shortcuts…")
-        yield Static(self._content(self._rows), id="help")
+        # the list outgrows a short terminal, and a clipped shortcut is a
+        # shortcut nobody finds
+        with VerticalScroll():
+            yield Static(self._content(self._rows), id="help")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
+
+    def action_scroll(self, lines: int) -> None:
+        self.query_one(VerticalScroll).scroll_relative(y=lines, animate=False)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         query = event.value.casefold()

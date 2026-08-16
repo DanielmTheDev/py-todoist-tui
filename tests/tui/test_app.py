@@ -55,10 +55,11 @@ from todoist_tui.tui.app import (
     StatusBand,
     TaskTable,
     TodoistApp,
+    as_binding,
 )
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
-from todoist_tui.tui.screens.detail import TaskDetailScreen
+from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
 from todoist_tui.tui.screens.edit import TaskEditScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
@@ -5658,6 +5659,205 @@ async def test_cancelling_the_editor_returns_to_the_detail_card() -> None:
         assert repo.text_edits == []
 
 
+def test_every_forwarded_card_key_matches_a_list_binding() -> None:
+    """The card names app actions by hand, so nothing stops the two drifting
+    apart but this. `a` is a deliberate alias for the list's `A`."""
+    listed = list(map(as_binding, TodoistApp.BINDINGS))
+    bound = {b.action: b.key.split(",") for b in listed}
+    described = {b.action: b.description for b in listed}
+
+    for key, action in FORWARDED.items():
+        assert action in bound, f"{key} names {action}, which no list binding runs"
+        assert key in bound[action] or key == "a"
+        # the card's help names actions by their list description
+        assert described[action], f"{key} names {action}, which has no description"
+
+
+def _card(app: TodoistApp) -> str:
+    """What the open detail card is showing."""
+    return str(app.screen.query_one("#detail", Static).render())
+
+
+@pytest.mark.anyio
+async def test_v_in_the_detail_card_moves_the_open_task_and_reopens_it() -> None:
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+        await pilot.press("w", "o")  # narrow to "Work"
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "9", None)]
+        assert isinstance(app.screen, TaskDetailScreen)
+        assert "Work" in _card(app)  # the card came back showing the move
+
+
+@pytest.mark.anyio
+async def test_a_priority_digit_in_the_detail_card_reopens_it_at_once() -> None:
+    repo = FakeRepository([_row("t1")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("3")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("t1"), Priority.P3)]
+        assert isinstance(app.screen, TaskDetailScreen)
+        assert "P3" in _card(app)
+
+
+@pytest.mark.anyio
+async def test_completing_from_the_detail_card_lands_in_the_list() -> None:
+    repo = FakeRepository([_row("t1")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("e")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("t1")]
+        # the task is gone, so there is no card to come back to
+        assert not [s for s in app.screen_stack if isinstance(s, TaskDetailScreen)]
+
+
+@pytest.mark.anyio
+async def test_a_card_action_ignores_a_selection_made_in_the_list() -> None:
+    repo = FakeRepository(
+        [_row("A"), _row("B"), _row("C")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("x", "x")  # select A and B, cursor lands on C
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("3")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("C"), Priority.P3)]
+
+
+class BoomingCompleteApp(TodoistApp):
+    def action_complete(self) -> None:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_an_action_that_blows_up_still_releases_the_card_scope() -> None:
+    """The card aims actions at the task it holds. A scope left behind by a
+    failed action would silently aim every later list action there too."""
+    repo = FakeRepository([_row("A"), _row("B")], [Project(id="220", name="Errands")])
+    app = BoomingCompleteApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # what the card does when it dismisses asking for an action, minus the
+        # worker: run_test would turn the worker's crash into a test failure
+        app._detail_scope = "A"  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(RuntimeError):
+            await app._act_from_detail("complete")  # pyright: ignore[reportPrivateUsage]
+        await pilot.pause()
+
+        await pilot.press("escape")  # the card came back; close it
+        await pilot.pause()
+        await pilot.press("j")  # cursor down to B
+        await pilot.press("3")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("B"), Priority.P3)]
+
+
+@pytest.mark.anyio
+async def test_a_card_action_that_chains_a_modal_waits_for_the_inner_one() -> None:
+    """Reminders hands off to the schedule picker. The card must not slide back
+    in under the second modal."""
+    repo = FakeRepository([_row("t1")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("R")
+        await pilot.pause()
+        assert isinstance(app.screen, RemindersScreen)
+        await pilot.press("a")  # add
+        await pilot.press("a")  # …at an absolute time: hands off to the date picker
+        await pilot.pause()
+
+        assert isinstance(app.screen, ScheduleScreen)  # not the card
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TaskDetailScreen)  # only now
+
+
+@pytest.mark.anyio
+async def test_cancelling_a_card_action_returns_to_the_card_unchanged() -> None:
+    repo = FakeRepository(
+        [_row("t1", "220")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert repo.moves == []
+        assert isinstance(app.screen, TaskDetailScreen)
+
+
+@pytest.mark.anyio
+async def test_shift_v_from_the_card_reopens_it_under_the_new_parent() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+        assert isinstance(app.screen, TaskDetailScreen)
+
+
 def _sectioned(content: str, section_id: str | None = None) -> Task:
     return Task(
         id=TaskId(content),
@@ -5835,7 +6035,7 @@ async def test_a_on_the_detail_card_adds_a_subtask_of_the_open_task() -> None:
         await pilot.pause()
 
         assert _added(repo).parent_ref == "t1"
-        assert not isinstance(app.screen, TaskDetailScreen)  # back on the list
+        assert isinstance(app.screen, TaskDetailScreen)  # back on the parent's card
 
 
 @pytest.mark.anyio

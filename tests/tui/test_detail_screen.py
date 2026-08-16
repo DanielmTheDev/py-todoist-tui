@@ -15,7 +15,6 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import TaskId
 from todoist_tui.tui.screens.detail import (
     DetailCard,
-    DetailOutcome,
     TaskDetailScreen,
 )
 from todoist_tui.tui.theme import TODOIST_THEME, Tier
@@ -61,7 +60,7 @@ class _Host(App[None]):
     def __init__(
         self,
         row: TaskRow,
-        dismissed: list[DetailOutcome | None],
+        dismissed: list[str | None],
         opener: _FakeOpener | None = None,
         today: datetime.date = _TODAY,
     ) -> None:
@@ -99,9 +98,9 @@ async def _tiered(row: TaskRow, tier: Tier) -> list[str]:
         return [text for found, text in span_tiers(card, content) if found is tier]
 
 
-async def _result_of(row: TaskRow, key: str) -> list[DetailOutcome | None]:
-    """The outcomes the card dismissed with after `key`."""
-    dismissed: list[DetailOutcome | None] = []
+async def _result_of(row: TaskRow, key: str) -> list[str | None]:
+    """The app actions the card dismissed with after `key`."""
+    dismissed: list[str | None] = []
     host = _Host(row, dismissed)
     async with host.run_test() as pilot:
         await pilot.pause()
@@ -191,16 +190,6 @@ async def test_section_headings_are_uppercase_and_recede() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_rule_separates_the_hint_from_the_body() -> None:
-    shown = await _shown(_row())
-    rule = next(line for line in shown.splitlines() if set(line) == {"─"})
-
-    assert shown.splitlines().index(rule) < shown.splitlines().index(
-        next(line for line in shown.splitlines() if "esc close" in line)
-    )
-
-
-@pytest.mark.anyio
 async def test_no_deadline_renders_a_dash() -> None:
     shown = await _shown(_row(deadline=None))
 
@@ -279,31 +268,52 @@ async def test_no_due_renders_a_dash() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("key", ["escape", "enter", "q"])
 async def test_escape_enter_and_q_close_the_view(key: str) -> None:
-    assert await _result_of(_row(), key) == [DetailOutcome.CLOSE]
+    assert await _result_of(_row(), key) == [""]
 
 
 @pytest.mark.anyio
 async def test_ctrl_e_closes_the_view_asking_for_an_edit() -> None:
-    assert await _result_of(_row(), "ctrl+e") == [DetailOutcome.EDIT]
+    assert await _result_of(_row(), "ctrl+e") == ["edit_task"]
 
 
 @pytest.mark.anyio
-async def test_a_closes_the_view_asking_for_a_subtask() -> None:
-    assert await _result_of(_row(), "a") == [DetailOutcome.ADD_SUBTASK]
+@pytest.mark.parametrize("key", ["a", "A"])
+async def test_a_closes_the_view_asking_for_a_subtask(key: str) -> None:
+    assert await _result_of(_row(), key) == ["add_subtask"]
 
 
 @pytest.mark.anyio
 async def test_shift_v_closes_the_view_asking_for_a_new_parent() -> None:
-    assert await _result_of(_row(), "V") == [DetailOutcome.MOVE_PARENT]
+    assert await _result_of(_row(), "V") == ["move_parent"]
 
 
 @pytest.mark.anyio
-async def test_hint_advertises_the_edit_and_subtask_keys() -> None:
+@pytest.mark.parametrize(
+    ("key", "action"),
+    [
+        ("v", "move_task"),
+        ("t", "set_due"),
+        ("d", "set_deadline"),
+        ("at", "set_labels"),
+        ("R", "reminders"),
+        ("e", "complete"),
+        ("delete", "delete"),
+        ("1", "set_priority('P1')"),
+        ("4", "set_priority('P4')"),
+    ],
+)
+async def test_a_task_action_key_names_the_app_action(key: str, action: str) -> None:
+    assert await _result_of(_row(), key) == [action]
+
+
+@pytest.mark.anyio
+async def test_the_card_spells_out_no_shortcuts() -> None:
+    """Every key the card takes is in `?` help; a hint listing them all would
+    crowd out the task."""
     shown = await _shown(_row())
 
-    assert "a subtask" in shown
-    assert "V parent" in shown
-    assert "ctrl+e edit" in shown
+    assert "esc close" not in shown
+    assert "ctrl+e" not in shown
 
 
 _LINKED = _row(
@@ -315,16 +325,16 @@ _LINKED = _row(
 async def test_renders_link_labels_and_numbered_refs() -> None:
     shown = await _shown(_LINKED)
 
-    assert "spec [1]" in shown
-    assert "https://tracker/T-42 [2]" in shown
-    assert "[1] https://example.com/spec" in shown
-    assert "[2] https://tracker/T-42" in shown
+    assert "spec [5]" in shown
+    assert "https://tracker/T-42 [6]" in shown
+    assert "[5] https://example.com/spec" in shown
+    assert "[6] https://tracker/T-42" in shown
 
 
 @pytest.mark.anyio
 async def test_digit_opens_the_matching_link() -> None:
-    assert await _opened_after(_LINKED, "1") == ["https://example.com/spec"]
-    assert await _opened_after(_LINKED, "2") == ["https://tracker/T-42"]
+    assert await _opened_after(_LINKED, "5") == ["https://example.com/spec"]
+    assert await _opened_after(_LINKED, "6") == ["https://tracker/T-42"]
 
 
 @pytest.mark.anyio
@@ -338,14 +348,30 @@ async def test_digit_out_of_range_opens_nothing() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_priority_digit_opens_no_link() -> None:
+    assert await _opened_after(_LINKED, "1") == []
+
+
+@pytest.mark.anyio
+async def test_only_the_first_five_links_are_numbered() -> None:
+    row = _row(description=" ".join(f"[l{n}](http://x{n})" for n in range(1, 7)))
+    shown = await _shown(row)
+
+    assert "l5 [9]" in shown
+    assert "l6 [10]" not in shown  # no key reaches it, so no ref is shown
+    assert "[9] http://x5" in shown
+    assert "http://x6" in shown  # still listed, just unnumbered
+
+
+@pytest.mark.anyio
 async def test_link_numbering_spans_content_then_description() -> None:
     row = _row(
         content="review [pr](http://pr)",
         description="also [doc](http://doc)",
     )
 
-    assert await _opened_after(row, "1") == ["http://pr"]
-    assert await _opened_after(row, "2") == ["http://doc"]
+    assert await _opened_after(row, "5") == ["http://pr"]
+    assert await _opened_after(row, "6") == ["http://doc"]
 
 
 @pytest.mark.anyio

@@ -61,12 +61,16 @@ def plain(text: str) -> str:
     return _EMPHASIS.sub(lambda m: m.group("bold") or m.group("code"), unlinked)
 
 
-def annotate(text: str, first_number: int) -> tuple[str, list[Link]]:
+def annotate(
+    text: str, first_number: int, last_number: int | None = None
+) -> tuple[str, list[Link]]:
     """Rewrite each link to 'display [n]' and collect the links in order.
 
     Markdown `[label](url)` renders as `label [n]`; a bare URL keeps its text.
     Numbering runs sequentially from `first_number`, so callers can thread it
-    across several blocks (title then description)."""
+    across several blocks (title then description). Links numbered past
+    `last_number` render bare — a caller with only so many keys to spare shows
+    no reference it cannot honour — but are still collected."""
     links: list[Link] = []
     out: list[str] = []
     for before, link, trailing in parse(text):
@@ -74,7 +78,11 @@ def annotate(text: str, first_number: int) -> tuple[str, list[Link]]:
         if link is None:
             continue
         links.append(link)
-        out.append(f"{link.label} [{first_number + len(links) - 1}]{trailing}")
+        number = first_number + len(links) - 1
+        marker = (
+            "" if last_number is not None and number > last_number else f" [{number}]"
+        )
+        out.append(f"{link.label}{marker}{trailing}")
     return "".join(out), links
 
 

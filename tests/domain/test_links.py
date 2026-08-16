@@ -29,6 +29,19 @@ def test_first_number_offsets_the_markers() -> None:
     assert links == [Link(label="a", url="http://x")]
 
 
+def test_links_past_the_last_number_lose_their_marker() -> None:
+    text, links = annotate("[a](http://x) [b](http://y) [c](http://z)", 5, 6)
+
+    assert text == "a [5] b [6] c"
+    assert [link.url for link in links] == ["http://x", "http://y", "http://z"]
+
+
+def test_no_last_number_numbers_every_link() -> None:
+    text, _ = annotate("[a](http://x) [b](http://y)", 9)
+
+    assert text == "a [9] b [10]"
+
+
 def test_text_without_links_is_unchanged() -> None:
     text, links = annotate("just plain prose", 1)
 
