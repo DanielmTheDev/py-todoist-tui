@@ -200,6 +200,19 @@ async def test_current_time_prefills_the_buffer() -> None:
 
 
 @pytest.mark.anyio
+async def test_digit_overwrites_a_prefilled_time() -> None:
+    # 0930 is a full buffer, so typing starts over instead of being dropped.
+    result = await _press("8", "1", "5", "enter", current_time=datetime.time(9, 30))
+    assert result == DueResult(Due(date=_TUESDAY, time=datetime.time(8, 15)))
+
+
+@pytest.mark.anyio
+async def test_fifth_digit_restarts_the_buffer() -> None:
+    result = await _press("1", "4", "3", "0", "8", "enter")
+    assert result == DueResult(Due(date=_TUESDAY, time=datetime.time(8, 0)))
+
+
+@pytest.mark.anyio
 async def test_invalid_time_keeps_modal_open_then_recovers() -> None:
     results: list[DueResult | None] = []
     host = _Host(_TUESDAY, results.append)

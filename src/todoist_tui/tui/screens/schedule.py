@@ -142,13 +142,13 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self.dismiss(DueResult(quick_due(kind, self._today)))
         elif self._allow_text and event.key == "s":
             self.query_one("#due-text", Input).focus()
-        elif (
-            self._kind == "due"
-            and event.character
-            and event.character.isdigit()
-            and len(self._time) < 4
-        ):
-            self._time += event.character
+        elif self._kind == "due" and event.character and event.character.isdigit():
+            # a full buffer restarts, so a prefilled time is retyped without clearing
+            self._time = (
+                event.character
+                if len(self._time) == 4
+                else self._time + event.character
+            )
             self._error = None
             self._refresh()
         elif self._kind == "due" and event.key == "backspace":
