@@ -3,9 +3,10 @@ from typing import ClassVar
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
+
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 
 class HelpScreen(ModalScreen[None]):
@@ -29,11 +30,9 @@ class HelpScreen(ModalScreen[None]):
         max-width: 60;
         border: round $primary;
     }
-    HelpScreen VerticalScroll {
+    HelpScreen ScrollBody {
         width: 50%;
         max-width: 60;
-        height: auto;
-        max-height: 80%;
         padding: 1 2;
         border: round $primary;
     }
@@ -50,14 +49,14 @@ class HelpScreen(ModalScreen[None]):
         yield Input(placeholder="Filter shortcuts…")
         # the list outgrows a short terminal, and a clipped shortcut is a
         # shortcut nobody finds
-        with VerticalScroll():
+        with ScrollBody():
             yield Static(self._content(self._rows), id="help")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
 
     def action_scroll(self, lines: int) -> None:
-        self.query_one(VerticalScroll).scroll_relative(y=lines, animate=False)
+        self.query_one(ScrollBody).scroll_relative(y=lines, animate=False)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         query = event.value.casefold()

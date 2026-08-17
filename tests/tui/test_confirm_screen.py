@@ -2,6 +2,7 @@ import pytest
 from textual.app import App
 
 from todoist_tui.tui.screens.confirm import ConfirmScreen
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 
 class ConfirmApp(App[None]):
@@ -36,3 +37,15 @@ async def test_escape_cancels() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert app.result is False
+
+
+@pytest.mark.anyio
+async def test_a_prompt_taller_than_the_terminal_scrolls() -> None:
+    app = ConfirmApp()
+    async with app.run_test(size=(80, 8)) as pilot:
+        app.push_screen(ConfirmScreen("Delete " + "very long name " * 20 + "?"))
+        await pilot.pause()
+
+        body = app.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 8
+        assert body.max_scroll_y > 0

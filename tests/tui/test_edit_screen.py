@@ -6,6 +6,7 @@ from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
 from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 
 def _paste(app: App[None], text: str) -> None:
@@ -250,3 +251,14 @@ async def test_a_url_pasted_into_the_description_stays_a_plain_paste() -> None:
         await pilot.pause()
         assert host.screen.query_one(TextArea).text == "https://example.com/x"
         assert _link_hint(host) == ""
+
+
+@pytest.mark.anyio
+async def test_the_fields_scroll_on_a_terminal_too_short_for_them() -> None:
+    host = _Host("Buy milk", "\n".join(f"line {n}" for n in range(30)), lambda _r: None)
+
+    async with host.run_test(size=(80, 10)) as pilot:
+        await pilot.pause()
+        body = host.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 10
+        assert body.max_scroll_y > 0

@@ -4,6 +4,8 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
+
 
 class ConfirmScreen(ModalScreen[bool]):
     """Yes/no overlay for a destructive action. y/enter confirms; n/esc/q cancels."""
@@ -12,12 +14,15 @@ class ConfirmScreen(ModalScreen[bool]):
     ConfirmScreen {
         align: center middle;
     }
-    ConfirmScreen Static {
+    ConfirmScreen ScrollBody {
         width: 50%;
         max-width: 60;
-        height: auto;
         padding: 1 2;
         border: round $error;
+    }
+    ConfirmScreen Static {
+        width: 100%;
+        height: auto;
     }
     """
 
@@ -27,9 +32,14 @@ class ConfirmScreen(ModalScreen[bool]):
         self._confirm_label = confirm_label
 
     def compose(self) -> ComposeResult:
-        yield Static(self._content(), id="confirm")
+        # a prompt naming a long task wraps well past a short terminal
+        with ScrollBody():
+            yield Static(self._content(), id="confirm")
 
     def on_key(self, event: events.Key) -> None:
+        if page_scrolled(self, event.key):
+            event.stop()
+            return
         if event.key in ("y", "enter"):
             self.dismiss(True)
         elif event.key in ("n", "escape", "q"):

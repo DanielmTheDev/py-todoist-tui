@@ -7,6 +7,7 @@ from textual.widgets import Input, Static
 
 from todoist_tui.domain.due import Due
 from todoist_tui.tui.screens.schedule import DueResult, Kind, ScheduleScreen
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 _TUESDAY = datetime.date(2026, 7, 28)
 
@@ -322,3 +323,24 @@ async def test_no_text_field_when_text_is_not_allowed() -> None:
         await pilot.pause()
 
         assert not host.screen.query(Input)
+
+
+@pytest.mark.anyio
+async def test_the_calendar_scrolls_on_a_short_terminal() -> None:
+    host = _Host(_TUESDAY, lambda _result: None, allow_text=True)
+
+    async with host.run_test(size=(80, 10)) as pilot:
+        await pilot.pause()
+        body = host.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 10
+        assert body.max_scroll_y > 0
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert body.scroll_y > 0
+
+        await pilot.press("s")  # the phrase box is inside the body, so it comes
+        await pilot.pause()  # into view instead of sitting off the bottom edge
+        field = host.screen.query_one(Input)
+        assert field.region.bottom <= 10
+        assert host.screen.focused is field

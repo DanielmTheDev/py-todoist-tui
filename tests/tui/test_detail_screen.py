@@ -17,6 +17,7 @@ from todoist_tui.tui.screens.detail import (
     DetailCard,
     TaskDetailScreen,
 )
+from todoist_tui.tui.screens.scrolling import ScrollBody
 from todoist_tui.tui.theme import TODOIST_THEME, Tier
 
 _TODAY = datetime.date(2026, 7, 28)
@@ -377,3 +378,28 @@ async def test_link_numbering_spans_content_then_description() -> None:
 @pytest.mark.anyio
 async def test_a_task_without_links_opens_nothing_on_o() -> None:
     assert await _opened_after(_row(description="plain prose"), "o") == []
+
+
+@pytest.mark.anyio
+async def test_a_card_taller_than_the_terminal_scrolls() -> None:
+    row = _row(description="\n".join(f"line {n}" for n in range(30)))
+    host = _Host(row, [])
+
+    async with host.run_test(size=(80, 12)) as pilot:
+        await pilot.pause()
+        body = host.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 12
+        assert body.max_scroll_y > 0
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert body.scroll_y > 0
+
+
+@pytest.mark.anyio
+async def test_a_card_that_fits_stays_put() -> None:
+    host = _Host(_row(), [])
+
+    async with host.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        assert host.screen.query_one(ScrollBody).max_scroll_y == 0

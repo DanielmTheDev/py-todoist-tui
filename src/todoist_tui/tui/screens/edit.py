@@ -4,12 +4,12 @@ from typing import ClassVar
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
 
 from todoist_tui.domain.links import attach, sole_url
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +87,8 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
         self._pending_url: str | None = None
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="fields"):
+        # the description box alone is taller than a short terminal
+        with ScrollBody(id="fields"):
             if self._heading is not None:  # so an add does not read as an edit
                 yield Static(self._heading, id="heading")
             yield Static("Title", classes="label")

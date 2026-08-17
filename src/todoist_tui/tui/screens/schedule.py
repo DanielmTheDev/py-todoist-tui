@@ -17,6 +17,7 @@ from todoist_tui.domain.schedule import (
     quick_due,
     shift_month,
 )
+from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
 
 Kind = Literal["due", "deadline"]
 
@@ -74,16 +75,18 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
     ScheduleScreen {
         align: center middle;
     }
-    ScheduleScreen Static {
+    ScheduleScreen ScrollBody {
         width: 70%;
         max-width: 80;
-        height: auto;
         padding: 1 2;
         border: round $primary;
     }
+    ScheduleScreen Static {
+        width: 100%;
+        height: auto;
+    }
     ScheduleScreen Input {
-        width: 70%;
-        max-width: 80;
+        width: 100%;
         border: round $primary;
     }
     """
@@ -111,16 +114,19 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         self._error: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(self._content(), id="schedule")
-        if self._allow_text:
-            yield Input(
-                value=self._current_text,
-                placeholder="every mon until Dec 31",
-                # keep a prefilled rule: focusing a selecting Input wipes it on
-                # the first keypress
-                select_on_focus=False,
-                id="due-text",
-            )
+        # the calendar is a dozen rows before the hints below it; the phrase box
+        # scrolls with it rather than beside it, or a short terminal drops it
+        with ScrollBody():
+            yield Static(self._content(), id="schedule")
+            if self._allow_text:
+                yield Input(
+                    value=self._current_text,
+                    placeholder="every mon until Dec 31",
+                    # keep a prefilled rule: focusing a selecting Input wipes it
+                    # on the first keypress
+                    select_on_focus=False,
+                    id="due-text",
+                )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -128,6 +134,9 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self.dismiss(DueResult(text=text))
 
     def on_key(self, event: events.Key) -> None:
+        if page_scrolled(self, event.key):
+            event.stop()
+            return
         if self._typing:
             if event.key == "escape":  # back to the calendar, keeping the text
                 self.set_focus(None)

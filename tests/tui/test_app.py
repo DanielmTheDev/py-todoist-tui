@@ -67,6 +67,7 @@ from todoist_tui.tui.screens.parent_picker import ParentPickerScreen
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
+from todoist_tui.tui.screens.scrolling import ScrollBody
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 from todoist_tui.tui.screens.views import ViewsScreen
 from todoist_tui.tui.theme import Tier
@@ -6132,3 +6133,23 @@ async def test_a_numbered_row_nests_the_task_under_that_parent() -> None:
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
+
+
+@pytest.mark.anyio
+async def test_the_arrange_overlay_scrolls_on_a_short_terminal() -> None:
+    """Its field list is longer than a short terminal, and a field nobody can
+    see is a field nobody can group by."""
+    app = TodoistApp(FakeRepository([_row("a")], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test(size=(80, 8)) as pilot:
+        await pilot.pause()
+        await pilot.press("g")
+        await pilot.pause()
+
+        body = app.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 8
+        assert body.max_scroll_y > 0
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert body.scroll_y > 0

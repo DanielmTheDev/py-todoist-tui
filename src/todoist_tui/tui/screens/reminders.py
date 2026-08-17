@@ -10,6 +10,7 @@ from textual.widgets import Static
 
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import format_reminder
+from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
 
 Mode = Literal["manage", "add"]
 
@@ -42,12 +43,15 @@ class RemindersScreen(ModalScreen["ReminderRequest | None"]):
     RemindersScreen {
         align: center middle;
     }
-    RemindersScreen Static {
+    RemindersScreen ScrollBody {
         width: 70%;
         max-width: 80;
-        height: auto;
         padding: 1 2;
         border: round $primary;
+    }
+    RemindersScreen Static {
+        width: 100%;
+        height: auto;
     }
     """
 
@@ -69,9 +73,14 @@ class RemindersScreen(ModalScreen["ReminderRequest | None"]):
         self._error: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(self._content(), id="reminders")
+        # a task can carry more reminders than a short terminal has rows
+        with ScrollBody():
+            yield Static(self._content(), id="reminders")
 
     def on_key(self, event: events.Key) -> None:
+        if page_scrolled(self, event.key):
+            event.stop()
+            return
         if self._state == "menu":
             self._on_menu_key(event)
         elif self._state == "type":

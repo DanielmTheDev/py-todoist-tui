@@ -7,6 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from todoist_tui.domain.arrange import MAX_LEVELS, Arrangement, Field, SortKey
+from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
 
 Mode = Literal["group", "sort"]
 
@@ -36,12 +37,15 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
     ArrangeScreen {
         align: center middle;
     }
-    ArrangeScreen Static {
+    ArrangeScreen ScrollBody {
         width: 70%;
         max-width: 80;
-        height: auto;
         padding: 1 2;
         border: round $primary;
+    }
+    ArrangeScreen Static {
+        width: 100%;
+        height: auto;
     }
     """
 
@@ -58,10 +62,15 @@ class ArrangeScreen(ModalScreen["Arrangement | None"]):
             self._chain = list(arrangement.sort_by)
 
     def compose(self) -> ComposeResult:
-        # markup=False: field-key hints like "[p]" are literal text, not Rich tags.
-        yield Static(self._text(), id="arrange", markup=False)
+        # the chain plus its field list outgrows a short terminal
+        with ScrollBody():
+            # markup=False: field-key hints like "[p]" are literal text, not Rich tags
+            yield Static(self._text(), id="arrange", markup=False)
 
     def on_key(self, event: events.Key) -> None:
+        if page_scrolled(self, event.key):
+            event.stop()
+            return
         key = event.key
         clear_char = "G" if self._mode == "group" else "S"
         if key == "enter":

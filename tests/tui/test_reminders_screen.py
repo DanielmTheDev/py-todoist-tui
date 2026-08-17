@@ -6,6 +6,7 @@ from textual.app import App
 
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.screens.reminders import Mode, ReminderRequest, RemindersScreen
+from todoist_tui.tui.screens.scrolling import ScrollBody
 
 _TODAY = datetime.date(2026, 8, 4)
 
@@ -113,3 +114,22 @@ async def test_relative_unavailable_when_no_due_time() -> None:
 @pytest.mark.anyio
 async def test_add_mode_starts_at_type_and_escape_cancels() -> None:
     assert await _press("escape", mode="add") is None
+
+
+@pytest.mark.anyio
+async def test_a_long_reminder_list_scrolls_instead_of_running_off() -> None:
+    many = tuple(
+        Reminder(id=f"r{n}", item_id="t1", type="relative", minute_offset=n)
+        for n in range(20)
+    )
+    host = _Host(lambda _result: None, many, True, "manage")
+
+    async with host.run_test(size=(80, 10)) as pilot:
+        await pilot.pause()
+        body = host.screen.query_one(ScrollBody)
+        assert body.region.bottom <= 10
+        assert body.max_scroll_y > 0
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert body.scroll_y > 0

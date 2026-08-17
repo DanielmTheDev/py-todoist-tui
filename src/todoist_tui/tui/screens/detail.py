@@ -21,6 +21,7 @@ from todoist_tui.tui.format import (
     format_reminder,
     priority_dot,
 )
+from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
 from todoist_tui.tui.theme import (
     PALETTE_CLASSES,
     PALETTE_CSS,
@@ -181,12 +182,15 @@ class TaskDetailScreen(ModalScreen[str]):
     TaskDetailScreen {
         align: center middle;
     }
-    TaskDetailScreen Static {
+    TaskDetailScreen ScrollBody {
         width: 70%;
         max-width: 80;
-        height: auto;
         padding: 1 2;
         border: round $primary;
+    }
+    TaskDetailScreen DetailCard {
+        width: 100%;
+        height: auto;
     }
     """
 
@@ -209,18 +213,23 @@ class TaskDetailScreen(ModalScreen[str]):
         self._links: list[Link] = content_links + description_links
 
     def compose(self) -> ComposeResult:
-        yield DetailCard(
-            self._row,
-            self._content_text,
-            self._description_text,
-            self._links,
-            self._today,
-        )
+        # a card taller than the terminal would otherwise paint past its edge
+        with ScrollBody():
+            yield DetailCard(
+                self._row,
+                self._content_text,
+                self._description_text,
+                self._links,
+                self._today,
+            )
 
     class HelpRequested(Message):
         """The card was asked to name the keys it takes."""
 
     def on_key(self, event: events.Key) -> None:
+        if page_scrolled(self, event.key):
+            event.stop()
+            return
         if event.key == "question_mark":
             self.post_message(self.HelpRequested())  # help lays over the card
         elif event.key in CLOSE_KEYS:
