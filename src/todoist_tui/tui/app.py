@@ -401,6 +401,8 @@ class TodoistApp(App[None]):
         self._syncing = False
         self._status_base = ""  # the band's left-hand line: view title, or an error
         self._status_tally = ""  # " · 9 task(s)", blank while an error is shown
+        # the project every visible task shares, which the column drops as noise
+        self._shared_project: str | None = None
         self._laid_out = -1  # table width the current column stretch was sized for
         # local changes the server hasn't confirmed: replayed over every reload,
         # so a sync already in flight can't revert what the user just did
@@ -1626,7 +1628,13 @@ class TodoistApp(App[None]):
         # a reminder rides in the due cell, so it alone keeps that column alive
         show_due = any(t.due or t.reminders for t in tasks)
         show_deadline = any(t.deadline for t in tasks)
-        show_project = any(t.project_name for t in tasks)
+        # one project across the whole view is the view's own, not news about a
+        # row — the band carries it instead of every line repeating it
+        projects = {t.project_name for t in tasks}
+        show_project = len(projects) > 1
+        sole = next(iter(projects)) if len(projects) == 1 else None
+        # a project view's title already says it
+        self._shared_project = sole if view.project_id is None else None
         columns = ["TASK"]
         if show_labels:
             columns.append("LABELS")
@@ -1736,6 +1744,7 @@ class TodoistApp(App[None]):
         """A progress or error line, holding the band until the next paint."""
         self._status_base = message
         self._status_tally = ""
+        self._shared_project = None  # the line is no longer about the view
         self._render_status()
 
     def _set_count_status(self, title: str, count: int) -> None:
@@ -1755,9 +1764,10 @@ class TodoistApp(App[None]):
             return
         selected = f"  · {len(self._selected)} selected" if self._selected else ""
         marker = "  ⟳" if self._syncing else ""
+        project = f" · {self._shared_project}" if self._shared_project else ""
         band.show(
             self._status_base,
-            f"{self._status_tally}{selected}{marker}",
+            f"{self._status_tally}{project}{selected}{marker}",
             _arrangement_summary(self._arrangement),
         )
 

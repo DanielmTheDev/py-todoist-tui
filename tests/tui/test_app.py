@@ -446,7 +446,10 @@ def _selected_rows(table: DataTable[object]) -> list[int]:
 async def test_selecting_a_row_bars_it_and_accents_only_its_title() -> None:
     """A bar in the marker slot plus an accented title, so the metadata keeps
     receding and nothing shifts sideways."""
-    repo = FakeRepository([_row("A"), _row("B")], [Project(id="220", name="Errands")])
+    repo = FakeRepository(
+        [_row("A"), _row("B", "9")],  # two projects, so the column stays
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1390,7 +1393,8 @@ async def test_mount_renders_today_tasks_in_table() -> None:
         assert priority_of(table, 0) is Priority.P1
         assert _title(table, 0) == "Buy milk"  # title leads, right after the dot
         assert str(_cell(table, 0, "Due")) == "21 Jul 09:30"  # overdue vs _TODAY
-        assert str(_cell(table, 0, "Project")) == "Errands"
+        # every task in one project: the band carries it, not a column of repeats
+        assert _status(app).startswith("Today · 1 task(s) · Errands")
 
 
 @pytest.mark.anyio
@@ -1630,7 +1634,6 @@ async def test_the_title_leads_and_its_metadata_recedes() -> None:
         await pilot.pause()
         table = app.query_one(TaskTable)
         assert tier_at(table, title_cell(table, 0), "Buy milk") is Tier.PRIMARY
-        assert cell_tier(table, _cell(table, 0, "Project")) is Tier.MUTED
         assert cell_tier(table, _cell(table, 0, "Labels")) is Tier.MUTED
 
 
@@ -2303,8 +2306,8 @@ async def test_deadline_survives_a_sync_that_began_before_the_command_landed() -
 @pytest.mark.anyio
 async def test_move_survives_a_sync_that_began_before_the_command_landed() -> None:
     repo = HeldEditRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+        [_row("t1", "220"), _unmoved()],
+        _MOVE_PROJECTS,
     )
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
@@ -3309,10 +3312,7 @@ async def test_v_opens_project_picker() -> None:
 
 @pytest.mark.anyio
 async def test_v_pick_moves_task_and_updates_project_cell() -> None:
-    repo = FakeRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
-    )
+    repo = FakeRepository([_row("t1", "220"), _unmoved()], _MOVE_PROJECTS)
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
@@ -3695,10 +3695,7 @@ class FailingMoveRepository(FakeRepository):
 
 @pytest.mark.anyio
 async def test_move_failure_is_surfaced_and_resyncs() -> None:
-    repo = FailingMoveRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
-    )
+    repo = FailingMoveRepository([_row("t1", "220"), _unmoved()], _MOVE_PROJECTS)
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
@@ -3915,6 +3912,20 @@ def _row(content: str, project_id: str = "220", parent_id: str | None = None) ->
         project_id=project_id,
         parent_id=parent_id,
     )
+
+
+# A move empties t1's project, and one project across the view drops the PROJECT
+# column — this third-project row keeps two in play so the cell stays assertable.
+_MOVE_PROJECTS = [
+    Project(id="220", name="Errands"),
+    Project(id="9", name="Work"),
+    Project(id="5", name="Home"),
+]
+
+
+def _unmoved() -> Task:
+    """Sorts after t1, so the moved task stays row 0."""
+    return _row("unmoved", "5")
 
 
 async def _grouped_by_project() -> InMemoryArrangements:
@@ -5381,7 +5392,7 @@ async def test_a_bound_key_does_nothing_while_a_modal_is_open() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         assert isinstance(app.screen, HelpScreen)
-        assert "Work" not in _status(app)
+        assert _status(app).startswith("Today")  # the bound view never opened
 
 
 @pytest.mark.anyio
@@ -6099,10 +6110,7 @@ async def test_cancelling_the_add_editor_creates_nothing() -> None:
 
 @pytest.mark.anyio
 async def test_a_numbered_row_moves_the_task_straight_from_the_picker() -> None:
-    repo = FakeRepository(
-        [_row("t1", "220")],
-        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
-    )
+    repo = FakeRepository([_row("t1", "220"), _unmoved()], _MOVE_PROJECTS)
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
     async with app.run_test() as pilot:
@@ -6178,3 +6186,45 @@ async def test_a_terminal_under_the_cap_keeps_every_cell() -> None:
 
         table = app.query_one(TaskTable)
         assert (table.region.x, table.region.width) == (0, 80)
+
+
+@pytest.mark.anyio
+async def test_one_project_across_the_view_moves_from_column_to_band() -> None:
+    """A column repeating the same word on every row says nothing about any of
+    them — but the view still has to say which project it is."""
+    repo = FakeRepository([_row("a"), _row("b")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert _cell(app.query_one(TaskTable), 0, "PROJECT") is None
+        assert _status(app).startswith("Today · 2 task(s) · Errands")
+
+
+@pytest.mark.anyio
+async def test_projects_that_differ_keep_their_column() -> None:
+    app = TodoistApp(_two_project_repo(), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert _cell(app.query_one(TaskTable), 0, "PROJECT") is not None
+        assert "Work" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_a_project_view_does_not_repeat_its_own_name() -> None:
+    repo = FakeRepository([_row("a")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "Errands")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        assert _cell(app.query_one(TaskTable), 0, "PROJECT") is None
+        assert _status(app).startswith("Errands · 1 task(s)")
+        assert _status(app).count("Errands") == 1
