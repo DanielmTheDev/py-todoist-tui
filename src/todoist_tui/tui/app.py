@@ -79,6 +79,13 @@ from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.task import TaskId
 from todoist_tui.domain.view_slots import ViewSlots
+from todoist_tui.tui.columns import (
+    GUTTER,
+    MARKER_SLOT,
+    Column,
+    fit_columns,
+    fit_row,
+)
 from todoist_tui.tui.format import (
     date_tier,
     description_marker,
@@ -119,16 +126,11 @@ from todoist_tui.tui.theme import (
 _SYNC_INTERVAL_SECONDS = 60.0  # Todoist has no push; poll incrementally
 _INDENT = "  "  # per nesting level, for group headers and their tasks
 _MIN_FILL = 3  # so a label as wide as the titles still trails a visible rule
-_GUTTER = 2  # shared by the status band's padding and the table's cell padding
 _SUMMARY_GAP = 2  # least space between the status message and the arrangement
 _FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
 _FOLD_SHUT = "▸ "  # subtree folded away
 _SELECT_MARKER = "▌"  # bar on a multi-selected row
 PENDING_MARK = " ⟳"  # trails a row whose change Todoist hasn't confirmed yet
-# The selection bar, the priority dot, and the space setting them off from the
-# title. They open the title cell, so the column label has to clear the same
-# width for TASK to sit above the titles rather than above their markers.
-MARKER_SLOT = "   "
 
 
 def as_binding(entry: BindingType) -> Binding:
@@ -272,9 +274,9 @@ class ColumnHeader(Static):
 
     def __init__(self) -> None:
         super().__init__(id="columns", markup=False)
-        self._columns: list[tuple[str, int]] = []
+        self._columns: list[Column] = []
 
-    def show(self, columns: list[tuple[str, int]]) -> None:
+    def show(self, columns: list[Column]) -> None:
         self._columns = columns
         self.update(self._content())
 
@@ -282,8 +284,10 @@ class ColumnHeader(Static):
         muted = tier_styles(self)[Tier.MUTED]
         labels = "".join(
             # the first column opens with the marker slot, so its label clears it
-            (MARKER_SLOT + label if column == 0 else label).ljust(width)
-            for column, (label, width) in enumerate(self._columns)
+            (MARKER_SLOT + column.label if position == 0 else column.label).ljust(
+                column.width
+            )
+            for position, column in enumerate(self._columns)
         )
         return Text(labels.rstrip(), style=muted)
 
@@ -442,7 +446,7 @@ class TodoistApp(App[None]):
             self._repaint()
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
-        return {"gutter": str(_GUTTER)}  # so the stylesheet shares the one constant
+        return {"gutter": str(GUTTER)}  # so the stylesheet shares the one constant
 
     async def on_mount(self) -> None:
         table = self.query_one(TaskTable)
@@ -1663,21 +1667,21 @@ class TodoistApp(App[None]):
             first_row_of.setdefault(str(row.id), index)
         leads = [entry for _, entry in built if isinstance(entry, Text)]
         self._laid_out = table.scrollable_content_region.width
-        widths = _column_widths(
+        fitted = fit_columns(
             columns,
             [entry for _, entry in built if isinstance(entry, list)],
             table.scrollable_content_region.width,
             max((cell_len(lead.plain) + _MIN_FILL for lead in leads), default=0),
         )
         table.clear(columns=True)
-        for label, width in zip(columns, widths, strict=True):
-            table.add_column(label, width=width)
-        self.query_one(ColumnHeader).show(list(zip(columns, widths, strict=True)))
+        for column in fitted:
+            table.add_column(column.label, width=column.width)
+        self.query_one(ColumnHeader).show(fitted)
         for key, entry in built:
             cells = (
-                _divider_cells(entry, widths, styles)
+                _divider_cells(entry, fitted, styles)
                 if isinstance(entry, Text)
-                else entry
+                else fit_row(entry, fitted)
             )
             table.add_row(*cells, key=key)
         if prior_group is not None and prior_group in header_row_of:
@@ -1803,46 +1807,19 @@ def _forget(undo: list[Step], step: Step) -> None:
         undo.remove(step)
 
 
-def _column_widths(
-    labels: list[str],
-    rows: list[list[Text | str]],
-    available: int,
-    first_minimum: int,
-) -> list[int]:
-    """Each column as wide as its widest cell plus a gutter, the last stretched to
-    the right edge.
-
-    Widths are explicit because `cell_padding` has to be zero for a group divider
-    to run unbroken across the columns — with no padding, the gutter has to live
-    inside the width instead. `first_minimum` keeps the title column wide enough
-    for the group labels, which would otherwise be truncated by their own column.
-    """
-    # the first label is drawn past the marker slot, so it needs the room for both
-    widths = [
-        cell_len(label) + (len(MARKER_SLOT) if column == 0 else 0)
-        for column, label in enumerate(labels)
-    ]
-    for cells in rows:
-        for column, cell in enumerate(cells):
-            text = cell if isinstance(cell, str) else cell.plain
-            widths[column] = max(widths[column], cell_len(text))
-    widths = [width + _GUTTER for width in widths]
-    widths[0] = max(widths[0], first_minimum)
-    slack = available - sum(widths)  # 0 before the first layout; a resize repaints
-    if slack > 0:
-        widths[-1] += slack
-    return widths
-
-
 def _divider_cells(
-    lead: Text, widths: list[int], styles: Mapping[Tier, Style]
+    lead: Text, fitted: list[Column], styles: Mapping[Tier, Style]
 ) -> list[Text | str]:
     """The group's label on a rule running the table's full width: the label rides
-    in the first column, every later column is rule to the edge."""
+    in the first column, every later column is rule to the edge. A narrow table
+    cuts the label rather than let it run past its column."""
     rule = styles[Tier.MUTED]
     first = lead.copy()
-    first.append("─" * max(_MIN_FILL, widths[0] - cell_len(lead.plain)), style=rule)
-    return [first, *(Text("─" * width, style=rule) for width in widths[1:])]
+    first.truncate(max(0, fitted[0].width - _MIN_FILL), overflow="ellipsis")
+    first.append(
+        "─" * max(_MIN_FILL, fitted[0].width - cell_len(first.plain)), style=rule
+    )
+    return [first, *(Text("─" * column.width, style=rule) for column in fitted[1:])]
 
 
 def _due_cell(

@@ -3991,6 +3991,46 @@ async def test_the_group_divider_follows_the_terminal_width() -> None:
         assert cell_len(_divider_row(app.query_one(TaskTable))) > narrow
 
 
+def _crowded(content: str, project_id: str = "220") -> Task:
+    """A task that fills every column: labels, due, deadline, project."""
+    return Task(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 29)),
+        deadline=Deadline(date=datetime.date(2026, 7, 30)),
+        project_id=project_id,
+        labels=("home",),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_narrow_terminal_cuts_the_title_then_drops_columns() -> None:
+    """Squeezed, the list gives up title text before it gives up a column, and
+    the column it does give up is the one the view says least about."""
+    repo = FakeRepository(
+        # two projects, so PROJECT is dropped for want of room, not for repeating
+        [_crowded("Buy milk and bread on the way home tonight"), _crowded("cut", "9")],
+        [Project(id="220", name="Errands"), Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test(size=(60, 24)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+
+        table = app.query_one(TaskTable)
+        assert _title(table, 0).endswith("…")
+        assert _cell(table, 0, "PROJECT") is None
+        assert _cell(table, 0, "DUE") is not None  # the dates are worth the room
+
+        await pilot.resize_terminal(120, 24)
+        await pilot.pause()
+
+        assert not _title(table, 0).endswith("…")
+        assert _cell(table, 0, "PROJECT") is not None
+
+
 @pytest.mark.anyio
 async def test_the_column_labels_clear_the_marker_slot() -> None:
     """TASK has to start where the titles start, not where their marker slot does."""
