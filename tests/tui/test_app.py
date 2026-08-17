@@ -6153,3 +6153,28 @@ async def test_the_arrange_overlay_scrolls_on_a_short_terminal() -> None:
         await pilot.press("pagedown")
         await pilot.pause()
         assert body.scroll_y > 0
+
+
+@pytest.mark.anyio
+async def test_a_wide_terminal_gets_a_centred_column_not_a_banner() -> None:
+    """Past ~120 cells the eye loses the line, and the last column's stretch
+    turns into a gap — so the body caps and sits in the middle."""
+    app = TodoistApp(FakeRepository([_row("Buy milk")], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test(size=(200, 24)) as pilot:
+        await pilot.pause()
+
+        for widget in (app.query_one(StatusBand), app.query_one(TaskTable)):
+            assert widget.region.width == 120
+            assert widget.region.x == (200 - 120) // 2
+
+
+@pytest.mark.anyio
+async def test_a_terminal_under_the_cap_keeps_every_cell() -> None:
+    app = TodoistApp(FakeRepository([_row("Buy milk")], []), clock=FakeClock(_TODAY))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+
+        table = app.query_one(TaskTable)
+        assert (table.region.x, table.region.width) == (0, 80)

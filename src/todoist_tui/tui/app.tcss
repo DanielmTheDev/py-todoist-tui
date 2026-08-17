@@ -5,6 +5,17 @@
    bands read as noise, and a rule that runs edge to edge lines up with the group
    dividers inside the table. */
 
+/* A list is a column of text, not a banner: past ~120 cells the eye loses the
+   line back to the next one, and the last column's stretch becomes a gap. */
+Screen {
+    align-horizontal: center;
+}
+
+StatusBand, ColumnHeader, TaskTable, Rule {
+    width: 100%;
+    max-width: 120;
+}
+
 #status, #columns {
     background: transparent;
     height: 1;
