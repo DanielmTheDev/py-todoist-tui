@@ -447,3 +447,44 @@ async def test_the_results_fit_a_terminal_shorter_than_their_cap() -> None:
         await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
         await pilot.pause()
         assert host.screen.query_one("#search-hint", Static).region.bottom <= 7
+
+
+class _Recording(_Instant):
+    """Records every paint, so a paint after closing is visible to the test."""
+
+    painted: list[str]
+
+    def __init__(self, find: Find, today: datetime.date) -> None:
+        super().__init__(find, today)
+        self.painted = []
+
+    def _paint(self, rows: list[TaskRow], term: SearchTerm) -> None:
+        self.painted.append(term.text)
+        super()._paint(rows, term)
+
+
+class _ClosingFind:
+    """Closes the screen while its own request is in flight, the way Escape or
+    Enter lands between the request and its answer."""
+
+    def __init__(self) -> None:
+        self.screen: SearchScreen | None = None
+
+    async def __call__(self, term: SearchTerm) -> list[TaskRow]:
+        assert self.screen is not None
+        self.screen.action_cancel()
+        return [_row(f"hit {term.text}")]
+
+
+@pytest.mark.anyio
+async def test_a_search_answered_after_closing_never_paints() -> None:
+    find = _ClosingFind()
+    host = _Host(find, lambda _t: None, screen=_Recording)
+    async with host.run_test() as pilot:
+        screen = host.screen
+        assert isinstance(screen, _Recording)
+        find.screen = screen
+        await pilot.press("m", "i")
+        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert screen.painted == []

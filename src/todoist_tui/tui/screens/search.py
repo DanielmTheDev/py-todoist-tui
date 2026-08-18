@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar
 
 from rich.rule import Rule
@@ -105,14 +106,19 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
     @work(exclusive=True, group="search")
     async def _search(self, term: SearchTerm) -> None:
         await asyncio.sleep(self.DEBOUNCE)  # the next keystroke cancels this worker
+        show = await self._answer(term)
+        if self.is_active:  # Enter or Escape beat the answer: our widgets are going
+            show()
+
+    async def _answer(self, term: SearchTerm) -> Callable[[], None]:
+        """What the screen would show, deferred so nothing is drawn mid-request."""
         try:
             rows = await self._find(term)
         except InvalidSearchQuery:
-            self._clear("Invalid search query")
+            return partial(self._clear, "Invalid search query")
         except Exception as error:  # offline or the request failed
-            self._clear(f"Search failed: {error}")
-        else:
-            self._paint(rows, term)
+            return partial(self._clear, f"Search failed: {error}")
+        return partial(self._paint, rows, term)
 
     def _paint(self, rows: list[TaskRow], term: SearchTerm) -> None:
         options = self._reset(_count_hint(len(rows)))
