@@ -5219,7 +5219,7 @@ async def test_pressing_p_opens_the_views_screen() -> None:
             str(options.get_option_at_index(i).prompt)
             for i in range(options.option_count)
         ]
-        assert labels == ["My Filter (filter)", "Work (project)", "Today", "Inbox"]
+        assert labels == ["⚑ My Filter", "# Work", "Today", "Inbox"]
 
 
 @pytest.mark.anyio

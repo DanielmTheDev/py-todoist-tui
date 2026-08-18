@@ -15,6 +15,8 @@ from todoist_tui.domain.view_slots import ViewSlots
 
 _HINT = "ctrl+b bind key · ctrl+s startup · enter open · esc close"
 
+_SIGILS = {"project": "#", "filter": "⚑"}
+
 
 @dataclass(frozen=True, slots=True)
 class ViewsOutcome:
@@ -197,23 +199,28 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
     def _option(self, view: View) -> Option:
         # Text, not a plain string: a view name or a `[w]` badge would otherwise be
         # read as markup and painted as nothing
-        return Option(Text(self._label(view)))
+        return Option(self._label(view))
 
-    def _label(self, view: View) -> str:
+    def _label(self, view: View) -> Text:
         key = self._slots.key_for(view.key)
-        parts = [
-            "★" if self._slots.startup == view.key else "",
-            f"[{key}]" if key is not None else "",
-            view.title + _kind(view),
-        ]
-        return " ".join(part for part in parts if part)
+        label = Text()
+        if self._slots.startup == view.key:
+            label.append("★ ")
+        if key is not None:
+            label.append(f"[{key}] ")
+        sigil = _sigil(view)
+        if sigil:
+            label.append(f"{sigil} ", style="dim")  # the kind recedes, the name leads
+        label.append(view.title)
+        return label
 
     def _hint(self, text: str) -> None:
         self.query_one("#views-hint", Static).update(Text(text))
 
 
-def _kind(view: View) -> str:
-    """ " (project)" / " (filter)" — two views can share a name, the key tells them
-    apart. Today and Inbox are one of a kind, so they carry nothing."""
+def _sigil(view: View) -> str:
+    """The kind marker a title carries — two views can share a name. `#` is
+    Todoist's own project sigil, so it reads without being learnt. Today and Inbox
+    are one of a kind, so they carry nothing."""
     prefix, _, _ = view.key.partition(":")
-    return f" ({prefix})" if prefix != view.key else ""
+    return _SIGILS.get(prefix, "")

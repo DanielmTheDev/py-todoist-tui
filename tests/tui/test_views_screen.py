@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 
 import pytest
+from rich.text import Text
 from textual.app import App
 from textual.content import Content
 from textual.visual import visualize
@@ -66,22 +67,39 @@ def _only(outcomes: list[ViewsOutcome | None]) -> ViewsOutcome:
     return outcomes[0]
 
 
+def _spans(host: _Host, index: int) -> list[tuple[str, str]]:
+    """The styled runs of an option's label, so a test can assert which part recedes
+    without naming a colour. Unstyled runs are absent."""
+    prompt = host.screen.query_one(OptionList).get_option_at_index(index).prompt
+    assert isinstance(prompt, Text)
+    return [(prompt.plain[s.start : s.end], str(s.style)) for s in prompt.spans]
+
+
 def _hint(host: _Host) -> str:
     return str(host.screen.query_one("#views-hint", Static).render())
 
 
 @pytest.mark.anyio
-async def test_lists_every_view_with_its_kind() -> None:
+async def test_a_sigil_marks_each_view_s_kind() -> None:
     host = _Host(lambda _o: None)
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == [
-            "Next (filter)",
-            "Work (project)",
-            "Backlog (project)",
-            "Today",
+            "⚑ Next",
+            "# Work",
+            "# Backlog",
+            "Today",  # one of a kind: nothing to tell it apart from
             "Inbox",
         ]
+
+
+@pytest.mark.anyio
+async def test_the_sigil_recedes_and_the_name_leads() -> None:
+    host = _Host(lambda _o: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host)[0] == "⚑ Next"
+        assert _spans(host, 0) == [("⚑ ", "dim")]  # the name carries no style
 
 
 @pytest.mark.anyio
@@ -91,9 +109,9 @@ async def test_assigned_views_lead_the_list_badged_and_starred() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == [
-            "[w] Next (filter)",
-            "★ Work (project)",
-            "Backlog (project)",
+            "[w] ⚑ Next",
+            "★ # Work",
+            "# Backlog",
             "Today",
             "Inbox",
         ]
@@ -104,7 +122,7 @@ async def test_a_badge_survives_being_painted() -> None:
     host = _Host(lambda _o: None, ViewSlots().assign("w", "project:9"))
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _painted(host)[0] == "[w] Work (project)"
+        assert _painted(host)[0] == "[w] # Work"
 
 
 @pytest.mark.anyio
@@ -114,7 +132,7 @@ async def test_typing_filters_by_title() -> None:
         await pilot.pause()
         await pilot.press("b", "a", "c")  # "bac" only in "Backlog"
         await pilot.pause()
-        assert _labels(host) == ["Backlog (project)"]
+        assert _labels(host) == ["# Backlog"]
 
 
 @pytest.mark.anyio
@@ -166,7 +184,7 @@ async def test_binding_a_free_key_badges_the_row() -> None:
 
         await pilot.press("w")
         await pilot.pause()
-        assert "[w] Work (project)" in _labels(host)
+        assert "[w] # Work" in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -182,7 +200,7 @@ async def test_a_punctuation_key_is_shown_as_the_character_typed() -> None:
         await pilot.pause()
         await pilot.press("ctrl+b", "full_stop")
         await pilot.pause()
-        assert _labels(host)[0] == "[.] Next (filter)"
+        assert _labels(host)[0] == "[.] ⚑ Next"
 
         await pilot.press("escape")
         await pilot.pause()
@@ -199,7 +217,7 @@ async def test_typing_resumes_filtering_after_a_key_is_bound() -> None:
         await pilot.pause()
         await pilot.press("b", "a", "c")
         await pilot.pause()
-        assert _labels(host) == ["Backlog (project)"]
+        assert _labels(host) == ["# Backlog"]
 
 
 @pytest.mark.anyio
@@ -211,7 +229,7 @@ async def test_binding_a_key_an_app_binding_owns_is_refused() -> None:
         await pilot.press("ctrl+b", "t")
         await pilot.pause()
         assert "t is already Due" in _hint(host)
-        assert _labels(host)[0] == "Next (filter)"
+        assert _labels(host)[0] == "⚑ Next"
 
         await pilot.press("escape")  # a refusal keeps waiting, so this only cancels
         await pilot.press("escape")
@@ -241,11 +259,11 @@ async def test_backspace_during_capture_unbinds_the_row() -> None:
     host = _Host(outcomes.append, ViewSlots().assign("w", "project:9"))
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host)[0] == "[w] Work (project)"
+        assert _labels(host)[0] == "[w] # Work"
 
         await pilot.press("ctrl+b", "backspace")
         await pilot.pause()
-        assert "Work (project)" in _labels(host)
+        assert "# Work" in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -276,7 +294,7 @@ async def test_ctrl_s_marks_the_highlighted_view_as_startup() -> None:
         await pilot.press("down")  # Work
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert "★ Work (project)" in _labels(host)
+        assert "★ # Work" in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -291,7 +309,7 @@ async def test_ctrl_s_on_the_startup_view_drops_it() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")  # the leading filter is highlighted first
         await pilot.pause()
-        assert _labels(host)[0] == "Next (filter)"
+        assert _labels(host)[0] == "⚑ Next"
 
         await pilot.press("escape")
         await pilot.pause()
