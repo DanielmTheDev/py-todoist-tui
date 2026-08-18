@@ -6228,3 +6228,123 @@ async def test_a_project_view_does_not_repeat_its_own_name() -> None:
         assert _cell(app.query_one(TaskTable), 0, "PROJECT") is None
         assert _status(app).startswith("Errands · 1 task(s)")
         assert _status(app).count("Errands") == 1
+
+
+@pytest.mark.anyio
+async def test_nesting_a_task_clears_its_due_date() -> None:
+    """A dated subtask still shows on its own in the phone app's dated views."""
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+        assert repo.dues == [(TaskId("kid"), None)]
+        assert str(_cell(app.query_one(TaskTable), 1, "DUE")) == ""
+
+
+@pytest.mark.anyio
+async def test_nesting_clears_the_due_date_of_every_selected_dated_task() -> None:
+    dateless = replace(_row("kid2"), due=None)
+    repo = FakeRepository(
+        [_row("kid1"), dateless, _row("parent")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "Errands")  # Today would hide the dateless task
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("x", "x")  # select both kids: each mark moves on a row
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("2")  # the only candidate left is the parent
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid1"), "parent"), (TaskId("kid2"), "parent")]
+        assert repo.dues == [(TaskId("kid1"), None)]  # the dateless one is left alone
+
+
+@pytest.mark.anyio
+async def test_the_picker_toggle_nests_without_touching_the_due_date() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("ctrl+t")
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.parents == [(TaskId("kid"), "parent")]
+        assert repo.dues == []
+
+
+@pytest.mark.anyio
+async def test_un_parenting_keeps_the_due_date() -> None:
+    """A top-level task without a date shows in no dated view at all."""
+    repo = FakeRepository(
+        [_row("parent"), _row("kid", parent_id="parent")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        await pilot.press("j")
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("enter")  # top level
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("kid"), "220", None)]
+        assert repo.dues == []
+
+
+@pytest.mark.anyio
+async def test_undo_brings_a_cleared_due_date_back_with_the_task() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("parent")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("V")
+        await pilot.pause()
+        await pilot.press("p", "a", "r")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        await pilot.press("z")
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        was = _row("kid").due
+        assert repo.dues == [(TaskId("kid"), None), (TaskId("kid"), was)]
+        assert repo.moves == [(TaskId("kid"), "220", None)]  # lifted back out
+        assert str(_cell(app.query_one(TaskTable), 0, "DUE")) != ""

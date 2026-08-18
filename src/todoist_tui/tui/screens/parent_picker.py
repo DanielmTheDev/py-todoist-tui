@@ -17,15 +17,22 @@ _TOP_LEVEL = "— No parent (top level)"
 
 @dataclass(frozen=True, slots=True)
 class ParentTarget:
-    """The task a move nests under; None puts it back at its project's top level."""
+    """The task a move nests under; None puts it back at its project's top level.
+
+    `clear_due` asks for the moved tasks' due dates to go with the move: a dated
+    subtask still surfaces on its own in the phone app's dated views, which is
+    what nesting it was meant to stop.
+    """
 
     row: TaskRow | None
+    clear_due: bool = True
 
 
 class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
     """Pick the task to nest under by typing, or by the number the row carries. The
     top-level entry heads the list and survives every filter, so un-parenting is
-    always one keystroke away. Dismisses the chosen `ParentTarget`, or None on
+    always one keystroke away. `ctrl+t` keeps the moved tasks' due dates, which
+    the move drops by default. Dismisses the chosen `ParentTarget`, or None on
     cancel."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -57,6 +64,7 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
         self._rows = rows
         self._visible = list(rows)
         self._placeholder = placeholder
+        self._clear_due = True
 
     def compose(self) -> ComposeResult:
         yield PickFilter(placeholder=self._placeholder)
@@ -64,8 +72,15 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
+        self._show_clear_due()
 
     def on_key(self, event: events.Key) -> None:
+        # `ctrl+t`, not `ctrl+d`: the focused filter binds that to delete-right
+        if event.key == "ctrl+t":
+            event.stop()
+            self._clear_due = not self._clear_due
+            self._show_clear_due()
+            return
         index = row_for_key(event.key)
         # one row more than `_visible`: the top-level entry heads the list as index 0
         if index is None or index > len(self._visible):
@@ -93,6 +108,12 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def _show_clear_due(self) -> None:
+        """On the filter's border rather than in a widget of its own: a sibling
+        below the list costs it rows on a short terminal."""
+        state = "ON" if self._clear_due else "OFF"
+        self.query_one(Input).border_title = f"clear due: {state} · ctrl+t"
+
     def _options(self) -> list[Option]:
         labels = numbered([_TOP_LEVEL] + [_label(r) for r in self._visible])
         return [Option(label) for label in labels]
@@ -105,7 +126,7 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
 
     def _dismiss_at(self, index: int) -> None:
         row = None if index == 0 else self._visible[index - 1]
-        self.dismiss(ParentTarget(row))
+        self.dismiss(ParentTarget(row, self._clear_due))
 
 
 def _label(row: TaskRow) -> str:

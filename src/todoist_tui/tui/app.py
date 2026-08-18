@@ -1196,8 +1196,16 @@ class TodoistApp(App[None]):
                 if parent is not None
                 else self._where_it_was_step(row)
             )
-            if forward is not None:
-                work.append((forward, self._restore_parent_step(row)))
+            if forward is None:
+                continue
+            work.append((forward, self._restore_parent_step(row)))
+            # a dated subtask still surfaces on its own in the phone app's dated
+            # views; un-parenting is left alone — dateless, it would show nowhere
+            if parent is not None and target.clear_due and row.due is not None:
+                task_id = str(row.id)
+                work.append(
+                    (self._due_step(task_id, None), self._due_step(task_id, row.due))
+                )
         self._queue(work)
 
     def _parent_step(self, row: TaskRow, parent: TaskRow) -> Step:

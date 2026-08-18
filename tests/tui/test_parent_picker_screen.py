@@ -185,3 +185,63 @@ async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
         options = host.screen.query_one(OptionList)
         assert options.region.bottom <= 5
         assert options.max_scroll_y > 0
+
+
+def _title(host: _Host) -> str:
+    return str(host.screen.query_one(Input).border_title)
+
+
+@pytest.mark.anyio
+async def test_a_pick_clears_the_due_dates_unless_told_otherwise() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        assert chosen == [ParentTarget(_ROWS[0], clear_due=True)]
+
+
+@pytest.mark.anyio
+async def test_the_toggle_keeps_the_due_dates() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+t")
+        await pilot.press("2")
+        await pilot.pause()
+        assert chosen == [ParentTarget(_ROWS[0], clear_due=False)]
+
+
+@pytest.mark.anyio
+async def test_the_toggle_flips_back() -> None:
+    chosen: list[ParentTarget | None] = []
+    host = _Host(_ROWS, chosen.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+t", "ctrl+t")
+        await pilot.press("2")
+        await pilot.pause()
+        assert chosen == [ParentTarget(_ROWS[0], clear_due=True)]
+
+
+@pytest.mark.anyio
+async def test_the_filter_box_names_the_state_of_the_toggle() -> None:
+    host = _Host(_ROWS, lambda _t: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _title(host) == "clear due: ON · ctrl+t"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert _title(host) == "clear due: OFF · ctrl+t"
+
+
+@pytest.mark.anyio
+async def test_the_toggle_never_reaches_the_filter() -> None:
+    host = _Host(_ROWS, lambda _t: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("d", "o", "ctrl+t")
+        await pilot.pause()
+        assert host.screen.query_one(Input).value == "do"
