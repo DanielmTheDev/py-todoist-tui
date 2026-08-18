@@ -27,6 +27,7 @@ from todoist_tui.tui.format import (
     match_snippet,
     priority_dot,
 )
+from todoist_tui.tui.screens.scrolling import PickList
 
 PREVIEW_LIMIT = 50  # the promoted view shows everything; this is just a peek
 _SNIPPET_WIDTH = 32  # of description context: a hint, not a sentence
@@ -56,8 +57,6 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
     SearchScreen OptionList {
         width: 60%;
         max-width: 80;
-        height: auto;
-        max-height: 60%;
         border: round $primary;
         text-wrap: nowrap;
         text-overflow: ellipsis;
@@ -80,7 +79,7 @@ class SearchScreen(ModalScreen["SearchTerm | None"]):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Type to search…")
-        yield OptionList()
+        yield PickList()
         yield Static("", id="search-hint")
 
     def on_mount(self) -> None:

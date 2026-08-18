@@ -200,6 +200,34 @@ async def test_a_help_list_taller_than_the_terminal_scrolls() -> None:
 
 
 @pytest.mark.anyio
+async def test_the_help_box_fits_a_terminal_shorter_than_its_cap() -> None:
+    """The filter box sits beside the list, and a percentage cap is measured
+    against the screen alone — so the box's bottom fell off a short terminal."""
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test(size=(80, 10)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        scroll = app.screen.query_one(VerticalScroll)
+        assert scroll.region.bottom <= 10
+        assert scroll.max_scroll_y > 0
+
+
+@pytest.mark.anyio
+async def test_shrinking_the_terminal_refits_the_open_help_box() -> None:
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.resize_terminal(80, 8)
+        await pilot.pause()
+
+        assert app.screen.query_one(VerticalScroll).region.bottom <= 8
+
+
+@pytest.mark.anyio
 async def test_the_help_list_scrolls_by_key() -> None:
     """The filter box holds focus, so the list needs keys of its own."""
     app = TodoistApp(FakeRepository([], []))

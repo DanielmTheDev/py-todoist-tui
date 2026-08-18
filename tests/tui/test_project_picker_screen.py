@@ -233,3 +233,15 @@ async def test_a_digit_past_the_last_row_is_a_noop() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert chosen == [None]
+
+
+@pytest.mark.anyio
+async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
+    """The filter box sits beside the list, and a percentage cap is measured
+    against the screen alone — so the list's bottom fell off a short terminal."""
+    host = _Host(_PROJECTS, _SECTIONS, lambda _t: None)
+    async with host.run_test(size=(80, 5)) as pilot:
+        await pilot.pause()
+        options = host.screen.query_one(OptionList)
+        assert options.region.bottom <= 5
+        assert options.max_scroll_y > 0

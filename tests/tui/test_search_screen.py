@@ -431,3 +431,19 @@ async def test_a_link_in_a_title_shows_its_label() -> None:
         prompt = str(_options(host)[0].prompt)
         assert "Schuhe bestellen" in prompt
         assert "example.com" not in prompt
+
+
+@pytest.mark.anyio
+async def test_the_results_fit_a_terminal_shorter_than_their_cap() -> None:
+    """The filter box and the hint sit beside the results, and a percentage cap
+    is measured against the screen alone — so the hint below them fell off."""
+
+    async def many(_term: SearchTerm) -> list[TaskRow]:
+        return [_row(f"hit {i}") for i in range(8)]
+
+    host = _Host(many, lambda _t: None)
+    async with host.run_test(size=(80, 7)) as pilot:
+        await pilot.press("m", "i")
+        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+        assert host.screen.query_one("#search-hint", Static).region.bottom <= 7

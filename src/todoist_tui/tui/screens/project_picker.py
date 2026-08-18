@@ -11,6 +11,7 @@ from textual.widgets.option_list import Option
 from todoist_tui.domain.project import Project, sorted_projects
 from todoist_tui.domain.section import Section, sorted_sections
 from todoist_tui.tui.screens.picking import PickFilter, numbered, row_for_key
+from todoist_tui.tui.screens.scrolling import PickList
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +47,6 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
     ProjectPickerScreen OptionList {
         width: 60%;
         max-width: 80;
-        height: auto;
-        max-height: 60%;
         border: round $primary;
     }
     """
@@ -66,7 +65,7 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
 
     def compose(self) -> ComposeResult:
         yield PickFilter(placeholder=self._placeholder)
-        yield OptionList(*_options(self._targets))
+        yield PickList(*_options(self._targets))
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()

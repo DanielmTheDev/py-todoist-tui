@@ -10,6 +10,7 @@ from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.tui.screens.picking import PickFilter, numbered, row_for_key
+from todoist_tui.tui.screens.scrolling import PickList
 
 _TOP_LEVEL = "— No parent (top level)"
 
@@ -45,8 +46,6 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
     ParentPickerScreen OptionList {
         width: 60%;
         max-width: 80;
-        height: auto;
-        max-height: 60%;
         border: round $primary;
     }
     """
@@ -61,7 +60,7 @@ class ParentPickerScreen(ModalScreen["ParentTarget | None"]):
 
     def compose(self) -> ComposeResult:
         yield PickFilter(placeholder=self._placeholder)
-        yield OptionList(*self._options())
+        yield PickList(*self._options())
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()

@@ -155,3 +155,15 @@ async def test_current_label_absent_from_catalog_is_shown_checked() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert "[x] orphan" in _prompts(host)
+
+
+@pytest.mark.anyio
+async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
+    """The header sits beside the list, and a percentage cap is measured against
+    the screen alone — so the list's bottom fell off a short terminal."""
+    host = _Host(_LABELS, (), lambda _r: None)
+    async with host.run_test(size=(80, 5)) as pilot:
+        await pilot.pause()
+        ol = host.screen.query_one(OptionList)
+        assert ol.region.bottom <= 5
+        assert ol.max_scroll_y > 0

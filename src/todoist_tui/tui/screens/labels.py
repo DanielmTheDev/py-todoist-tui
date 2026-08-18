@@ -8,6 +8,8 @@ from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from todoist_tui.tui.screens.scrolling import PickList
+
 
 class LabelsScreen(ModalScreen["tuple[str, ...] | None"]):
     """Toggle a task's labels. Dismisses the chosen set, or None on cancel.
@@ -33,8 +35,6 @@ class LabelsScreen(ModalScreen["tuple[str, ...] | None"]):
     LabelsScreen OptionList {
         width: 60%;
         max-width: 80;
-        height: auto;
-        max-height: 60%;
         border: round $primary;
     }
     """
@@ -49,7 +49,7 @@ class LabelsScreen(ModalScreen["tuple[str, ...] | None"]):
 
     def compose(self) -> ComposeResult:
         yield Static(id="labels-header")
-        options = OptionList()
+        options = PickList()
         options.can_focus = False  # keep key events on the screen, not the list
         yield options
 

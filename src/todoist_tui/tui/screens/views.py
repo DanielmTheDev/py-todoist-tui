@@ -12,6 +12,7 @@ from textual.widgets.option_list import Option
 
 from todoist_tui.application.views import View
 from todoist_tui.domain.view_slots import ViewSlots
+from todoist_tui.tui.screens.scrolling import PickList
 
 _HINT = "ctrl+b bind key · ctrl+s startup · enter open · esc close"
 
@@ -55,8 +56,6 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
     ViewsScreen OptionList {
         width: 60%;
         max-width: 80;
-        height: auto;
-        max-height: 60%;
         border: round $primary;
     }
     ViewsScreen Static {
@@ -79,7 +78,7 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Type to filter…")
-        yield OptionList(*(self._option(v) for v in self._visible))
+        yield PickList(*(self._option(v) for v in self._visible))
         yield Static(_HINT, id="views-hint")
 
     def on_mount(self) -> None:

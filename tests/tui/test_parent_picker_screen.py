@@ -173,3 +173,15 @@ async def test_a_digit_never_reaches_the_filter() -> None:
             "1 — No parent (top level)",
             "2 Write docs — Personal / Later",
         ]
+
+
+@pytest.mark.anyio
+async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
+    """The filter box sits beside the list, and a percentage cap is measured
+    against the screen alone — so the list's bottom fell off a short terminal."""
+    host = _Host(_ROWS, lambda _t: None)
+    async with host.run_test(size=(80, 5)) as pilot:
+        await pilot.pause()
+        options = host.screen.query_one(OptionList)
+        assert options.region.bottom <= 5
+        assert options.max_scroll_y > 0

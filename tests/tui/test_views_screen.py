@@ -324,3 +324,14 @@ async def test_capture_ignores_a_key_that_types_nothing() -> None:
         await pilot.press("ctrl+b", "f1")
         await pilot.pause()
         assert "Next" in _hint(host)  # still waiting for a usable key
+
+
+@pytest.mark.anyio
+async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
+    """The filter box and the hint sit beside the list, and a percentage cap is
+    measured against the screen alone — so the hint below it fell off."""
+    host = _Host(lambda _o: None)
+    async with host.run_test(size=(80, 9)) as pilot:
+        await pilot.pause()
+        assert host.screen.query_one("#views-hint", Static).region.bottom <= 9
+        assert host.screen.query_one(OptionList).max_scroll_y > 0
