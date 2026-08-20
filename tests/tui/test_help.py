@@ -257,3 +257,25 @@ async def test_help_lists_the_editors_chords_and_the_list_keys_they_echo() -> No
         assert "alt+m" in shown  # reminders, echoing m
         assert "n / V" in shown  # the list still answers to the old key
         assert "m / R" in shown
+
+
+@pytest.mark.anyio
+async def test_f1_opens_help_too_over_the_list_and_over_the_card() -> None:
+    """The editor's fields take `?` as a character, so f1 is help there — and
+    the same key answers everywhere else, not only inside the editor."""
+    app = TodoistApp(FakeRepository([_TASK], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+
+        await pilot.press("escape")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskDetailScreen)
+        await pilot.press("f1")
+        await pilot.pause()
+
+        assert isinstance(app.screen, HelpScreen)
+        assert "Open link" in str(app.screen.query_one("#help", Static).render())

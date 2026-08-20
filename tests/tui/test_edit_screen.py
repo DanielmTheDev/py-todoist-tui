@@ -741,3 +741,45 @@ async def test_naming_a_project_lifts_the_draft_out_of_its_parent() -> None:
         assert edited == [
             TaskDraft("Buy milk", "", project_id="7", project_name="Home")
         ]
+
+
+@pytest.mark.anyio
+async def test_f1_lays_the_editors_shortcuts_over_it() -> None:
+    """The chords used to be spelled out under the fields; they live behind a
+    help overlay now, as every other screen's keys do."""
+    host = _Host("Buy milk", "", lambda _r: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+        shown = str(host.screen.query_one("#help", Static).render())
+
+        assert "alt+t" in shown
+        assert "tab" in shown  # Textual owns the key; help still names it
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(host.screen, TaskEditScreen)
+
+
+@pytest.mark.anyio
+async def test_the_editor_carries_no_key_strip_of_its_own() -> None:
+    host = _Host("Buy milk", "", lambda _r: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+
+        assert not host.screen.query("#chords")
+        assert _hint(host) == "f1 help"
+
+
+@pytest.mark.anyio
+async def test_a_question_mark_is_typed_into_the_title() -> None:
+    """Why the help key is f1 and not `?`: the title field takes the character."""
+    edited: list[TaskDraft | None] = []
+    host = _Host("Buy milk", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert edited == [TaskDraft("Buy milk?", "")]

@@ -107,7 +107,12 @@ from todoist_tui.tui.screens.detail import (
 )
 from todoist_tui.tui.screens.draft import TaskDraft, draft_of
 from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
-from todoist_tui.tui.screens.help import HelpScreen
+from todoist_tui.tui.screens.help import (
+    HelpScreen,
+    as_binding,
+    pressed,
+    shortcut_rows,
+)
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
@@ -135,35 +140,6 @@ _SELECT_MARKER = "▌"  # bar on a multi-selected row
 PENDING_MARK = " ⟳"  # trails a row whose change Todoist hasn't confirmed yet
 
 
-def as_binding(entry: BindingType) -> Binding:
-    """Normalize a Textual binding entry (tuple or `Binding`) to a `Binding`."""
-    if isinstance(entry, Binding):
-        return entry
-    key, action, *rest = entry
-    return Binding(key, action, rest[0] if rest else "")
-
-
-_KEY_SYMBOLS = {"at": "@", "asterisk": "*", "question_mark": "?"}
-
-
-def _pressed(*keys: str) -> str:
-    """The keys as they are printed on the keyboard, not as Textual names them."""
-    return " / ".join(_KEY_SYMBOLS.get(key, key) for key in keys)
-
-
-def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
-    """Flatten Textual binding definitions into (key, description) help rows,
-    dropping entries with no description and the help binding itself. A binding
-    holding several keys ("h,left") lists them all: "h / left"."""
-    rows: list[tuple[str, str]] = []
-    for bindings in binding_lists:
-        for binding in map(as_binding, bindings):
-            if binding.action == "help" or not binding.description:
-                continue
-            rows.append((_pressed(*binding.key.split(",")), binding.description))
-    return rows
-
-
 def card_rows(bindings: list[BindingType]) -> list[tuple[str, str]]:
     """The task card's shortcuts: the list actions it forwards, described as the
     list describes them but keyed as the card reaches them, then what only the
@@ -173,7 +149,7 @@ def card_rows(bindings: list[BindingType]) -> list[tuple[str, str]]:
     for key, action in FORWARDED.items():
         keys.setdefault(action, []).append(key)
     forwarded = [
-        (_pressed(*pressed), described[action]) for action, pressed in keys.items()
+        (pressed(*reached), described[action]) for action, reached in keys.items()
     ]
     return forwarded + shortcut_rows(CARD_BINDINGS)
 
@@ -344,7 +320,8 @@ class TodoistApp(App[None]):
     CSS_PATH = Path(__file__).with_name("app.tcss")
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("question_mark", "help", "Help"),  # the only footer entry
+        # f1 too: inside the editor `?` is a character the fields take
+        Binding("question_mark,f1", "help", "Help"),  # the only footer entry
         Binding("e", "complete", "Complete", show=False),
         Binding("delete", "delete", "Delete", show=False),
         Binding("z", "undo", "Undo", show=False),

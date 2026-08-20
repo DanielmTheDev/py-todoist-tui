@@ -19,6 +19,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.tui.screens.draft import TaskDraft, attribute_strip
+from todoist_tui.tui.screens.help import HelpScreen, shortcut_rows
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
@@ -26,10 +27,10 @@ from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.scrolling import ScrollBody
 
-_CHORDS = (
-    "alt+t due · alt+d deadline · alt+v project · alt+n parent"
-    " · alt+l labels · alt+m reminders · alt+1..4 priority"
-)
+_HELP_HINT = "f1 help"  # `?` is a character here: the fields take it
+# Declared, not bound: Textual moves the focus on tab itself, but help should
+# still name the key that carries it between the fields.
+_UNBOUND: list[BindingType] = [Binding("tab", "focus_next", "Editor: switch field")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     # stays out of the way of typing. Lowercase throughout: a keyboard remapper
     # between here and the terminal can swallow alt+shift.
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("f1", "shortcuts", "Editor: shortcuts"),
         Binding("ctrl+s", "save", "Editor: save"),
         Binding("escape", "cancel", "Editor: cancel"),
         Binding("alt+t", "set_due", "Editor: due", show=False),
@@ -115,7 +117,6 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     TaskEditScreen #hint { padding: 0 1; color: $text-muted; }
     TaskEditScreen #link { padding: 0 1; color: $text-muted; }
     TaskEditScreen #attributes { padding: 0 1; }
-    TaskEditScreen #chords { padding: 0 1; color: $text-muted; }
     """
 
     def __init__(
@@ -145,8 +146,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
             yield Static("Description", classes="label")
             yield DescriptionArea(self._draft.description.strip())
             yield Static(attribute_strip(self._draft, self._today), id="attributes")
-            yield Static(_CHORDS, id="chords")
-            yield Static("tab switch · ctrl+s save · esc cancel", id="hint")
+            yield Static(_HELP_HINT, id="hint")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
@@ -178,6 +178,9 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_shortcuts(self) -> None:
+        self._app.push_screen(HelpScreen(shortcut_rows(self.BINDINGS, _UNBOUND)))
 
     def action_set_due(self) -> None:
         due = self._draft.due if isinstance(self._draft.due, Due) else None
@@ -341,10 +344,13 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
             self._draft = onto(result)
             self._repaint()
 
-        # Textual types `self.app` as App[Unknown]; the pushed screen owns its
-        # own result type, so nothing here depends on the app's.
-        app = cast(
+        self._app.push_screen(screen, taken)
+
+    @property
+    def _app(self) -> App[object]:
+        """Textual types `self.app` as App[Unknown]; a pushed screen owns its own
+        result type, so nothing here depends on the app's."""
+        return cast(
             App[object],
             self.app,  # pyright: ignore[reportUnknownMemberType]
         )
-        app.push_screen(screen, taken)

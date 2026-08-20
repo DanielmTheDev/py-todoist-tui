@@ -38,6 +38,7 @@ _MIN_RULE = 8  # a rule shorter than this reads as debris, not a separator
 FIRST_LINK = 5
 LAST_LINK = 9
 CLOSE_KEYS = ("escape", "enter", "q")
+HELP_KEYS = ("question_mark", "f1")  # f1 as well, since the editor needs it
 # The card is a lid over the list, not a different place: a key that acts on a
 # task there acts on the open task here. The card holds no repository, so it
 # names the app's own action and lets the app run it. `a` is an alias — in the
@@ -232,7 +233,7 @@ class TaskDetailScreen(ModalScreen[str]):
         if page_scrolled(self, event.key):
             event.stop()
             return
-        if event.key == "question_mark":
+        if event.key in HELP_KEYS:
             self.post_message(self.HelpRequested())  # help lays over the card
         elif event.key in CLOSE_KEYS:
             self.dismiss("")

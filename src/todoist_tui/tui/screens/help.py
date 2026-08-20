@@ -9,6 +9,35 @@ from textual.widgets import Input, Static
 from todoist_tui.tui.screens.scrolling import ScrollBody
 
 
+def as_binding(entry: BindingType) -> Binding:
+    """Normalize a Textual binding entry (tuple or `Binding`) to a `Binding`."""
+    if isinstance(entry, Binding):
+        return entry
+    key, action, *rest = entry
+    return Binding(key, action, rest[0] if rest else "")
+
+
+_KEY_SYMBOLS = {"at": "@", "asterisk": "*", "question_mark": "?"}
+
+
+def pressed(*keys: str) -> str:
+    """The keys as they are printed on the keyboard, not as Textual names them."""
+    return " / ".join(_KEY_SYMBOLS.get(key, key) for key in keys)
+
+
+def shortcut_rows(*binding_lists: list[BindingType]) -> list[tuple[str, str]]:
+    """Flatten Textual binding definitions into (key, description) help rows,
+    dropping entries with no description and the help binding itself. A binding
+    holding several keys ("h,left") lists them all: "h / left"."""
+    rows: list[tuple[str, str]] = []
+    for bindings in binding_lists:
+        for binding in map(as_binding, bindings):
+            if binding.action == "help" or not binding.description:
+                continue
+            rows.append((pressed(*binding.key.split(",")), binding.description))
+    return rows
+
+
 class HelpScreen(ModalScreen[None]):
     """Overlay listing every keyboard shortcut. Type to filter; escape closes."""
 
