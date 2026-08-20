@@ -4,6 +4,7 @@ import pytest
 from textual.widgets import DataTable, Input, Static
 
 from tests.tui.test_app import FakeRepository, open_view
+from tests.tui.waiting import settled
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.task import Task, TaskId
@@ -101,7 +102,7 @@ async def test_enter_promotes_the_search_into_a_view() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert not isinstance(app.screen, SearchScreen)
         assert _contents(app) == ["Buy milk"]
@@ -119,11 +120,11 @@ async def test_promoted_search_revalidates_live_on_every_sync() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         repo.refresh_filtered_queries.clear()
 
         await pilot.press("r")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.refresh_filtered_queries == ["search: milk"]
 
@@ -138,13 +139,13 @@ async def test_leaving_a_search_view_stops_refreshing_it() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await open_view(pilot, "today")  # back to Today
         await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
         await pilot.press("r")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.refresh_filtered_queries == []
 
@@ -159,11 +160,11 @@ async def test_tasks_stay_interactive_in_a_search_view() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.completed == [TaskId("Buy milk")]
 
@@ -179,7 +180,7 @@ async def test_rescheduling_keeps_a_still_matching_row_in_place() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         repo.release.clear()  # block the resync that would mask a wrong drop
@@ -203,7 +204,7 @@ async def test_moving_keeps_a_still_matching_row_in_place() -> None:
         await pilot.pause()
         await pilot.press("m", "i", "l", "k")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         repo.release.clear()  # block the resync that would mask a wrong drop
@@ -241,7 +242,7 @@ async def test_a_stored_search_view_reopens_on_startup() -> None:
     app = TodoistApp(repo, slots=slots)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert _contents(app) == ["Buy milk"]
         assert "Search: milk" in _status(app)
@@ -260,6 +261,6 @@ async def test_the_preview_searches_through_the_repository(
         await pilot.press("slash")
         await pilot.pause()
         await pilot.press("m", "i")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.filtered_queries == ["search: mi"]

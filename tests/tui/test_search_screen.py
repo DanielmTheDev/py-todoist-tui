@@ -10,6 +10,7 @@ from textual.pilot import Pilot
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from tests.tui.waiting import settled
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
@@ -100,7 +101,7 @@ async def test_typing_paints_matches_and_their_count() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("m", "i")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert find.terms == ["mi"]
         assert "hit mi" in _labels(host)[0]
@@ -113,7 +114,7 @@ async def test_a_single_character_is_not_searched() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("m")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert find.terms == []
         assert _labels(host) == []
@@ -125,9 +126,9 @@ async def test_backspacing_to_blank_clears_the_results() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("m", "i")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.press("backspace", "backspace")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert _labels(host) == []
         assert _hint(host) == ""
@@ -139,9 +140,9 @@ async def test_a_rejected_character_is_named_and_never_sent() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("a", "b")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.press("&")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert find.terms == ["ab"]  # "ab&" never reached the API
         assert _labels(host) == []
@@ -154,7 +155,7 @@ async def test_enter_dismisses_with_the_typed_term() -> None:
     host = _Host(_Find(), chosen.append)
     async with host.run_test() as pilot:
         await pilot.press("m", "i", "l", "k")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.press("enter")
         await pilot.pause()
         assert chosen == [SearchTerm("milk")]
@@ -167,7 +168,7 @@ async def test_enter_on_an_unsearchable_term_stays_open(typed: str) -> None:
     host = _Host(_Find(), chosen.append)
     async with host.run_test() as pilot:
         await pilot.press(*typed)
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.press("enter")
         await pilot.pause()
         assert chosen == []
@@ -192,7 +193,7 @@ async def test_a_rejected_query_reports_itself_without_a_traceback() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("n", "o")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert _hint(host) == "Invalid search query"
         assert _labels(host) == []
@@ -206,7 +207,7 @@ async def test_being_offline_reports_the_failure() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("n", "o")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert "no route to host" in _hint(host)
         assert _labels(host) == []
@@ -220,7 +221,7 @@ async def test_long_result_sets_are_capped_with_a_remainder_line() -> None:
     host = _Host(find, lambda _t: None)
     async with host.run_test() as pilot:
         await pilot.press("t", "a")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         options = _options(host)
         tasks = [o for o in options if not o.disabled]
@@ -266,7 +267,7 @@ async def test_a_superseded_search_never_paints() -> None:
         await pilot.press("s", "t")  # supersedes the in-flight "te"
         await pilot.pause()
         find.release("te", "test")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert [label.strip() for label in _labels(host)] == ["hit test  Work"]
 
@@ -301,7 +302,7 @@ class _Fixed:
 
 async def _search_for(host: _Host, pilot: Pilot[None], *keys: str) -> None:
     await pilot.press(*keys)
-    await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+    await settled(host)
     await pilot.pause()
 
 
@@ -444,7 +445,7 @@ async def test_the_results_fit_a_terminal_shorter_than_their_cap() -> None:
     host = _Host(many, lambda _t: None)
     async with host.run_test(size=(80, 7)) as pilot:
         await pilot.press("m", "i")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert host.screen.query_one("#search-hint", Static).region.bottom <= 7
 
@@ -485,6 +486,6 @@ async def test_a_search_answered_after_closing_never_paints() -> None:
         assert isinstance(screen, _Recording)
         find.screen = screen
         await pilot.press("m", "i")
-        await host.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(host)
         await pilot.pause()
         assert screen.painted == []

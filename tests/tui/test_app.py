@@ -28,6 +28,7 @@ from tests.tui.tiers import (
     tier_at,
     title_cell,
 )
+from tests.tui.waiting import settled
 from todoist_tui.application.views import TaskRow, View
 from todoist_tui.domain.arrange import (
     Arrangement,
@@ -347,7 +348,7 @@ async def test_the_context_name_leads_and_its_count_recedes() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         band = app.query_one(StatusBand)
         content = band.render()
@@ -364,7 +365,7 @@ async def test_the_arrangement_summary_sits_at_the_right_edge() -> None:
     app = TodoistApp(repo, arrangements=await _grouped_by_project())
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         band = app.query_one(StatusBand)
         content = band.render()
@@ -381,7 +382,7 @@ async def test_a_narrow_band_drops_the_summary_rather_than_wrapping() -> None:
     app = TodoistApp(repo, arrangements=await _grouped_by_project())
     async with app.run_test(size=(24, 24)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert "Group" not in _status(app)
         assert "Today · 1 task(s)" in _status(app)
@@ -414,7 +415,7 @@ async def test_a_long_message_keeps_the_band_one_line() -> None:
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert app.query_one(StatusBand).size.height == 1
 
@@ -433,7 +434,7 @@ async def test_a_bracketed_project_name_reaches_the_status_line_verbatim() -> No
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert "[b]Work" in _status(app)
 
@@ -454,7 +455,7 @@ async def test_selecting_a_row_bars_it_and_accents_only_its_title() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.pause()
 
@@ -473,7 +474,7 @@ async def test_the_marker_slot_keeps_its_width_when_nothing_is_selected() -> Non
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         table = app.query_one(TaskTable)
         before = str(table.get_row_at(0)[0])
@@ -488,7 +489,7 @@ async def test_x_selects_the_cursor_task_and_advances() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.pause()
 
@@ -505,7 +506,7 @@ async def test_x_again_deselects_the_task() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A, cursor -> B
         await pilot.press("k")  # back to A
         await pilot.press("x")  # deselect A
@@ -522,7 +523,7 @@ async def test_select_all_marks_every_task() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("*")
         await pilot.pause()
 
@@ -537,7 +538,7 @@ async def test_escape_clears_the_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("*")
         await pilot.press("escape")
         await pilot.pause()
@@ -555,7 +556,7 @@ async def test_toggling_on_a_group_header_is_a_noop() -> None:
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         table = app.query_one(DataTable[object])
         table.move_cursor(row=0)  # the group header
         await pilot.press("x")
@@ -570,12 +571,12 @@ async def test_completing_applies_to_the_whole_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A, cursor -> B
         await pilot.press("j")  # cursor -> C
         await pilot.press("x")  # select C
         await pilot.press("e")  # complete the selection {A, C}
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert set(repo.completed) == {TaskId("A"), TaskId("C")}
@@ -590,14 +591,14 @@ async def test_undo_restores_the_whole_completed_batch() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
         await pilot.press("e")  # complete {A, C}
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("z")  # undo the batch
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert set(repo.uncompleted) == {TaskId("A"), TaskId("C")}
@@ -613,9 +614,9 @@ async def test_completing_a_parent_takes_its_matching_subtask_with_it() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")  # complete A, the cursor row
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("A")]  # one command closes the subtree
@@ -631,11 +632,11 @@ async def test_undo_reopens_the_subtasks_that_closed_with_the_parent() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")  # complete A, carrying its pulled-in subtree
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.uncompleted == [TaskId("A"), TaskId("sub"), TaskId("deep")]
@@ -650,14 +651,14 @@ async def test_selecting_a_subtask_alongside_its_parent_closes_it_once() -> None
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()  # pyright: ignore[reportUnknownMemberType]
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("l")  # reveal the subtask so it can be selected
         await pilot.press("x")  # select A, cursor -> sub
         await pilot.press("x")  # select sub as well
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("A")]  # the parent's close covers the subtask
@@ -685,18 +686,18 @@ async def test_partial_batch_complete_undoes_only_the_successes() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("j")  # cursor -> B
         await pilot.press("e")  # a prior single completion sets an earlier undo (B)
-        await app.workers.wait_for_complete()
+        await settled(app)
         # now a batch where C fails but A succeeds
         await pilot.press("x")  # select the current task (C)
         await pilot.press("k")  # -> A
         await pilot.press("x")  # select A
         await pilot.press("e")  # batch complete {A, C}; C rejected
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("z")  # undo must reverse A (the success), not the prior B
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert TaskId("A") in repo.uncompleted  # the confirmed close is undoable
@@ -711,9 +712,9 @@ async def test_a_rejected_close_unhides_the_whole_subtree() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")  # rejected: nothing closed, so nothing stays hidden
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("l")  # expand A to see its subtask
         await pilot.pause()
 
@@ -727,11 +728,11 @@ async def test_a_rejected_close_does_not_hold_up_the_rest_of_the_batch() -> None
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()  # pyright: ignore[reportUnknownMemberType]
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("x")  # select A, cursor -> B
         await pilot.press("x")  # select B
         await pilot.press("e")  # A is rejected; B is independent and still closes
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("B")]
@@ -745,7 +746,7 @@ async def test_deleting_a_selection_confirms_with_the_count() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
@@ -754,7 +755,7 @@ async def test_deleting_a_selection_confirms_with_the_count() -> None:
         assert isinstance(app.screen, ConfirmScreen)
         assert "2 tasks" in str(app.screen.query_one("#confirm", Static).render())
         await pilot.press("y")  # confirm
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert set(repo.deleted) == {TaskId("A"), TaskId("C")}
@@ -768,7 +769,7 @@ async def test_cancelling_a_selection_delete_keeps_all_and_the_selection() -> No
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
@@ -787,12 +788,12 @@ async def test_setting_priority_applies_to_the_whole_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
         await pilot.press("1")  # set P1 on the selection
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert set(repo.priorities) == {
@@ -808,7 +809,7 @@ async def test_scheduling_applies_to_the_whole_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
@@ -816,7 +817,7 @@ async def test_scheduling_applies_to_the_whole_selection() -> None:
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)
         await pilot.press("m")  # tomorrow: 2026-07-29
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         tomorrow = Due(date=datetime.date(2026, 7, 29))
@@ -840,12 +841,12 @@ async def test_reminder_add_relative_to_a_task_with_due_time() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("R")  # open the reminders manager
         await pilot.pause()
         assert isinstance(app.screen, RemindersScreen)
         await pilot.press("a", "r", "3", "0", "enter")  # add relative, 30 min before
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
@@ -860,11 +861,11 @@ async def test_reminder_delete_from_the_manager() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("R")
         await pilot.pause()
         await pilot.press("d")  # delete the highlighted reminder
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert repo.deleted_reminders == ["r1"]
@@ -876,14 +877,14 @@ async def test_reminder_add_over_a_selection_hits_each_task() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
         await pilot.press("R")  # add-only flow for the selection
         await pilot.pause()
         await pilot.press("r", "h")  # relative, 1 hour before
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert {(r.item_id, r.minute_offset) for r in repo.added_reminders} == {
@@ -900,13 +901,13 @@ async def test_reminder_relative_over_selection_skips_tasks_without_due_time() -
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("x")  # select B (cursor advanced onto B)
         await pilot.press("R")
         await pilot.pause()
         await pilot.press("r", "h")  # relative, 1 hour before
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert {r.item_id for r in repo.added_reminders} == {"A"}
@@ -920,13 +921,13 @@ async def test_reminder_relative_with_no_eligible_task_reports() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("x")  # select B
         await pilot.press("R")
         await pilot.pause()
         await pilot.press("r", "h")  # relative, 1 hour before
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert repo.added_reminders == []
@@ -939,14 +940,14 @@ async def test_reminder_add_absolute_picks_a_date() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("R")
         await pilot.pause()
         await pilot.press("a", "a")  # add -> absolute -> opens the date picker
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)
         await pilot.press("m")  # tomorrow: 2026-07-29
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         (reminder,) = repo.added_reminders
@@ -963,7 +964,7 @@ async def test_reminder_bell_rides_along_the_due_cell() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
 
         table = app.query_one(DataTable[object])
         assert "Rem" not in [str(c.label) for c in table.ordered_columns]
@@ -980,7 +981,7 @@ async def test_two_reminders_show_a_count() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
 
         table = app.query_one(DataTable[object])
         assert "•2" in str(_cell(table, 0, "Due"))
@@ -1005,7 +1006,7 @@ async def test_a_reminder_alone_keeps_the_due_column() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
 
         table = app.query_one(DataTable[object])
         assert str(_cell(table, 0, "Due")) == "•"
@@ -1017,7 +1018,7 @@ async def test_setting_deadline_applies_to_the_whole_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
@@ -1025,7 +1026,7 @@ async def test_setting_deadline_applies_to_the_whole_selection() -> None:
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)
         await pilot.press("m")  # tomorrow
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         by = Deadline(date=datetime.date(2026, 7, 29))
@@ -1042,7 +1043,7 @@ async def test_moving_applies_to_the_whole_selection() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("x")  # select B (cursor already on B)
         await pilot.press("v")  # one project picker for the selection
@@ -1050,7 +1051,7 @@ async def test_moving_applies_to_the_whole_selection() -> None:
         assert isinstance(app.screen, ProjectPickerScreen)
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert set(repo.moves) == {(TaskId("A"), "9", None), (TaskId("B"), "9", None)}
@@ -1066,7 +1067,7 @@ async def test_duplicate_project_copies_it_under_a_new_name() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("Y")  # open the duplicate picker
         await pilot.pause()
         assert isinstance(app.screen, ProjectPickerScreen)
@@ -1074,7 +1075,7 @@ async def test_duplicate_project_copies_it_under_a_new_name() -> None:
         await pilot.pause()
         assert isinstance(app.screen, TextPromptScreen)
         await pilot.press("enter")  # accept the "Work (copy)" default
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert len(repo.applied) == 1
@@ -1101,7 +1102,7 @@ async def test_duplicate_section_copies_its_tasks_into_the_project() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("Y")
         await pilot.pause()
         await pilot.press("down")  # Work -> Work / Planning
@@ -1109,7 +1110,7 @@ async def test_duplicate_section_copies_its_tasks_into_the_project() -> None:
         await pilot.pause()
         assert isinstance(app.screen, TextPromptScreen)
         await pilot.press("enter")  # accept "Planning (copy)"
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert len(repo.applied) == 1
@@ -1142,7 +1143,7 @@ async def test_delete_section_removes_it_after_confirmation() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("D")  # open the section picker
         await pilot.pause()
         assert isinstance(app.screen, ProjectPickerScreen)
@@ -1150,7 +1151,7 @@ async def test_delete_section_removes_it_after_confirmation() -> None:
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert repo.deleted_sections == ["s1"]
@@ -1162,7 +1163,7 @@ async def test_delete_section_cancelled_at_the_confirmation_deletes_nothing() ->
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("D")
         await pilot.pause()
         await pilot.press("enter")
@@ -1197,7 +1198,7 @@ async def test_delete_section_load_failure_is_surfaced_and_releases_the_guard() 
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         repo.offline = True
         await pilot.press("D")
         await pilot.pause()
@@ -1228,13 +1229,13 @@ async def test_delete_section_failure_is_surfaced() -> None:
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("D")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("y")
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to delete section: boom" in _status(app)
@@ -1254,7 +1255,7 @@ async def test_labels_over_a_selection_add_to_each_task() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.press("x")  # select A
         await pilot.press("j")
         await pilot.press("x")  # select C
@@ -1264,7 +1265,7 @@ async def test_labels_over_a_selection_add_to_each_task() -> None:
         await pilot.press("down")  # highlight "urgent" (sorted: home, urgent, work)
         await pilot.press("space")  # add it
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
+        await settled(app)
         await pilot.pause()
 
         added = {task_id: labels for task_id, labels, _ in repo.label_edits}
@@ -1288,12 +1289,12 @@ async def test_selecting_a_filter_from_views_revalidates_in_background() -> None
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("p")
         await pilot.pause()
         await pilot.press("enter")  # My Filter leads the list
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert "p1" in repo.refresh_filtered_queries
         assert "⟳" not in _status(app)  # sync indicator cleared after revalidation
@@ -1307,18 +1308,18 @@ async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("p")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await open_view(pilot, "today")  # back to Today clears the active filter
         await pilot.pause()
         repo.refresh_filtered_queries.clear()
 
         await pilot.press("r")  # force a sync
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.refresh_filtered_queries == []
 
@@ -1357,10 +1358,10 @@ async def test_pressing_r_forces_resync() -> None:
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         before = repo.refresh_calls  # 1 from the startup sync
         await pilot.press("r")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.refresh_calls == before + 1
 
@@ -1477,7 +1478,7 @@ async def test_the_cursor_highlights_the_whole_line() -> None:
 
     async with app.run_test(size=(80, 12)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         cursor, plain = _row_backgrounds(app, 0), _row_backgrounds(app, 1)
         assert len(cursor) == 1  # one unbroken tint, edge to edge
@@ -1776,7 +1777,7 @@ async def test_pressing_e_completes_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 1
         reloads = repo.today_calls
@@ -1784,7 +1785,7 @@ async def test_pressing_e_completes_optimistically() -> None:
         await pilot.press("e")
         # optimistic: row is gone before the network command resolves
         assert app.query_one(DataTable[object]).row_count == 0
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("6X4")]
@@ -1808,7 +1809,7 @@ async def test_pressing_delete_cancelled_keeps_the_task() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("delete")
         assert isinstance(app.screen, ConfirmScreen)  # confirm before deleting
@@ -1834,13 +1835,13 @@ async def test_pressing_delete_confirmed_deletes_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("delete")
         await pilot.press("y")  # confirm
         # optimistic: row is gone before the network command resolves
         assert app.query_one(DataTable[object]).row_count == 0
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.deleted == [TaskId("6X4")]
@@ -1886,11 +1887,11 @@ async def test_rescheduling_out_of_today_never_flashes_the_row_back() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")  # tomorrow: it leaves Today
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues == [(TaskId("6X4"), Due(date=_TOMORROW))]
@@ -1909,9 +1910,9 @@ async def test_completing_never_flashes_the_row_back() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("A")]
@@ -1950,7 +1951,7 @@ async def test_sync_indicator_shows_while_syncing_then_clears() -> None:
         await pilot.pause()  # startup sync started, blocked in refresh()
         assert "⟳" in status()
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert "⟳" not in status()
 
@@ -1965,10 +1966,10 @@ async def test_periodic_poll_resyncs() -> None:
     app = FastPollApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         before = repo.refresh_calls  # 1 from the startup sync
         await pilot.pause(0.2)  # let a few poll ticks fire
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert repo.refresh_calls > before
 
 
@@ -1999,7 +2000,7 @@ async def test_pressing_digit_sets_priority_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert priority_of(app.query_one(TaskTable), 0) is None  # P4: no dot
         syncs = repo.refresh_calls
@@ -2007,7 +2008,7 @@ async def test_pressing_digit_sets_priority_optimistically() -> None:
         await pilot.press("1")
         # optimistic: the dot repaints before the network command resolves
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
@@ -2028,12 +2029,12 @@ async def test_pressing_4_clears_the_priority_dot() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
 
         await pilot.press("4")
         assert priority_of(app.query_one(TaskTable), 0) is None  # P4: no dot
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("6X4"), Priority.P4)]
@@ -2058,7 +2059,7 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         table = app.query_one(TaskTable)
         assert "P4" in _content_col(table)[0]  # starts under the P4 header
         await pilot.press("j")  # move cursor onto the task
@@ -2074,7 +2075,7 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
         assert _title(table, table.cursor_row).strip() == "Buy milk ⟳"  # <-
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
 
 
@@ -2128,7 +2129,7 @@ async def test_set_priority_failure_is_surfaced_and_resyncs() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("1")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to set priority: boom" in str(
@@ -2192,7 +2193,7 @@ async def test_priority_survives_a_sync_that_began_before_the_command_landed() -
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         await pilot.press("1")
@@ -2203,7 +2204,7 @@ async def test_priority_survives_a_sync_that_began_before_the_command_landed() -
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.priorities == [(TaskId("6X4"), Priority.P1)]
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P1
@@ -2223,7 +2224,7 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         await pilot.press("1")
@@ -2231,7 +2232,7 @@ async def test_rapid_priority_sets_settle_on_the_last_value() -> None:
         assert priority_of(app.query_one(TaskTable), 0) is Priority.P2
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [  # in the order they were pressed, never swapped
@@ -2259,7 +2260,7 @@ async def test_due_survives_a_sync_that_began_before_the_command_landed() -> Non
         await pilot.pause()
         # the Work project view: a due change cannot evict a row from it
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("t")
         await pilot.pause()
@@ -2270,7 +2271,7 @@ async def test_due_survives_a_sync_that_began_before_the_command_landed() -> Non
         assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Tomorrow"
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
 
@@ -2289,7 +2290,7 @@ async def test_deadline_survives_a_sync_that_began_before_the_command_landed() -
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("m")  # tomorrow
@@ -2299,7 +2300,7 @@ async def test_deadline_survives_a_sync_that_began_before_the_command_landed() -
         assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.deadlines == [(TaskId("6X4"), Deadline(date=_TOMORROW))]
 
@@ -2314,7 +2315,7 @@ async def test_move_survives_a_sync_that_began_before_the_command_landed() -> No
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("v")
         await pilot.pause()
         await pilot.press("w", "o")  # narrow to "Work"
@@ -2325,7 +2326,7 @@ async def test_move_survives_a_sync_that_began_before_the_command_landed() -> No
         assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.moves == [(TaskId("t1"), "9", None)]
         assert str(_cell(app.query_one(DataTable[object]), 0, "Project")) == "Work"
@@ -2345,16 +2346,16 @@ async def test_pressing_u_undoes_last_complete() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
 
         await pilot.press("z")
         # optimistic: the row is back before the reopen command resolves
         assert app.query_one(DataTable[object]).row_count == 1
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.uncompleted == [TaskId("6X4")]
@@ -2378,13 +2379,13 @@ async def test_undo_is_single_shot() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")  # nothing left to undo
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.uncompleted == [TaskId("6X4")]  # only the first z acted
@@ -2423,7 +2424,7 @@ async def test_complete_failure_is_surfaced() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to complete task: boom" in str(
@@ -2452,7 +2453,7 @@ async def test_delete_failure_is_surfaced_and_unhides() -> None:
         await pilot.pause()
         await pilot.press("delete")
         await pilot.press("y")  # confirm
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to delete task: boom" in str(
@@ -2481,7 +2482,7 @@ async def test_a_completed_task_stays_gone_while_its_close_is_in_flight() -> Non
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
         assert app.query_one(DataTable[object]).row_count == 0
 
@@ -2490,7 +2491,7 @@ async def test_a_completed_task_stays_gone_while_its_close_is_in_flight() -> Non
         assert app.query_one(DataTable[object]).row_count == 0  # must not flash back
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.completed == [TaskId("Buy milk")]
         assert app.query_one(DataTable[object]).row_count == 0
@@ -2505,7 +2506,7 @@ async def test_rapid_completes_do_not_reappear() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert app.query_one(DataTable[object]).row_count == 2
         await pilot.press("e")
         await pilot.press("e")  # second close before the first's command resolves
@@ -2516,7 +2517,7 @@ async def test_rapid_completes_do_not_reappear() -> None:
         assert app.query_one(DataTable[object]).row_count == 0  # neither reappears
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.completed == [TaskId("First"), TaskId("Second")]  # in press order
         assert app.query_one(DataTable[object]).row_count == 0
@@ -2529,15 +2530,15 @@ async def test_undo_restores_a_completed_task_the_server_has_already_dropped() -
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
 
         await pilot.press("z")  # the row comes back from the undo, not from a sync
         assert app.query_one(DataTable[object]).row_count == 1
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.uncompleted == [TaskId("Buy milk")]
@@ -2555,27 +2556,27 @@ async def test_undo_walks_back_one_action_at_a_time() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")  # close First
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")  # close Second
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 0
 
         await pilot.press("z")  # most recent first
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.uncompleted == [TaskId("Second")]
 
         await pilot.press("z")  # and then the one before it
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.uncompleted == [TaskId("Second"), TaskId("First")]
         assert app.query_one(DataTable[object]).row_count == 2
 
         await pilot.press("z")  # nothing left to walk back
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.uncompleted == [TaskId("Second"), TaskId("First")]
 
@@ -2597,16 +2598,16 @@ async def test_undo_reverses_a_reschedule() -> None:
         await pilot.press("p")
         await pilot.pause()
         await pilot.press("enter")  # the Work project view leads the list
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")  # tomorrow
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues == [
@@ -2636,15 +2637,15 @@ async def test_undo_reverses_a_priority_change_per_task() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("x")  # select a, cursor -> b
         await pilot.press("x")  # select b
         await pilot.press("1")  # both to P1
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         # each task goes back to the priority it had, not to a shared one
@@ -2693,12 +2694,12 @@ async def test_recurring_completion_reappears_with_its_next_due() -> None:
         await pilot.pause()
         await pilot.press("enter")  # the Work project view leads the list
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 1
 
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         # its next occurrence has a new due: it must come back, not stay hidden
@@ -2716,10 +2717,10 @@ async def test_completing_moves_cursor_to_the_task_below() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("j")  # cursor: A -> B
         await pilot.press("e")  # complete B
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         table = app.query_one(DataTable[object])
@@ -2736,11 +2737,11 @@ async def test_completing_the_last_task_moves_cursor_up() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("j")
         await pilot.press("j")  # cursor: A -> B -> C (last)
         await pilot.press("e")  # complete C
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         table = app.query_one(DataTable[object])
@@ -2767,11 +2768,11 @@ async def test_undo_failure_is_surfaced() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to undo: boom" in str(app.query_one("#status", Static).render())
@@ -2805,7 +2806,7 @@ async def test_background_refresh_rerenders_after_cache_load() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.refresh_calls == 1
@@ -2832,7 +2833,7 @@ async def test_background_refresh_failure_keeps_cached_view() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert app.query_one(DataTable[object]).row_count == 1  # cached view survives
@@ -2891,12 +2892,12 @@ async def test_pressing_d_sets_a_deadline_and_shows_it() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("d")
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)
         await pilot.press("m")  # tomorrow (quick key)
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.deadlines == [
@@ -2921,12 +2922,12 @@ async def test_pressing_d_clear_removes_the_deadline() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert str(_cell(app.query_one(DataTable[object]), 0, "Deadline")) == "Tomorrow"
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("x")  # clear
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.deadlines == [(TaskId("6X4"), None)]
@@ -2951,7 +2952,7 @@ async def test_d_then_tomorrow_drops_task_from_today_immediately() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         repo.release.clear()  # block the sync that follows the change
 
@@ -2962,7 +2963,7 @@ async def test_d_then_tomorrow_drops_task_from_today_immediately() -> None:
         assert app.query_one(DataTable[object]).row_count == 0
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
 
 
@@ -2980,7 +2981,7 @@ async def test_d_then_today_keeps_task_in_today_with_date() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         await pilot.press("t")
         await pilot.pause()
@@ -3005,7 +3006,7 @@ async def test_d_then_clear_removes_due() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert str(_cell(app.query_one(DataTable[object]), 0, "Due")) == "Today"
         repo.release.clear()  # block the sync that follows the change
 
@@ -3015,7 +3016,7 @@ async def test_d_then_clear_removes_due() -> None:
         assert app.query_one(DataTable[object]).row_count == 0
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert repo.dues == [(TaskId("6X4"), None)]
 
 
@@ -3034,7 +3035,7 @@ async def test_calendar_pick_applies_optimistically() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         repo.release.clear()  # block the sync that follows the change
 
@@ -3046,7 +3047,7 @@ async def test_calendar_pick_applies_optimistically() -> None:
         assert app.query_one(DataTable[object]).row_count == 0
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
 
 
@@ -3074,12 +3075,12 @@ async def test_reschedule_on_filter_view_keeps_the_task_until_the_server_answers
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("p")
         await pilot.pause()
         await pilot.press("enter")  # the Overdue filter leads the list
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert app.query_one(DataTable[object]).row_count == 1
         repo.release.clear()  # block the sync that follows the change
 
@@ -3091,7 +3092,7 @@ async def test_reschedule_on_filter_view_keeps_the_task_until_the_server_answers
         assert _title(table, 0).strip() == "Overdue thing ⟳"
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert repo.dues == [(TaskId("6X4"), Due(date=datetime.date(2026, 7, 29)))]
         # the refresh answered and confirmed it: the mark clears
@@ -3115,7 +3116,7 @@ async def test_reschedule_on_inbox_keeps_task_and_updates_due_cell() -> None:
         await pilot.pause()
         await pilot.press("i")  # Inbox: membership is by project, not due
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         repo.release.clear()  # block the sync so we observe the optimistic state
 
         await pilot.press("t")
@@ -3144,7 +3145,7 @@ async def test_d_on_recurring_task_reschedules_keeping_the_rule() -> None:
         await pilot.pause()
         assert isinstance(app.screen, ScheduleScreen)  # picker opens for recurring
         await pilot.press("m")  # tomorrow
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues[-1] == (
@@ -3235,7 +3236,7 @@ async def test_set_due_failure_is_surfaced_and_resyncs() -> None:
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to set due: boom" in str(
@@ -3322,7 +3323,7 @@ async def test_v_pick_moves_task_and_updates_project_cell() -> None:
         await pilot.pause()
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", None)]
@@ -3344,7 +3345,7 @@ async def test_v_pick_section_moves_task_into_section() -> None:
         await pilot.pause()
         await pilot.press("/")  # "Work / Planning" is the only entry with a slash
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", "s1")]
@@ -3368,7 +3369,7 @@ async def test_v_moving_out_of_inbox_drops_the_row() -> None:
         await pilot.pause()
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("in1"), "9", None)]
@@ -3461,7 +3462,7 @@ async def test_shift_v_pick_nests_the_task_under_the_parent() -> None:
         await pilot.press("p", "a", "r")  # narrow to "parent"
         await pilot.press("down")  # past the top-level entry
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -3486,7 +3487,7 @@ async def test_shift_v_moves_every_selected_task() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid1"), "parent"), (TaskId("kid2"), "parent")]
@@ -3508,7 +3509,7 @@ async def test_shift_v_top_level_entry_un_parents_a_subtask() -> None:
         await pilot.press("V")
         await pilot.pause()
         await pilot.press("enter")  # the top-level entry heads the list
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("kid"), "220", None)]
@@ -3552,10 +3553,10 @@ async def test_undo_returns_a_re_parented_task_to_the_top_level() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("kid"), "220", None)]
@@ -3578,10 +3579,10 @@ async def test_undo_returns_an_un_parented_task_under_its_old_parent() -> None:
         await pilot.press("V")
         await pilot.pause()
         await pilot.press("enter")  # top level
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -3653,7 +3654,7 @@ async def test_shift_v_in_the_detail_card_opens_the_parent_picker() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -3678,7 +3679,7 @@ async def test_re_parent_failure_is_surfaced_and_the_row_snaps_back() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to move task: boom" in str(
@@ -3705,7 +3706,7 @@ async def test_move_failure_is_surfaced_and_resyncs() -> None:
         await pilot.pause()
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to move task: boom" in str(
@@ -3755,7 +3756,7 @@ async def test_at_toggle_and_confirm_updates_cell_and_records() -> None:
         await pilot.pause()
         await pilot.press("space")  # toggle "home" on ("work" already checked)
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.label_edits == [(TaskId("t1"), ("home", "work"), ())]
@@ -3778,7 +3779,7 @@ async def test_at_create_new_label_passes_it_as_a_creation() -> None:
         await pilot.press("f", "r", "e", "s", "h")  # no existing match
         await pilot.press("space")  # create + select "fresh"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.label_edits == [(TaskId("t1"), ("fresh",), ("fresh",))]
@@ -3821,7 +3822,7 @@ async def test_set_labels_failure_is_surfaced_and_resyncs() -> None:
         await pilot.pause()
         await pilot.press("space")  # toggle "home" on
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to set labels: boom" in str(
@@ -3837,11 +3838,11 @@ async def test_typed_due_text_goes_to_the_server_to_parse() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("s", *_typing("every mon until Dec 31"), "enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues == [(TaskId("A"), DueText("every mon until Dec 31"))]
@@ -3856,7 +3857,7 @@ async def test_typed_due_holds_the_old_date_until_the_server_answers() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         repo.release.clear()  # block the sync that follows the change
 
         await pilot.press("t")
@@ -3869,7 +3870,7 @@ async def test_typed_due_holds_the_old_date_until_the_server_answers() -> None:
         assert str(_cell(table, 0, "Due")) == "21 Jul"
 
         repo.release.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         table = app.query_one(TaskTable)
         assert _title(table, 0).strip() == "A"  # the answer retired the change
@@ -3882,13 +3883,13 @@ async def test_undoing_a_typed_due_restores_the_previous_one() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("s", *_typing("every mon"), "enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues[-1] == (TaskId("A"), Due(date=datetime.date(2026, 7, 21)))
@@ -3980,7 +3981,7 @@ async def test_the_group_divider_runs_unbroken_to_the_right_edge() -> None:
 
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         table = app.query_one(TaskTable)
         divider = _divider_row(table)
@@ -3996,7 +3997,7 @@ async def test_the_group_divider_follows_the_terminal_width() -> None:
 
     async with app.run_test(size=(70, 24)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         narrow = cell_len(_divider_row(app.query_one(TaskTable)))
 
         await pilot.resize_terminal(120, 24)
@@ -4030,7 +4031,7 @@ async def test_a_narrow_terminal_cuts_the_title_then_drops_columns() -> None:
 
     async with app.run_test(size=(60, 24)) as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         table = app.query_one(TaskTable)
         assert _title(table, 0).endswith("…")
@@ -4052,7 +4053,7 @@ async def test_the_column_labels_clear_the_marker_slot() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         header = app.query_one(ColumnHeader).render()
         assert isinstance(header, Content)
@@ -4084,7 +4085,7 @@ async def test_the_group_label_leads_over_a_receding_rule() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         table = app.query_one(TaskTable)
         header = next(
@@ -4125,7 +4126,7 @@ async def test_opening_a_project_groups_tasks_under_section_headers() -> None:
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         col = _content_col(app.query_one(DataTable[object]))
 
@@ -4152,7 +4153,7 @@ async def test_saved_project_arrangement_overrides_the_section_default() -> None
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         col = _content_col(app.query_one(DataTable[object]))
 
@@ -4237,10 +4238,10 @@ async def test_e_on_a_task_under_a_header_completes_it() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("j")  # move off the header onto the task
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("w1")]
@@ -4498,7 +4499,7 @@ async def test_editing_another_task_leaves_a_pulled_in_subtask_alone() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         table = app.query_one(TaskTable)
         await pilot.press("l")  # reveal the subtask
         await pilot.pause()
@@ -4545,7 +4546,7 @@ async def test_a_reload_hides_the_subtask_of_a_not_yet_confirmed_close() -> None
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         table = app.query_one(TaskTable)
         await pilot.press("l")  # reveal the subtask
         await pilot.pause()
@@ -4557,7 +4558,7 @@ async def test_a_reload_hides_the_subtask_of_a_not_yet_confirmed_close() -> None
         assert [c.strip() for c in _content_col(table)] == ["b other"]
 
         repo.hold.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         assert [c.strip() for c in _content_col(table)] == ["b other"]
 
@@ -4569,7 +4570,7 @@ async def test_a_pulled_in_subtask_leaves_with_the_parent_that_carried_it() -> N
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         table = app.query_one(TaskTable)
         await pilot.press("l")  # reveal the subtask
         await pilot.pause()
@@ -4806,7 +4807,7 @@ async def test_regrouping_unfolds_everything() -> None:
         await pilot.press("r")  # group by Priority: the old label paths are stale
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         contents = [c.strip() for c in _content_col(table)]
         assert not any(c.startswith("▸ ──") for c in contents)
@@ -4834,13 +4835,13 @@ async def test_refresh_keeps_cursor_on_the_same_task() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("j")  # move off the top row
         table = app.query_one(TaskTable)
         assert table.cursor_row == 1
 
         await pilot.press("r")  # background resync re-renders the table
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert table.cursor_row == 1  # cursor stayed on "Second", not reset to top
@@ -4888,7 +4889,7 @@ async def test_today_is_reachable_from_the_views_screen() -> None:
         await pilot.press("i")
         await pilot.pause()
         await open_view(pilot, "today")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         table = app.query_one(DataTable[object])
         assert _title(table, 0) == "Today thing"
@@ -4918,13 +4919,13 @@ async def test_g_then_field_keys_group_the_list_and_persist() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")  # group by Project
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         col2 = _content_col(app.query_one(DataTable[object]))
@@ -4943,13 +4944,13 @@ async def test_g_then_s_groups_the_list_by_section() -> None:
     app = TodoistApp(repo, arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("s")  # group by Section
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         col = _content_col(app.query_one(DataTable[object]))
@@ -4963,14 +4964,14 @@ async def test_s_appends_then_toggles_sort_direction() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("s")
         await pilot.pause()
         await pilot.press("d")  # sort by Due date (ascending)
         await pilot.press("d")  # tapping again flips to descending
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement(
             sort_by=(SortKey(Field.DUE_DATE, ascending=False),)
@@ -4991,13 +4992,13 @@ async def test_s_then_e_sorts_by_deadline() -> None:
     app = TodoistApp(repo, arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("s")
         await pilot.pause()
         await pilot.press("e")  # sort by Deadline
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _content_col(app.query_one(DataTable[object])) == [
@@ -5032,14 +5033,14 @@ async def test_group_chain_capped_at_three_levels() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         for key in ("p", "r", "d", "t"):  # four fields; the fourth is ignored
             await pilot.press(key)
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert len((await store.get("today")).group_by) == 3
 
@@ -5075,7 +5076,7 @@ async def test_backspace_removes_last_group_field() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")  # Project
@@ -5083,7 +5084,7 @@ async def test_backspace_removes_last_group_field() -> None:
         await pilot.press("backspace")  # drop Priority
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
 
@@ -5094,7 +5095,7 @@ async def test_shift_g_clears_the_group_chain() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")
@@ -5102,7 +5103,7 @@ async def test_shift_g_clears_the_group_chain() -> None:
         await pilot.press("G")  # shift+G clears
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement()
 
@@ -5113,14 +5114,14 @@ async def test_re_tapping_a_group_field_flips_its_direction() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")  # Project ascending
         await pilot.press("p")  # re-tap → descending
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement(
             group_by=(Field.PROJECT,), group_desc=frozenset({Field.PROJECT})
@@ -5133,7 +5134,7 @@ async def test_re_tapping_a_group_field_twice_returns_to_ascending() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")  # asc
@@ -5141,7 +5142,7 @@ async def test_re_tapping_a_group_field_twice_returns_to_ascending() -> None:
         await pilot.press("p")  # asc again
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
 
@@ -5155,14 +5156,14 @@ async def test_arrange_saves_to_the_view_it_was_opened_for() -> None:
     app = TodoistApp(repo, arrangements=store)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")
         await pilot.pause()
         await pilot.press("p")
         await pilot.press("enter")  # schedules the apply worker for Today
         await pilot.press("i")  # switch to Inbox before it runs
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert await store.get("today") == Arrangement(group_by=(Field.PROJECT,))
         assert await store.get("inbox") == Arrangement()  # untouched
@@ -5178,24 +5179,24 @@ async def test_arrangement_is_restored_per_view() -> None:
     app = TodoistApp(repo, arrangements=InMemoryArrangements())
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.press("g")  # group Today by project
         await pilot.pause()
         await pilot.press("p")
         await pilot.press("enter")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         await pilot.press("i")  # Inbox has no arrangement → flat
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert not any(
             "──" in c for c in _content_col(app.query_one(DataTable[object]))
         )
 
         await open_view(pilot, "today")  # its grouping returns
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert any("──" in c for c in _content_col(app.query_one(DataTable[object])))
 
 
@@ -5233,7 +5234,7 @@ async def test_opening_a_project_from_the_views_screen_switches_to_it() -> None:
         await pilot.pause()
         await pilot.press("enter")  # the Work project leads the list
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "Work" in _status(app)
 
 
@@ -5251,7 +5252,7 @@ async def test_opening_a_filter_from_the_views_screen_refreshes_it_live() -> Non
         await pilot.pause()
         await pilot.press("enter")  # the filter leads the list
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "My Filter" in _status(app)
         assert "p1" in repo.refresh_filtered_queries
 
@@ -5306,7 +5307,7 @@ async def test_a_slow_save_cannot_undo_a_later_edit() -> None:
         await pilot.pause()
 
         slots.overtaken.set()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
     assert await slots.get() == ViewSlots().assign("w", "project:9").with_startup(
@@ -5326,7 +5327,7 @@ async def test_a_bound_key_jumps_straight_to_its_view() -> None:
 
         await pilot.press("w")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "Work" in _status(app)
 
 
@@ -5340,7 +5341,7 @@ async def test_full_stop_is_free_to_bind_like_any_other_key() -> None:
         await pilot.pause()
         await pilot.press("full_stop")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "Work" in _status(app)
 
 
@@ -5360,7 +5361,7 @@ async def test_a_bound_filter_key_refreshes_it_live() -> None:
 
         await pilot.press("n")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "My Filter" in _status(app)
         assert "p1" in repo.refresh_filtered_queries
 
@@ -5391,7 +5392,7 @@ async def test_a_bound_key_does_nothing_while_a_modal_is_open() -> None:
         await pilot.pause()
         await pilot.press("w")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert isinstance(app.screen, HelpScreen)
         assert _status(app).startswith("Today")  # the bound view never opened
 
@@ -5436,7 +5437,7 @@ async def test_a_startup_filter_view_refreshes_live() -> None:
     app = TodoistApp(repo, slots=slots)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         assert "My Filter" in _status(app)
         assert "p1" in repo.refresh_filtered_queries
 
@@ -5477,7 +5478,7 @@ async def test_a_description_marks_the_title_and_a_bare_task_stays_clean() -> No
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert _content_col(app.query_one(TaskTable)) == ["t1 ≡", "t2"]
 
@@ -5489,7 +5490,7 @@ async def test_the_description_marker_recedes_behind_the_title() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         table = app.query_one(TaskTable)
         cell = title_cell(table, 0)
@@ -5512,7 +5513,7 @@ async def test_adding_a_description_makes_the_marker_appear_at_once() -> None:
         await pilot.press("n")  # description becomes "n"
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _content_col(app.query_one(TaskTable)) == ["t1 ≡"]
@@ -5604,7 +5605,7 @@ async def test_the_editor_carries_a_due_and_a_deadline_into_the_new_task() -> No
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         task = _added(repo)
@@ -5630,7 +5631,7 @@ async def test_the_editor_carries_a_typed_phrase_into_the_new_task() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _added(repo).due == DueText("every friday")
@@ -5663,7 +5664,7 @@ async def test_one_save_changing_due_and_deadline_undoes_as_one_batch() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         tomorrow = _TODAY + datetime.timedelta(days=1)
@@ -5672,7 +5673,7 @@ async def test_one_save_changing_due_and_deadline_undoes_as_one_batch() -> None:
 
         await pilot.press("z")  # one undo puts both back
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.dues[-1] == (TaskId("t1"), Due(date=_TODAY))
@@ -5702,7 +5703,7 @@ async def test_the_editor_leaves_untouched_attributes_alone() -> None:
         await pilot.press("!")  # only the title changes
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.text_edits == [(TaskId("t1"), "t1!", "")]
@@ -5740,7 +5741,7 @@ async def test_the_editor_carries_a_project_priority_and_labels_into_the_new_tas
         await pilot.press("alt+2")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         task = _added(repo)
@@ -5768,7 +5769,7 @@ async def test_the_editor_moves_an_edited_task_to_the_project_it_picked() -> Non
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "7", None)]
@@ -5792,7 +5793,7 @@ async def test_the_editor_nests_an_edited_task_and_skips_a_plain_move() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         # the re-parent carries the project, so no separate move goes out
@@ -5849,7 +5850,7 @@ async def test_lifting_a_subtask_out_keeps_the_project_the_editor_picked() -> No
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("c1"), "7", None)]
@@ -5872,7 +5873,7 @@ async def test_the_editor_registers_a_label_todoist_does_not_know_yet() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.label_edits == [(TaskId("t1"), ("new",), ("new",))]
@@ -5890,7 +5891,7 @@ async def test_the_editor_sets_the_priority_of_an_edited_task() -> None:
         await pilot.press("alt+3")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("t1"), Priority.P3)]
@@ -5920,7 +5921,7 @@ async def test_the_editor_hangs_a_reminder_off_the_task_it_creates() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         plan = repo.applied[0]
@@ -5956,7 +5957,7 @@ async def test_the_editor_adds_and_drops_reminders_on_an_edited_task() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.deleted_reminders == ["r1"]
@@ -5979,7 +5980,7 @@ async def test_saving_the_editor_repaints_the_title_and_sends_one_update() -> No
         await pilot.press("s")  # description becomes "a notes"
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.text_edits == [(TaskId("t1"), "t1!", "a notes")]
@@ -6001,7 +6002,7 @@ async def test_ctrl_e_ignores_the_selection_and_edits_the_cursor_task() -> None:
         await pilot.press("!")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert repo.text_edits == [(TaskId("t1"), "t1!", "")]
         assert _selected_rows(app.query_one(TaskTable)) == [0, 1]  # selection kept
@@ -6083,7 +6084,7 @@ async def test_set_text_failure_is_surfaced_and_resyncs() -> None:
         await pilot.press("!")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert "Failed to edit task: boom" in _status(app)
@@ -6121,7 +6122,7 @@ async def test_saving_from_the_detail_card_reopens_it_with_the_new_text() -> Non
         await pilot.press("!")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert isinstance(app.screen, TaskDetailScreen)
@@ -6203,7 +6204,7 @@ async def test_v_in_the_detail_card_moves_the_open_task_and_reopens_it() -> None
         assert isinstance(app.screen, ProjectPickerScreen)
         await pilot.press("w", "o")  # narrow to "Work"
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", None)]
@@ -6221,7 +6222,7 @@ async def test_a_priority_digit_in_the_detail_card_reopens_it_at_once() -> None:
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("3")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("t1"), Priority.P3)]
@@ -6239,7 +6240,7 @@ async def test_completing_from_the_detail_card_lands_in_the_list() -> None:
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("e")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.completed == [TaskId("t1")]
@@ -6260,7 +6261,7 @@ async def test_a_card_action_ignores_a_selection_made_in_the_list() -> None:
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("3")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("C"), Priority.P3)]
@@ -6291,7 +6292,7 @@ async def test_an_action_that_blows_up_still_releases_the_card_scope() -> None:
         await pilot.pause()
         await pilot.press("j")  # cursor down to B
         await pilot.press("3")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.priorities == [(TaskId("B"), Priority.P3)]
@@ -6359,7 +6360,7 @@ async def test_shift_v_from_the_card_reopens_it_under_the_new_parent() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -6425,7 +6426,7 @@ async def test_a_adds_the_task_beside_the_cursor_row() -> None:
         await _type(pilot, "why")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         task = _added(repo)
@@ -6446,7 +6447,7 @@ async def test_a_in_today_gives_the_new_task_todays_date() -> None:
         await _type(pilot, "new")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _added(repo).due == Due(date=_TODAY)
@@ -6464,7 +6465,7 @@ async def test_a_on_an_empty_view_falls_back_to_the_inbox() -> None:
         await _type(pilot, "new")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _added(repo).project_ref == "220"
@@ -6489,7 +6490,7 @@ async def test_shift_a_adds_a_subtask_under_the_cursor_task() -> None:
         await _type(pilot, "step")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         task = _added(repo)
@@ -6515,7 +6516,7 @@ async def test_a_subtask_unfolds_its_parent_so_it_will_be_seen() -> None:
         await _type(pilot, "c2")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         shown = _content_col(app.query_one(TaskTable))
@@ -6539,7 +6540,7 @@ async def test_a_on_the_detail_card_adds_a_subtask_of_the_open_task() -> None:
         await _type(pilot, "step")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert _added(repo).parent_ref == "t1"
@@ -6558,7 +6559,7 @@ async def test_cancelling_the_add_editor_creates_nothing() -> None:
         await _type(pilot, "new")
         await pilot.press("escape")
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.applied == []
@@ -6574,7 +6575,7 @@ async def test_a_numbered_row_moves_the_task_straight_from_the_picker() -> None:
         await pilot.press("v")
         await pilot.pause()
         await pilot.press("2")  # 1 Errands, 2 Work
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("t1"), "9", None)]
@@ -6593,7 +6594,7 @@ async def test_a_numbered_row_nests_the_task_under_that_parent() -> None:
         await pilot.press("V")  # cursor on "kid"
         await pilot.pause()
         await pilot.press("2")  # 1 un-parents, 2 is "parent", the only candidate
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -6653,7 +6654,7 @@ async def test_one_project_across_the_view_moves_from_column_to_band() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert _cell(app.query_one(TaskTable), 0, "PROJECT") is None
         assert _status(app).startswith("Today · 2 task(s) · Errands")
@@ -6665,7 +6666,7 @@ async def test_projects_that_differ_keep_their_column() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert _cell(app.query_one(TaskTable), 0, "PROJECT") is not None
         assert "Work" not in _status(app)
@@ -6679,7 +6680,7 @@ async def test_a_project_view_does_not_repeat_its_own_name() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await open_view(pilot, "Errands")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
 
         assert _cell(app.query_one(TaskTable), 0, "PROJECT") is None
         assert _status(app).startswith("Errands · 1 task(s)")
@@ -6701,7 +6702,7 @@ async def test_nesting_a_task_clears_its_due_date() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -6721,13 +6722,13 @@ async def test_nesting_clears_the_due_date_of_every_selected_dated_task() -> Non
     async with app.run_test() as pilot:
         await pilot.pause()
         await open_view(pilot, "Errands")  # Today would hide the dateless task
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("x", "x")  # select both kids: each mark moves on a row
         await pilot.press("V")
         await pilot.pause()
         await pilot.press("2")  # the only candidate left is the parent
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid1"), "parent"), (TaskId("kid2"), "parent")]
@@ -6749,7 +6750,7 @@ async def test_the_picker_toggle_nests_without_touching_the_due_date() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.parents == [(TaskId("kid"), "parent")]
@@ -6773,7 +6774,7 @@ async def test_un_parenting_keeps_the_due_date() -> None:
         await pilot.press("V")
         await pilot.pause()
         await pilot.press("enter")  # top level
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         assert repo.moves == [(TaskId("kid"), "220", None)]
@@ -6794,10 +6795,10 @@ async def test_undo_brings_a_cleared_due_date_back_with_the_task() -> None:
         await pilot.press("p", "a", "r")
         await pilot.press("down")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
         await pilot.press("z")
-        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await settled(app)
         await pilot.pause()
 
         was = _row("kid").due
