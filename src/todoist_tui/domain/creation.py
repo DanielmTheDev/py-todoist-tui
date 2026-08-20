@@ -8,8 +8,9 @@ in a batched Sync create. Pure: no I/O.
 from dataclasses import dataclass
 
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.reminder import Reminder
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,7 @@ class NewTask:
     temp_id: str
     content: str
     priority: Priority
-    due: Due | None
+    due: Due | DueText | None  # a phrase is Todoist's to parse
     deadline: Deadline | None
     labels: tuple[str, ...]
     description: str
@@ -42,7 +43,19 @@ class NewTask:
 
 
 @dataclass(frozen=True, slots=True)
+class NewReminder:
+    """A reminder for a task the same plan creates. `reminder`'s own `id` and
+    `item_id` say nothing here — the plan's refs place it — but its payload rule
+    is the one every reminder is written with."""
+
+    temp_id: str
+    item_ref: str
+    reminder: Reminder
+
+
+@dataclass(frozen=True, slots=True)
 class CreationPlan:
     projects: tuple[NewProject, ...]
     sections: tuple[NewSection, ...]
     tasks: tuple[NewTask, ...]
+    reminders: tuple[NewReminder, ...] = ()

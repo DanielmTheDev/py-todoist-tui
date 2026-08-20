@@ -9,12 +9,13 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.schedule import (
     QuickKind,
     month_weeks,
     parse_time_digits,
     quick_due,
+    reschedule,
     shift_month,
 )
 from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
@@ -32,6 +33,17 @@ class DueResult:
 
     due: Due | None = None
     text: str | None = None
+
+
+def rescheduled(
+    result: DueResult, current: Due | DueText | None
+) -> Due | DueText | None:
+    """What a task's due becomes once the picker's answer lands on it: a typed
+    phrase verbatim, otherwise the picked date grafted onto the task's own rule
+    so a recurring task keeps recurring."""
+    if result.text is not None:
+        return DueText(result.text)
+    return reschedule(current if isinstance(current, Due) else None, result.due)
 
 
 # Quick-key row: key -> (quick kind, label shown in the hint).

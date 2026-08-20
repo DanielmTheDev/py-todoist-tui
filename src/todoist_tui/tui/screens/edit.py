@@ -1,21 +1,45 @@
-from dataclasses import dataclass
-from typing import ClassVar
+import datetime
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from typing import ClassVar, cast
 
 from textual import events
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
 
+from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.deadline import Deadline
+from todoist_tui.domain.due import Due
 from todoist_tui.domain.links import attach, sole_url
+from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.project import Project
+from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.section import Section
+from todoist_tui.tui.screens.draft import TaskDraft, attribute_strip
+from todoist_tui.tui.screens.labels import LabelsScreen
+from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
+from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
+from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
+from todoist_tui.tui.screens.schedule import ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.scrolling import ScrollBody
+
+_CHORDS = (
+    "alt+t due · alt+d deadline · alt+v project · alt+n parent"
+    " · alt+l labels · alt+m reminders · alt+1..4 priority"
+)
 
 
 @dataclass(frozen=True, slots=True)
-class TaskText:
-    content: str
-    description: str
+class Catalog:
+    """What the editor's pickers choose from, fetched only once a chord asks —
+    opening the editor should cost nothing."""
+
+    move_targets: Callable[[], Awaitable[tuple[list[Project], list[Section]]]]
+    parents: Callable[[], Awaitable[list[TaskRow]]]
+    labels: Callable[[], Awaitable[list[str]]]
 
 
 class TitleInput(Input):
@@ -56,14 +80,29 @@ class DescriptionArea(TextArea):
     ]
 
 
-class TaskEditScreen(ModalScreen["TaskText | None"]):
-    """Edit a task's title and description together. Tab moves between the
-    fields, ctrl+s (or enter in the title) dismisses both trimmed values, escape
-    dismisses None. A blank title keeps the prompt open."""
+class TaskEditScreen(ModalScreen["TaskDraft | None"]):
+    """Edit a task's title and description together, over a strip naming the rest
+    of its attributes. Tab moves between the fields, ctrl+s (or enter in the
+    title) dismisses the draft with both values trimmed, escape dismisses None. A
+    blank title keeps the prompt open."""
 
+    # Each attribute answers to the key the list uses for it, held with alt so it
+    # stays out of the way of typing. Lowercase throughout: a keyboard remapper
+    # between here and the terminal can swallow alt+shift.
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+s", "save", "Save"),
-        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "save", "Editor: save"),
+        Binding("escape", "cancel", "Editor: cancel"),
+        Binding("alt+t", "set_due", "Editor: due", show=False),
+        Binding("alt+d", "set_deadline", "Editor: deadline", show=False),
+        Binding("alt+v", "move", "Editor: project / section", show=False),
+        Binding("alt+n", "move_parent", "Editor: parent", show=False),
+        # the list reaches labels by @, which needs a shift alt cannot join here
+        Binding("alt+l", "set_labels", "Editor: labels", show=False),
+        Binding("alt+m", "reminders", "Editor: reminders", show=False),
+        Binding("alt+1", "set_priority('P1')", "Editor: P1", show=False),
+        Binding("alt+2", "set_priority('P2')", "Editor: P2", show=False),
+        Binding("alt+3", "set_priority('P3')", "Editor: P3", show=False),
+        Binding("alt+4", "set_priority('P4')", "Editor: P4", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -75,16 +114,24 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
     TaskEditScreen TextArea { height: 8; border: round $primary; }
     TaskEditScreen #hint { padding: 0 1; color: $text-muted; }
     TaskEditScreen #link { padding: 0 1; color: $text-muted; }
+    TaskEditScreen #attributes { padding: 0 1; }
+    TaskEditScreen #chords { padding: 0 1; color: $text-muted; }
     """
 
     def __init__(
-        self, content: str, description: str, heading: str | None = None
+        self,
+        draft: TaskDraft,
+        today: datetime.date,
+        catalog: Catalog,
+        heading: str | None = None,
     ) -> None:
         super().__init__()
-        self._content = content
-        self._description = description
+        self._draft = draft
+        self._today = today
+        self._catalog = catalog
         self._heading = heading
         self._pending_url: str | None = None
+        self._loading = False  # a chord is fetching what its picker chooses from
 
     def compose(self) -> ComposeResult:
         # the description box alone is taller than a short terminal
@@ -93,10 +140,12 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
                 yield Static(self._heading, id="heading")
             yield Static("Title", classes="label")
             # select_on_focus would make the first keystroke wipe the title
-            yield TitleInput(value=self._content.strip(), select_on_focus=False)
+            yield TitleInput(value=self._draft.content.strip(), select_on_focus=False)
             yield Static("", id="link")
             yield Static("Description", classes="label")
-            yield DescriptionArea(self._description.strip())
+            yield DescriptionArea(self._draft.description.strip())
+            yield Static(attribute_strip(self._draft, self._today), id="attributes")
+            yield Static(_CHORDS, id="chords")
             yield Static("tab switch · ctrl+s save · esc cancel", id="hint")
 
     def on_mount(self) -> None:
@@ -119,7 +168,183 @@ class TaskEditScreen(ModalScreen["TaskText | None"]):
             return
         if self._pending_url is not None:
             content = attach(content, self._pending_url)
-        self.dismiss(TaskText(content, self.query_one(TextArea).text.strip()))
+        self.dismiss(
+            replace(
+                self._draft,
+                content=content,
+                description=self.query_one(TextArea).text.strip(),
+            )
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_set_due(self) -> None:
+        due = self._draft.due if isinstance(self._draft.due, Due) else None
+        self._pick(
+            ScheduleScreen(
+                self._today,
+                due.date if due else None,
+                due.time if due else None,
+                allow_text=True,
+                current_text=due.string if due and due.is_recurring else None,
+            ),
+            lambda result: replace(
+                self._draft, due=rescheduled(result, self._draft.due)
+            ),
+        )
+
+    def action_set_deadline(self) -> None:
+        current = self._draft.deadline
+        self._pick(
+            ScheduleScreen(
+                self._today,
+                current.date if current else None,
+                kind="deadline",
+            ),
+            # the deadline screen carries a date-only Due; map it to a Deadline
+            lambda result: replace(
+                self._draft,
+                deadline=Deadline(date=result.due.date) if result.due else None,
+            ),
+        )
+
+    def action_set_priority(self, name: str) -> None:
+        self._draft = replace(self._draft, priority=Priority[name])
+        self._repaint()
+
+    async def action_move(self) -> None:
+        loaded = await self._load(self._catalog.move_targets, "projects")
+        if loaded is None:
+            return
+        projects, sections = loaded
+        self._pick(
+            ProjectPickerScreen(projects, sections),
+            lambda target: replace(
+                self._draft,
+                project_id=target.project_id,
+                project_name=target.project_name,
+                section_id=target.section_id,
+                section_name=target.section_name,
+                # a subtask lives in its parent's project, so naming a project of
+                # its own lifts it out — as the same move does in the list
+                parent_id=None,
+                parent=None,
+            ),
+        )
+
+    async def action_move_parent(self) -> None:
+        candidates = await self._load(self._catalog.parents, "tasks")
+        if candidates is None:
+            return
+        self._pick(ParentPickerScreen(candidates), self._under)
+
+    def _under(self, target: ParentTarget) -> TaskDraft:
+        """Nest the draft under the picked task — Todoist hands a subtask its
+        parent's project and section — or lift it back to the top level."""
+        if target.row is None:
+            return replace(self._draft, parent_id=None, parent=None)
+        return replace(
+            self._draft,
+            parent_id=str(target.row.id),
+            parent=target.row,
+            project_id=target.row.project_id,
+            project_name=target.row.project_name or "",
+            section_id=target.row.section_id,
+            section_name=target.row.section_name,
+            due=None if target.clear_due else self._draft.due,
+        )
+
+    async def action_set_labels(self) -> None:
+        known = await self._load(self._catalog.labels, "labels")
+        if known is None:
+            return
+        self._pick(
+            LabelsScreen(sorted(known), self._draft.labels),
+            lambda chosen: replace(
+                self._draft,
+                labels=chosen,
+                new_labels=tuple(name for name in chosen if name not in known),
+            ),
+        )
+
+    def action_reminders(self) -> None:
+        due = self._draft.due
+        self._pick(
+            RemindersScreen(
+                self._today,
+                self._draft.reminders,
+                # a relative reminder fires off the task's own due time
+                allow_relative=isinstance(due, Due) and due.time is not None,
+                mode="manage",
+            ),
+            self._remembered,
+        )
+
+    def _remembered(self, request: ReminderRequest) -> TaskDraft:
+        if request.delete_id is not None:
+            return replace(
+                self._draft,
+                reminders=tuple(
+                    r for r in self._draft.reminders if r.id != request.delete_id
+                ),
+            )
+        if request.add_relative is not None:
+            return self._remembering(
+                Reminder("", "", "relative", minute_offset=request.add_relative)
+            )
+        # an absolute reminder needs a datetime, which the next picker collects
+        self.call_after_refresh(self._pick_reminder_time)
+        return self._draft
+
+    def _pick_reminder_time(self) -> None:
+        self._pick(
+            ScheduleScreen(self._today),
+            lambda result: (
+                self._remembering(Reminder("", "", "absolute", result.due))
+                if result.due is not None
+                else self._draft
+            ),
+        )
+
+    def _remembering(self, reminder: Reminder) -> TaskDraft:
+        return replace(self._draft, reminders=(*self._draft.reminders, reminder))
+
+    async def _load[T](self, fetch: Callable[[], Awaitable[T]], what: str) -> T | None:
+        """Fetch what a picker chooses from, reporting a failure on the hint line
+        rather than the list's status band, which is out of sight from here."""
+        if self._loading:  # a chord already has one in flight
+            return None
+        self._loading = True
+        try:
+            return await fetch()
+        except Exception as error:
+            self.query_one("#hint", Static).update(f"Failed to load {what}: {error}")
+            return None
+        finally:
+            self._loading = False
+
+    def _repaint(self) -> None:
+        self.query_one("#attributes", Static).update(
+            attribute_strip(self._draft, self._today)
+        )
+
+    def _pick[T](
+        self, screen: ModalScreen[T | None], onto: Callable[[T], TaskDraft]
+    ) -> None:
+        """Open a picker over the editor and fold its answer into the draft; a
+        cancelled picker leaves the draft as it was."""
+
+        def taken(result: T | None) -> None:
+            if result is None:
+                return
+            self._draft = onto(result)
+            self._repaint()
+
+        # Textual types `self.app` as App[Unknown]; the pushed screen owns its
+        # own result type, so nothing here depends on the app's.
+        app = cast(
+            App[object],
+            self.app,  # pyright: ignore[reportUnknownMemberType]
+        )
+        app.push_screen(screen, taken)

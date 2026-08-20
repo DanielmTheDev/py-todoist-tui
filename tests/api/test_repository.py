@@ -1325,3 +1325,60 @@ async def test_set_due_text_sends_the_string_alone_for_the_server_to_parse() -> 
         "id": "6X4",
         "due": {"string": "every mon until Dec 31"},
     }
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_apply_creation_hangs_a_reminder_off_the_task_it_creates() -> None:
+    """A task has no id until the batch lands, so its reminder points at the
+    task's temp_id — Todoist resolves the ref within the same trip."""
+    from todoist_tui.domain.creation import CreationPlan, NewReminder, NewTask
+
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200, json={"sync_status": {"u-1": "ok", "u-2": "ok"}}
+        )
+    )
+    uuids = iter(["u-1", "u-2"])
+    repo = ApiTaskRepository(
+        TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+    )
+
+    await repo.apply_creation(
+        CreationPlan(
+            projects=(),
+            sections=(),
+            tasks=(
+                NewTask(
+                    temp_id="t1",
+                    content="new",
+                    priority=Priority.P4,
+                    due=None,
+                    deadline=None,
+                    labels=(),
+                    description="",
+                    child_order=None,
+                    project_ref="P",
+                    section_ref=None,
+                    parent_ref=None,
+                ),
+            ),
+            reminders=(
+                NewReminder(
+                    temp_id="r1",
+                    item_ref="t1",
+                    reminder=Reminder("", "", "relative", minute_offset=30),
+                ),
+            ),
+        )
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[1] == {
+        "type": "reminder_add",
+        "uuid": "u-2",
+        "temp_id": "r1",
+        "args": {"item_id": "t1", "type": "relative", "minute_offset": 30},
+    }

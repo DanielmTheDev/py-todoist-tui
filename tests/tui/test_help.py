@@ -239,3 +239,21 @@ async def test_the_help_list_scrolls_by_key() -> None:
         await pilot.pause()
 
         assert app.screen.query_one(VerticalScroll).scroll_y > 0
+
+
+@pytest.mark.anyio
+async def test_help_lists_the_editors_chords_and_the_list_keys_they_echo() -> None:
+    """The chords only fire inside the editor, which has no help of its own, so
+    `?` over the list is the one place they are written down."""
+    app = TodoistApp(FakeRepository([], []))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        shown = str(app.screen.query_one("#help", Static).render())
+
+        assert "Editor: due" in shown
+        assert "alt+n" in shown  # parent, echoing the list's own n
+        assert "alt+m" in shown  # reminders, echoing m
+        assert "n / V" in shown  # the list still answers to the old key
+        assert "m / R" in shown

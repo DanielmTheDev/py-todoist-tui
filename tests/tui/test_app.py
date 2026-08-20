@@ -283,7 +283,8 @@ class FakeRepository:
                     id=TaskId(task.temp_id),
                     content=task.content,
                     priority=task.priority,
-                    due=task.due,
+                    # a typed phrase is Todoist's to parse; nothing here can
+                    due=task.due if isinstance(task.due, Due) else None,
                     project_id=task.project_ref,
                     section_id=task.section_ref,
                     description=task.description,
@@ -5465,6 +5466,10 @@ def _noted(content: str, description: str = "") -> Task:
     )
 
 
+def _attribute_strip(app: TodoistApp) -> str:
+    return str(app.screen.query_one("#attributes", Static).content)
+
+
 @pytest.mark.anyio
 async def test_a_description_marks_the_title_and_a_bare_task_stays_clean() -> None:
     repo = FakeRepository([_noted("t1", "a note"), _noted("t2")], [])
@@ -5526,6 +5531,438 @@ async def test_ctrl_e_opens_the_editor_prefilled_from_the_cursor_row() -> None:
         assert isinstance(app.screen, TaskEditScreen)
         assert app.screen.query_one(Input).value == "t1"
         assert app.screen.query_one(TextArea).text == "a note"
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_seeds_the_strip_from_the_cursor_row() -> None:
+    task = Task(
+        id=TaskId("t1"),
+        content="t1",
+        priority=Priority.P2,
+        due=Due(date=_TODAY),
+        deadline=Deadline(date=datetime.date(2026, 8, 30)),
+        labels=("errand",),
+        project_id="9",
+        section_id="s1",
+    )
+    repo = FakeRepository(
+        [task],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert _attribute_strip(app) == (
+            "Due Today · Deadline 30 Aug · Project Work / Now · Parent — · Reminders —"
+            " · Labels @errand · Priority P2"
+        )
+
+
+@pytest.mark.anyio
+async def test_a_seeds_the_strip_with_where_the_new_task_would_land() -> None:
+    repo = FakeRepository(
+        [_sectioned("t1", section_id="s1")],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+
+        # Today's view dates the task, and it keeps the cursor row's company
+        assert _attribute_strip(app) == (
+            "Due Today · Deadline — · Project Work / Now"
+            " · Parent — · Reminders — · Labels — · Priority P4"
+        )
+
+
+@pytest.mark.anyio
+async def test_the_editor_carries_a_due_and_a_deadline_into_the_new_task() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("m")  # due tomorrow
+        await pilot.pause()
+        await pilot.press("alt+d")
+        await pilot.pause()
+        await pilot.press("t")  # deadline today
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        task = _added(repo)
+        assert task.due == Due(date=_TODAY + datetime.timedelta(days=1))
+        assert task.deadline == Deadline(date=_TODAY)
+
+
+@pytest.mark.anyio
+async def test_the_editor_carries_a_typed_phrase_into_the_new_task() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("s")  # focus the phrase box
+        await _type(pilot, "every friday")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert _added(repo).due == DueText("every friday")
+
+
+@pytest.mark.anyio
+async def test_one_save_changing_due_and_deadline_undoes_as_one_batch() -> None:
+    task = Task(
+        id=TaskId("t1"),
+        content="t1",
+        priority=Priority.P4,
+        due=Due(date=_TODAY),
+        deadline=Deadline(date=datetime.date(2026, 8, 30)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("m")  # due moves to tomorrow
+        await pilot.pause()
+        await pilot.press("alt+d")
+        await pilot.pause()
+        await pilot.press("x")  # deadline cleared
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        tomorrow = _TODAY + datetime.timedelta(days=1)
+        assert repo.dues == [(TaskId("t1"), Due(date=tomorrow))]
+        assert repo.deadlines == [(TaskId("t1"), None)]
+
+        await pilot.press("z")  # one undo puts both back
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.dues[-1] == (TaskId("t1"), Due(date=_TODAY))
+        assert repo.deadlines[-1] == (
+            TaskId("t1"),
+            Deadline(date=datetime.date(2026, 8, 30)),
+        )
+
+
+@pytest.mark.anyio
+async def test_the_editor_leaves_untouched_attributes_alone() -> None:
+    task = Task(
+        id=TaskId("t1"),
+        content="t1",
+        priority=Priority.P4,
+        due=Due(date=_TODAY),
+        deadline=Deadline(date=datetime.date(2026, 8, 30)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("!")  # only the title changes
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.text_edits == [(TaskId("t1"), "t1!", "")]
+        assert repo.dues == []
+        assert repo.deadlines == []
+
+
+@pytest.mark.anyio
+async def test_the_editor_carries_a_project_priority_and_labels_into_the_new_task() -> (
+    None
+):
+    repo = FakeRepository(
+        [],
+        [Project(id="220", name="Inbox", is_inbox=True), Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+        labels=[Label(id="l1", name="errand")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("alt+v")
+        await pilot.pause()
+        await pilot.press("2")  # the Inbox root is no target: 1 Work, 2 Work / Now
+        await pilot.pause()
+        await pilot.press("alt+l")
+        await pilot.pause()
+        await _type(pilot, "err")  # filters down to the one known label
+        await pilot.press("space", "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskEditScreen)  # every picker handed back
+        await pilot.press("alt+2")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        task = _added(repo)
+        assert task.project_ref == "9"
+        assert task.section_ref == "s1"
+        assert task.labels == ("errand",)
+        assert task.priority is Priority.P2
+
+
+@pytest.mark.anyio
+async def test_the_editor_moves_an_edited_task_to_the_project_it_picked() -> None:
+    repo = FakeRepository(
+        [_sectioned("t1")],
+        [Project(id="9", name="Work"), Project(id="7", name="Home")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+v")
+        await pilot.pause()
+        await pilot.press("2")  # Home
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("t1"), "7", None)]
+
+
+@pytest.mark.anyio
+async def test_the_editor_nests_an_edited_task_and_skips_a_plain_move() -> None:
+    repo = FakeRepository(
+        [_sectioned("t1"), _sectioned("t2")],
+        [Project(id="9", name="Work")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")  # editing t1
+        await pilot.pause()
+        await pilot.press("alt+n")
+        await pilot.pause()
+        await pilot.press("2")  # 1 is top level, so this is t2
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        # the re-parent carries the project, so no separate move goes out
+        assert repo.parents == [(TaskId("t1"), "t2")]
+        assert repo.moves == []
+
+
+@pytest.mark.anyio
+async def test_the_editor_cannot_nest_a_task_under_itself() -> None:
+    repo = FakeRepository([_sectioned("t1")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+n")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ParentPickerScreen)
+        options = app.screen.query_one(OptionList).option_count
+        assert options == 1  # the top-level entry alone
+
+
+@pytest.mark.anyio
+async def test_lifting_a_subtask_out_keeps_the_project_the_editor_picked() -> None:
+    """A plain move is what un-parents a task, so the move has to carry the
+    project the editor was left holding, not the one the subtask came from."""
+    parent = Task(
+        id=TaskId("p1"), content="p1", priority=Priority.P4, due=None, project_id="9"
+    )
+    child = Task(
+        id=TaskId("c1"),
+        content="c1",
+        priority=Priority.P4,
+        due=None,
+        project_id="9",
+        parent_id="p1",
+    )
+    repo = FakeRepository(
+        [parent, child], [Project(id="9", name="Work"), Project(id="7", name="Home")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # expand p1 to reach its subtask
+        await pilot.press("down")
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+v")
+        await pilot.pause()
+        await pilot.press("2")  # Home, which also lifts it out of p1
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.moves == [(TaskId("c1"), "7", None)]
+        assert repo.parents == []
+
+
+@pytest.mark.anyio
+async def test_the_editor_registers_a_label_todoist_does_not_know_yet() -> None:
+    repo = FakeRepository([_sectioned("t1")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+l")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("space", "enter")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.label_edits == [(TaskId("t1"), ("new",), ("new",))]
+
+
+@pytest.mark.anyio
+async def test_the_editor_sets_the_priority_of_an_edited_task() -> None:
+    repo = FakeRepository([_sectioned("t1")], [Project(id="9", name="Work")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+3")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.priorities == [(TaskId("t1"), Priority.P3)]
+
+
+@pytest.mark.anyio
+async def test_the_editor_hangs_a_reminder_off_the_task_it_creates() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("t")  # today, so a relative reminder is allowed…
+        await pilot.pause()
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("0", "9", "0", "0", "enter")  # …once it has a time
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("a", "r", "h")  # add, relative, 1 hour before
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        plan = repo.applied[0]
+        assert len(plan.reminders) == 1
+        assert plan.reminders[0].item_ref == plan.tasks[0].temp_id
+        assert plan.reminders[0].reminder.minute_offset == 60
+
+
+@pytest.mark.anyio
+async def test_the_editor_adds_and_drops_reminders_on_an_edited_task() -> None:
+    task = Task(
+        id=TaskId("t1"),
+        content="t1",
+        priority=Priority.P4,
+        due=Due(date=_TODAY, time=datetime.time(9, 0)),
+        project_id="220",
+    )
+    gone = Reminder("r1", "t1", "relative", minute_offset=0)
+    repo = FakeRepository([task], [], reminders=[gone])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("d")  # drops the one it had
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("a", "r", "h")  # adds one an hour before
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+        await pilot.pause()
+
+        assert repo.deleted_reminders == ["r1"]
+        assert [(r.item_id, r.minute_offset) for r in repo.added_reminders] == [
+            ("t1", 60)
+        ]
 
 
 @pytest.mark.anyio
@@ -5723,6 +6160,25 @@ def test_every_forwarded_card_key_matches_a_list_binding() -> None:
         assert key in bound[action] or key == "a"
         # the card's help names actions by their list description
         assert described[action], f"{key} names {action}, which has no description"
+
+
+def test_every_editor_chord_matches_the_list_key_for_that_attribute() -> None:
+    """The editor's chords are the list's keys held with alt, so a rebinding on
+    one side has to move the other. Labels are the one exception: the list
+    reaches them by `@`, and a remapper between here and the terminal can eat
+    the shift that needs, so the editor spells them `alt+l`."""
+    listed = {
+        key for b in map(as_binding, TodoistApp.BINDINGS) for key in b.key.split(",")
+    }
+
+    for binding in map(as_binding, TaskEditScreen.BINDINGS):
+        for key in binding.key.split(","):
+            if not key.startswith("alt+"):
+                continue  # ctrl+s / escape are the editor's own
+            bare = key.removeprefix("alt+")
+            assert bare in listed or key == "alt+l", (
+                f"{key} has no list binding on {bare}"
+            )
 
 
 def _card(app: TodoistApp) -> str:

@@ -69,14 +69,15 @@ from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import (
     ArrangementStore,
     TaskRepository,
     ViewSlotStore,
 )
-from todoist_tui.domain.schedule import reschedule
 from todoist_tui.domain.search import SearchTerm
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.columns import (
@@ -104,13 +105,14 @@ from todoist_tui.tui.screens.detail import (
     FORWARDED,
     TaskDetailScreen,
 )
-from todoist_tui.tui.screens.edit import TaskEditScreen, TaskText
+from todoist_tui.tui.screens.draft import TaskDraft, draft_of
+from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
-from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen
+from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.search import SearchScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 from todoist_tui.tui.screens.views import ViewsOutcome, ViewsScreen
@@ -355,11 +357,12 @@ class TodoistApp(App[None]):
         Binding("t", "set_due", "Due", show=False),
         Binding("d", "set_deadline", "Deadline", show=False),
         Binding("v", "move_task", "Move", show=False),
-        Binding("V", "move_parent", "Move under parent", show=False),
+        # `n` for nest; `V` stays bound for the fingers that learned it
+        Binding("n,V", "move_parent", "Move under parent", show=False),
         Binding("Y", "duplicate", "Duplicate project/section", show=False),
         Binding("D", "delete_section", "Delete section", show=False),
         Binding("at", "set_labels", "Labels", show=False),
-        Binding("R", "reminders", "Reminders", show=False),
+        Binding("m,R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
         Binding("ctrl+e", "edit_task", "Edit title + description", show=False),
         Binding("a", "add_task", "Add task", show=False),
@@ -852,7 +855,11 @@ class TodoistApp(App[None]):
     async def action_help(self) -> None:
         if isinstance(self.screen, HelpScreen):  # already open
             return
-        rows = shortcut_rows(TodoistApp.BINDINGS, TaskTable.BINDINGS)
+        # the editor's chords too: they are only live inside it, which the
+        # descriptions say, and nothing else lists them
+        rows = shortcut_rows(
+            TodoistApp.BINDINGS, TaskTable.BINDINGS, TaskEditScreen.BINDINGS
+        )
         self.push_screen(HelpScreen(rows + await self._jump_rows()))
 
     def on_task_detail_screen_help_requested(self) -> None:
@@ -927,45 +934,81 @@ class TodoistApp(App[None]):
         row = self._cursor_row()
         self._open_add(
             "New task",
-            # a new task keeps the cursor row company; on an empty view it falls
-            # back to the view's own project, and past that to the Inbox
-            row.project_id if row else self._view.project_id,
-            section_id=row.section_id if row else None,
-            # so the task the user just wrote in Today actually shows up there
-            due=Due(date=self._clock.today()) if self._view.key == TODAY.key else None,
+            replace(
+                self._lands_beside(row),
+                # so the task the user just wrote in Today actually shows up there
+                due=Due(date=self._clock.today())
+                if self._view.key == TODAY.key
+                else None,
+            ),
         )
 
     def action_add_subtask(self) -> None:
         row = self._cursor_row()
         if row is None:  # empty table or cursor on a group header
             return
-        self._open_add("New subtask", row.project_id, parent_id=str(row.id))
-
-    def _open_add(
-        self,
-        heading: str,
-        project_id: str | None,
-        section_id: str | None = None,
-        parent_id: str | None = None,
-        due: Due | None = None,
-    ) -> None:
-        self._push(
-            TaskEditScreen("", "", heading=heading),
-            lambda text: self._on_new_task(
-                text, project_id, section_id, parent_id, due
+        # a subtask inherits its parent's section, so only the project is carried
+        self._open_add(
+            "New subtask",
+            TaskDraft(
+                "",
+                "",
+                project_id=row.project_id,
+                project_name=row.project_name or "",
+                parent_id=str(row.id),
+                parent=row,
             ),
         )
 
-    def _on_new_task(
-        self,
-        text: TaskText | None,
-        project_id: str | None,
-        section_id: str | None,
-        parent_id: str | None,
-        due: Due | None,
-    ) -> None:
-        if text is None:  # editor was cancelled
+    def _lands_beside(self, row: TaskRow | None) -> TaskDraft:
+        """Where a new task goes: the cursor row's company; on an empty view the
+        view's own project; past that the Inbox the service falls back to."""
+        if row is not None:
+            return TaskDraft(
+                "",
+                "",
+                project_id=row.project_id,
+                project_name=row.project_name or "",
+                section_id=row.section_id,
+                section_name=row.section_name,
+            )
+        return TaskDraft(
+            "",
+            "",
+            project_id=self._view.project_id,
+            project_name=self._view.title if self._view.project_id else INBOX.title,
+        )
+
+    def _open_add(self, heading: str, draft: TaskDraft) -> None:
+        self._push(
+            TaskEditScreen(draft, self._clock.today(), self._catalog(), heading),
+            self._on_new_task,
+        )
+
+    def _catalog(self, editing: str | None = None) -> Catalog:
+        """What the editor's pickers choose from. A task being edited can nest
+        under neither itself nor anything already beneath it."""
+        return Catalog(
+            move_targets=self._move_targets,
+            parents=partial(self._parent_candidates, {editing} if editing else set()),
+            labels=self._label_names,
+        )
+
+    async def _move_targets(self) -> tuple[list[Project], list[Section]]:
+        return await self._repo.projects(), await self._repo.sections()
+
+    async def _parent_candidates(self, blocked_by: set[str]) -> list[TaskRow]:
+        candidates = await load_view(self._repo, ALL)
+        blocked = with_subtrees(candidates, blocked_by)
+        return [row for row in candidates if str(row.id) not in blocked]
+
+    async def _label_names(self) -> list[str]:
+        return [label.name for label in await self._repo.labels()]
+
+    def _on_new_task(self, draft: TaskDraft | None) -> None:
+        if draft is None:  # editor was cancelled
             return
+        parent_id = draft.parent_id
         if parent_id is not None:  # else the new subtask lands out of sight
             self._expanded.add(TaskId(parent_id))
         # the create returns no id, so the row only arrives with the drain's sync
@@ -973,12 +1016,16 @@ class TodoistApp(App[None]):
             partial(
                 add_task,
                 self._repo,
-                text.content,
-                text.description,
-                project_id=project_id,
-                section_id=section_id,
+                draft.content,
+                draft.description,
+                project_id=draft.project_id,
+                section_id=draft.section_id,
                 parent_id=parent_id,
-                due=due,
+                due=draft.due,
+                deadline=draft.deadline,
+                priority=draft.priority,
+                labels=draft.labels,
+                reminders=draft.reminders,
             ),
             "Failed to add task",
         )
@@ -987,25 +1034,123 @@ class TodoistApp(App[None]):
         row = self._cursor_row()
         if row is None:  # empty table or cursor on a group header
             return
+        task_id = str(row.id)
+        parent = next(
+            (r for r in self._visible if str(r.id) == row.parent_id), None
+        )  # not every parent is on screen; the id alone still drives the save
         self._push(
-            TaskEditScreen(row.content, row.description),
-            lambda text: self._on_edited(row, text),
+            TaskEditScreen(
+                draft_of(row, parent), self._clock.today(), self._catalog(task_id)
+            ),
+            lambda saved: self._on_edited(row, saved),
         )
 
-    def _on_edited(self, row: TaskRow, text: TaskText | None) -> None:
-        if text is None or (
-            text.content == row.content and text.description == row.description
-        ):
-            return  # cancelled, or saved without changing anything
+    def _on_edited(self, row: TaskRow, draft: TaskDraft | None) -> None:
+        if draft is None:  # editor was cancelled
+            return
+        work = self._draft_steps(row, draft)
+        if work:  # a save that changed nothing queues nothing, and so undoes nothing
+            self._queue(work)
+        self._apply_reminders(row, draft)
+
+    def _apply_reminders(self, row: TaskRow, draft: TaskDraft) -> None:
+        """Reminders are their own resources, added and deleted one by one — the
+        same fire-and-forget path the `R` key takes, so neither is undoable."""
+        kept = {r.id for r in draft.reminders}
+        for gone in (r for r in row.reminders if r.id not in kept):
+            self._delete_reminder(gone.id)
+        for added in (r for r in draft.reminders if not r.id):  # no id: never sent
+            self._add_reminders([str(row.id)], added)
+
+    def _draft_steps(
+        self, row: TaskRow, draft: TaskDraft
+    ) -> list[tuple[Step, Step | None]]:
+        """One step pair per attribute the editor changed, so the whole save is a
+        single undoable batch and each attribute travels the same path the list
+        key for it does."""
+        was = draft_of(row)
         task_id = str(row.id)
-        self._queue(
-            [
+        work: list[tuple[Step, Step | None]] = []
+        if (draft.content, draft.description) != (was.content, was.description):
+            work.append(
                 (
-                    self._text_step(task_id, text.content, text.description),
-                    self._text_step(task_id, row.content, row.description),
+                    self._text_step(task_id, draft.content, draft.description),
+                    self._text_step(task_id, was.content, was.description),
                 )
-            ]
-        )
+            )
+        if draft.due != was.due:
+            work.append(
+                (
+                    self._due_change_step(task_id, draft.due),
+                    self._due_step(task_id, row.due),
+                )
+            )
+        if draft.deadline != was.deadline:
+            work.append(
+                (
+                    self._deadline_step(task_id, draft.deadline),
+                    self._deadline_step(task_id, was.deadline),
+                )
+            )
+        if draft.priority is not was.priority:
+            work.append(
+                (
+                    self._priority_step(task_id, draft.priority),
+                    self._priority_step(task_id, was.priority),
+                )
+            )
+        if draft.labels != was.labels:
+            work.append(
+                (
+                    self._labels_step(task_id, draft.labels, draft.new_labels),
+                    self._labels_step(task_id, was.labels, ()),
+                )
+            )
+        work.extend(self._where_it_goes(row, draft))
+        return work
+
+    def _where_it_goes(
+        self, row: TaskRow, draft: TaskDraft
+    ) -> list[tuple[Step, Step | None]]:
+        """Where the task ends up, as the one `item_move` Todoist allows.
+
+        Nesting drags the task's project and section along, so a picked parent
+        stands for all three. Everything else is a plain move — which is also how
+        a task is lifted out of a parent, so the draft's project carries an
+        un-parenting rather than the parent step doing it.
+        """
+        unparented = draft.parent_id != row.parent_id
+        if unparented and draft.parent is not None:
+            forward = self._parent_step(row, draft.parent)
+            return [(forward, self._restore_parent_step(row))]
+        if draft.project_id is None or (
+            not unparented
+            and (draft.project_id, draft.section_id) == (row.project_id, row.section_id)
+        ):
+            return []
+        return [
+            (
+                self._move_step(
+                    str(row.id),
+                    draft.project_id,
+                    draft.project_name,
+                    draft.section_id,
+                    draft.section_name,
+                ),
+                # lifting it out has a parent to hang back on; a move has not
+                self._restore_parent_step(row)
+                if unparented
+                else self._move_step(
+                    str(row.id),
+                    row.project_id,
+                    row.project_name,
+                    row.section_id,
+                    row.section_name,
+                )
+                if row.project_id is not None
+                else None,
+            )
+        ]
 
     def _text_step(self, task_id: str, content: str, description: str) -> Step:
         return Step(
@@ -1030,14 +1175,17 @@ class TodoistApp(App[None]):
         self._queue(
             [
                 (
-                    self._due_text_step(str(row.id), result.text)
-                    if result.text is not None
-                    else self._due_step(str(row.id), reschedule(row.due, result.due)),
+                    self._due_change_step(str(row.id), rescheduled(result, row.due)),
                     self._due_step(str(row.id), row.due),
                 )
                 for row in rows
             ]
         )
+
+    def _due_change_step(self, task_id: str, due: Due | DueText | None) -> Step:
+        if isinstance(due, DueText):
+            return self._due_text_step(task_id, due.text)
+        return self._due_step(task_id, due)
 
     def _due_step(self, task_id: str, due: Due | None) -> Step:
         return Step(
@@ -1090,8 +1238,7 @@ class TodoistApp(App[None]):
             return
         self._picking_project = True
         try:
-            projects = await self._repo.projects()
-            sections = await self._repo.sections()
+            projects, sections = await self._move_targets()
         except Exception as error:  # offline / sync failed: report, stay put
             self._set_status(f"Failed to load projects: {error}")
             self._picking_project = False
@@ -1166,15 +1313,13 @@ class TodoistApp(App[None]):
             return
         self._picking_parent = True
         try:
-            candidates = await load_view(self._repo, ALL)
+            candidates = await self._parent_candidates(set(ids))
         except Exception as error:  # offline / sync failed: report, stay put
             self._set_status(f"Failed to load tasks: {error}")
             self._picking_parent = False
             return
-        # a task can nest under neither itself nor anything already beneath it
-        blocked = with_subtrees(candidates, set(ids))
         self._push(
-            ParentPickerScreen([r for r in candidates if str(r.id) not in blocked]),
+            ParentPickerScreen(candidates),
             lambda target: self._on_parent_chosen(ids, target),
         )
 
@@ -1356,12 +1501,11 @@ class TodoistApp(App[None]):
             return
         self._picking_labels = True
         try:
-            catalog = await self._repo.labels()
+            names = set(await self._label_names())
         except Exception as error:  # offline / sync failed: report, stay put
             self._set_status(f"Failed to load labels: {error}")
             self._picking_labels = False
             return
-        names = {label.name for label in catalog}
         task_ids = [row.id for row in rows]
         # one task: edit its labels in place (replace). A selection: the editor
         # opens blank and its result is *added* to each task's own labels.

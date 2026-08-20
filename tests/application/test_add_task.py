@@ -3,7 +3,7 @@ import datetime
 import pytest
 
 from todoist_tui.application.add_task import add_task
-from todoist_tui.domain.creation import CreationPlan, NewTask
+from todoist_tui.domain.creation import CreationPlan, NewReminder, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
@@ -167,3 +167,21 @@ async def test_add_task_raises_when_there_is_no_inbox() -> None:
         await add_task(repo, "Capture this", temp_ids=iter(["t-1"]))
 
     assert repo.applied == []
+
+
+@pytest.mark.anyio
+async def test_a_reminder_rides_along_in_the_creation_plan() -> None:
+    """The task has no id yet, so its reminder points at the task's temp_id."""
+    repo = FakeRepository(projects=[Project(id="220", name="Inbox", is_inbox=True)])
+
+    await add_task(
+        repo,
+        "new",
+        reminders=(Reminder("", "", "relative", minute_offset=30),),
+        temp_ids=iter(["task", "rem"]),
+    )
+
+    plan = repo.applied[0]
+    assert plan.reminders == (
+        NewReminder("rem", "task", Reminder("", "", "relative", minute_offset=30)),
+    )

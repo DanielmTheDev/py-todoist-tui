@@ -140,6 +140,14 @@ class ApiTaskRepository:
             )
         for task in plan.tasks:
             specs.append(("item_add", task.temp_id, _item_add_args(task)))
+        for reminder in plan.reminders:
+            specs.append(
+                (
+                    "reminder_add",
+                    reminder.temp_id,
+                    {"item_id": reminder.item_ref, **reminder.reminder.to_api},
+                )
+            )
         await self._client.create_entities(specs)
 
     async def refresh(self) -> None:
