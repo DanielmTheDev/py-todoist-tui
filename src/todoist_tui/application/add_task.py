@@ -8,7 +8,11 @@ from todoist_tui.domain.creation import CreationPlan, NewReminder, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
-from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.reminder import (
+    Reminder,
+    default_reminder,
+    wants_default_reminder,
+)
 from todoist_tui.domain.repository import TaskRepository
 
 
@@ -35,9 +39,13 @@ async def add_task(
 
     A subtask (`parent_id` set) inherits its parent's section, so the section is
     left out rather than sent alongside. A label Todoist doesn't know yet is
-    registered by the create itself, so no separate step declares it.
+    registered by the create itself, so no separate step declares it. A due time
+    with no reminder of its own earns the default one, as Todoist's own clients
+    give it.
     """
     ids = temp_ids or _uuid_temp_ids()
+    if wants_default_reminder(None, due, reminders):
+        reminders = (default_reminder(),)
     task = NewTask(
         temp_id=next(ids),
         content=content,

@@ -70,7 +70,11 @@ from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.reminder import (
+    Reminder,
+    default_reminder,
+    wants_default_reminder,
+)
 from todoist_tui.domain.repository import (
     ArrangementStore,
     TaskRepository,
@@ -1038,6 +1042,8 @@ class TodoistApp(App[None]):
             self._delete_reminder(gone.id)
         for added in (r for r in draft.reminders if not r.id):  # no id: never sent
             self._add_reminders([str(row.id)], added)
+        if wants_default_reminder(row.due, draft.due, draft.reminders):
+            self._add_reminders([str(row.id)], default_reminder())
 
     def _draft_steps(
         self, row: TaskRow, draft: TaskDraft
@@ -1149,15 +1155,25 @@ class TodoistApp(App[None]):
         self._selected.clear()
         # graft the picked date onto each task's own rule so a recurring task keeps
         # recurring (moves its next occurrence) instead of losing the rule
+        moved = [(row, rescheduled(result, row.due)) for row in rows]
         self._queue(
             [
                 (
-                    self._due_change_step(str(row.id), rescheduled(result, row.due)),
+                    self._due_change_step(str(row.id), due),
                     self._due_step(str(row.id), row.due),
                 )
-                for row in rows
+                for row, due in moved
             ]
         )
+        # queued second, and the outbox is serial, so the due time is on the server
+        # by the time its relative reminder is added
+        gained = [
+            str(row.id)
+            for row, due in moved
+            if wants_default_reminder(row.due, due, row.reminders)
+        ]
+        if gained:
+            self._add_reminders(gained, default_reminder())
 
     def _due_change_step(self, task_id: str, due: Due | DueText | None) -> Step:
         if isinstance(due, DueText):

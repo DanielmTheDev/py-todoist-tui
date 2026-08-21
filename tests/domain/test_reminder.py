@@ -2,8 +2,12 @@ import datetime
 
 import pytest
 
-from todoist_tui.domain.due import Due
-from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.due import Due, DueText
+from todoist_tui.domain.reminder import (
+    Reminder,
+    default_reminder,
+    wants_default_reminder,
+)
 
 
 def test_from_api_reads_an_absolute_reminder() -> None:
@@ -79,3 +83,48 @@ def test_to_api_absolute_without_due_raises() -> None:
 def test_to_api_relative_without_offset_raises() -> None:
     with pytest.raises(ValueError):
         _ = Reminder(id="", item_id="t1", type="relative").to_api
+
+
+def test_default_reminder_fires_at_the_due_time() -> None:
+    reminder = default_reminder()
+
+    assert reminder.type == "relative"
+    assert reminder.minute_offset == 0
+    assert reminder.id == ""
+    assert reminder.item_id == ""
+
+
+def test_wants_the_default_when_a_task_gains_a_due_time() -> None:
+    timed = Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0))
+
+    assert wants_default_reminder(None, timed, ())
+
+
+def test_wants_no_default_for_an_all_day_due() -> None:
+    assert not wants_default_reminder(None, Due(date=datetime.date(2030, 1, 1)), ())
+
+
+def test_wants_no_default_when_a_reminder_already_exists() -> None:
+    timed = Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0))
+    existing = Reminder(id="r1", item_id="t1", type="relative", minute_offset=30)
+
+    assert not wants_default_reminder(None, timed, (existing,))
+
+
+def test_wants_no_default_when_the_task_already_had_a_time() -> None:
+    """Only a gained time triggers it, so a deliberately deleted reminder stays
+    deleted across a reschedule."""
+    before = Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0))
+    after = Due(date=datetime.date(2030, 1, 2), time=datetime.time(10, 0))
+
+    assert not wants_default_reminder(before, after, ())
+
+
+def test_wants_no_default_for_a_due_phrase_todoist_resolves() -> None:
+    assert not wants_default_reminder(None, DueText("tomorrow at 9"), ())
+
+
+def test_wants_no_default_when_the_due_is_cleared() -> None:
+    before = Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0))
+
+    assert not wants_default_reminder(before, None, ())

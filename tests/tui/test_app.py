@@ -104,6 +104,9 @@ class FakeRepository:
         self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | DueText | None]] = []
+        self.log: list[
+            str
+        ] = []  # write order, so a reminder can be shown to follow its due
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
@@ -213,6 +216,7 @@ class FakeRepository:
 
     async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         self.dues.append((task_id, due))
+        self.log.append("due")
         stored = _parsed(due) if isinstance(due, DueText) else due
         self._tasks = [
             replace(t, due=stored) if t.id == task_id else t for t in self._tasks
@@ -262,6 +266,7 @@ class FakeRepository:
 
     async def add_reminder(self, reminder: Reminder) -> None:
         self.added_reminders.append(reminder)
+        self.log.append("reminder")
         stored = (
             reminder
             if reminder.id
@@ -6805,3 +6810,151 @@ async def test_undo_brings_a_cleared_due_date_back_with_the_task() -> None:
         assert repo.dues == [(TaskId("kid"), None), (TaskId("kid"), was)]
         assert repo.moves == [(TaskId("kid"), "220", None)]  # lifted back out
         assert str(_cell(app.query_one(TaskTable), 0, "DUE")) != ""
+
+
+@pytest.mark.anyio
+async def test_scheduling_a_due_time_adds_the_default_reminder() -> None:
+    task = Task(
+        id=TaskId("A"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 28)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("0", "9", "3", "0", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.dues == [
+            (
+                TaskId("A"),
+                Due(date=datetime.date(2026, 7, 28), time=datetime.time(9, 30)),
+            )
+        ]
+        assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
+            ("A", "relative", 0)
+        ]
+        # a relative reminder needs the due time to be on the server already
+        assert repo.log == ["due", "reminder"]
+
+
+@pytest.mark.anyio
+async def test_scheduling_a_task_that_already_reminds_adds_no_default() -> None:
+    existing = Reminder(id="r1", item_id="A", type="relative", minute_offset=30)
+    repo = FakeRepository([_timed("A")], [], reminders=[existing])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("0", "9", "3", "0", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.added_reminders == []
+
+
+@pytest.mark.anyio
+async def test_rescheduling_a_timed_task_does_not_resurrect_its_reminder() -> None:
+    """The user deleted it on purpose; only a *gained* time earns the default."""
+    repo = FakeRepository([_timed("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("1", "1", "0", "0", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.added_reminders == []
+
+
+@pytest.mark.anyio
+async def test_an_all_day_reschedule_adds_no_reminder() -> None:
+    task = Task(
+        id=TaskId("A"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 28)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("m")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.added_reminders == []
+
+
+@pytest.mark.anyio
+async def test_the_editor_giving_a_due_time_adds_the_default_reminder() -> None:
+    task = Task(
+        id=TaskId("A"),
+        content="Buy milk",
+        priority=Priority.P4,
+        due=Due(date=datetime.date(2026, 7, 28)),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press("0", "9", "3", "0", "enter")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
+            ("A", "relative", 0)
+        ]
+        assert repo.log == ["due", "reminder"]
+
+
+@pytest.mark.anyio
+async def test_the_editor_dropping_a_reminder_does_not_re_add_the_default() -> None:
+    existing = Reminder(id="r1", item_id="A", type="relative", minute_offset=0)
+    repo = FakeRepository([_timed("A")], [], reminders=[existing])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("d")  # delete the only reminder
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted_reminders == ["r1"]
+        assert repo.added_reminders == []

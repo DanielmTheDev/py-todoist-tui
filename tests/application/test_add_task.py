@@ -10,7 +10,7 @@ from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.reminder import Reminder, default_reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
@@ -185,3 +185,46 @@ async def test_a_reminder_rides_along_in_the_creation_plan() -> None:
     assert plan.reminders == (
         NewReminder("rem", "task", Reminder("", "", "relative", minute_offset=30)),
     )
+
+
+@pytest.mark.anyio
+async def test_a_due_time_earns_the_default_reminder() -> None:
+    repo = FakeRepository(projects=[Project(id="220", name="Inbox", is_inbox=True)])
+
+    await add_task(
+        repo,
+        "new",
+        due=Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0)),
+        temp_ids=iter(["task", "rem"]),
+    )
+
+    assert repo.applied[0].reminders == (
+        NewReminder("rem", "task", default_reminder()),
+    )
+
+
+@pytest.mark.anyio
+async def test_an_all_day_due_earns_no_reminder() -> None:
+    repo = FakeRepository(projects=[Project(id="220", name="Inbox", is_inbox=True)])
+
+    await add_task(
+        repo, "new", due=Due(date=datetime.date(2030, 1, 1)), temp_ids=iter(["task"])
+    )
+
+    assert repo.applied[0].reminders == ()
+
+
+@pytest.mark.anyio
+async def test_a_chosen_reminder_beats_the_default() -> None:
+    repo = FakeRepository(projects=[Project(id="220", name="Inbox", is_inbox=True)])
+    chosen = Reminder("", "", "relative", minute_offset=30)
+
+    await add_task(
+        repo,
+        "new",
+        due=Due(date=datetime.date(2030, 1, 1), time=datetime.time(9, 0)),
+        reminders=(chosen,),
+        temp_ids=iter(["task", "rem"]),
+    )
+
+    assert repo.applied[0].reminders == (NewReminder("rem", "task", chosen),)
