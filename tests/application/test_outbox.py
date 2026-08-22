@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -202,3 +202,25 @@ async def test_retiring_reports_no_change() -> None:
         pass
 
     assert (harness.outbox.pending, harness.changes) == ((), changes)
+
+
+@pytest.mark.anyio
+async def test_a_queued_wave_goes_out_at_once() -> None:
+    """Sent together, they reach the client in one turn, which posts them as one
+    batch — Todoist runs a batch in order, so the user's sequence still holds."""
+    harness = Harness()
+    log: list[str] = []
+
+    def recording(name: str) -> Callable[[], Awaitable[None]]:
+        async def command() -> None:
+            log.append(f"start {name}")
+            await asyncio.sleep(0)
+            log.append(f"end {name}")
+
+        return command
+
+    harness.outbox.queue(edit(["a"], priority=Priority.P1), recording("a"))
+    harness.outbox.queue(edit(["b"], priority=Priority.P1), recording("b"))
+    await harness.outbox.idle()
+
+    assert log == ["start a", "start b", "end a", "end b"]

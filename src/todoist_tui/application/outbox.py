@@ -23,8 +23,11 @@ class _Entry:
 class Outbox:
     """The queue of local changes the server has not confirmed yet.
 
-    Commands run one at a time, in the order the user issued them, so a rapid
-    succession of actions can't reach Todoist out of order. Each mutation stays
+    Commands go out in the order the user issued them — everything queued at
+    once starts in one turn of the loop, which lets the client carry the lot in
+    a single request that Todoist runs in that same order. One that reads before
+    it writes rides a later trip; nothing waits on those, since a task the server
+    has not named yet is nothing else's subject. Each mutation stays
     in `pending` — and so keeps being replayed over every reload — until a sync
     that *began after* its acknowledgement has landed. Confirming on a sync that
     was already in flight would apply a snapshot taken before the change and make
@@ -98,13 +101,15 @@ class Outbox:
     async def _dispatch(self) -> None:
         try:
             while True:
-                entry = self._next_unsent()
-                if entry is not None:
-                    await self._send(entry)
+                wave = self._unsent()
+                if wave:
+                    # started in issue order and in one turn, so the client can
+                    # carry them to Todoist as a single ordered batch
+                    await asyncio.gather(*(self._send(e) for e in wave))
                     continue
                 await self._resync()
                 self._report_failures()  # after the redraw, which would clobber them
-                if self._next_unsent() is None:  # nothing queued while we synced
+                if not self._unsent():  # nothing queued while we synced
                     break
         finally:  # no await between the check above and here, so nothing strands
             self._dispatching = False
@@ -129,8 +134,8 @@ class Outbox:
             self._on_error(self._failures[-1])
             self._failures.clear()
 
-    def _next_unsent(self) -> _Entry | None:
-        return next((e for e in self._entries if e.acked_after is None), None)
+    def _unsent(self) -> list[_Entry]:
+        return [e for e in self._entries if e.acked_after is None]
 
     def _spawn_task(self, coroutine: Coroutine[object, object, None]) -> None:
         self._task = asyncio.create_task(coroutine)

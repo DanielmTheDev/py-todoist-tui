@@ -1,11 +1,18 @@
+import asyncio
 import json
+from typing import Any, cast
 from urllib.parse import parse_qs
 
 import httpx
 import pytest
 import respx
 
-from todoist_tui.api.client import BASE_URL, SyncCommandError, TodoistClient
+from todoist_tui.api.client import (
+    BASE_URL,
+    COMMAND_LIMIT,
+    SyncCommandError,
+    TodoistClient,
+)
 from todoist_tui.domain.search import InvalidSearchQuery
 
 
@@ -709,4 +716,130 @@ async def test_requests_use_a_generous_timeout() -> None:
     await client.create_entities([("project_add", "tp", {"name": "x"})])
 
     assert route.calls.last.request.extensions["timeout"]["read"] == 30.0
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_commands_issued_together_travel_in_one_request() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200, json={"sync_status": {"u-1": "ok", "u-2": "ok"}}
+        )
+    )
+    uuids = iter(["u-1", "u-2"])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+
+    await asyncio.gather(client.close_item("A"), client.close_item("B"))
+
+    assert route.call_count == 1
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert [c["args"]["id"] for c in commands] == ["A", "B"]  # issue order
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_a_rejection_in_a_shared_request_raises_for_its_caller_alone() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={"sync_status": {"u-1": "ok", "u-2": {"error": "not found"}}},
+        )
+    )
+    uuids = iter(["u-1", "u-2"])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+
+    accepted, rejected = await asyncio.gather(
+        client.close_item("A"), client.close_item("B"), return_exceptions=True
+    )
+
+    assert accepted is None
+    assert isinstance(rejected, SyncCommandError)
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_a_verdict_missing_from_a_shared_request_strands_no_one() -> None:
+    """Whatever one caller's commands turn out to be, the rest still get an
+    answer — a request that resolved nobody would hang the outbox for good."""
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    uuids = iter(["u-1", "u-2"])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+
+    async with asyncio.timeout(5):  # a strand shows as a hang, so cut it short
+        accepted, unanswered = await asyncio.gather(
+            client.close_item("A"), client.close_item("B"), return_exceptions=True
+        )
+
+    assert accepted is None
+    assert isinstance(unanswered, Exception)
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_a_wave_past_the_command_limit_is_split_across_requests() -> None:
+    over = COMMAND_LIMIT + 5
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200, json={"sync_status": {f"u-{i}": "ok" for i in range(over)}}
+        )
+    )
+    uuids = iter([f"u-{i}" for i in range(over)])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+
+    await asyncio.gather(*(client.close_item(str(i)) for i in range(over)))
+
+    sent = [_commands_sent(route, i) for i in range(route.call_count)]
+    assert [len(batch) for batch in sent] == [COMMAND_LIMIT, 5]
+    assert [c["args"]["id"] for batch in sent for c in batch] == [
+        str(i) for i in range(over)
+    ]  # still one unbroken run, in issue order
+    await client.aclose()
+
+
+def _commands_sent(route: respx.Route, index: int) -> list[dict[str, Any]]:
+    """The commands one request carried. `route.calls.last` is typed; an indexed
+    call is not, so the cast lives here rather than at every use."""
+    call = cast("respx.models.Call", route.calls[index])
+    request = call.request
+    return cast(
+        "list[dict[str, Any]]",
+        json.loads(parse_qs(request.content.decode())["commands"][0]),
+    )
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_a_command_raised_mid_flight_is_still_sent() -> None:
+    """A command that reads before it writes reaches the client after the batch
+    ahead of it has gone. Only the flush already running can pick it up."""
+    posting = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held(_request: httpx.Request) -> httpx.Response:
+        posting.set()
+        await release.wait()
+        return httpx.Response(200, json={"sync_status": {"u-1": "ok", "u-2": "ok"}})
+
+    route = respx.post(f"{BASE_URL}/sync").mock(side_effect=held)
+    uuids = iter(["u-1", "u-2"])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(uuids))
+
+    ahead = asyncio.create_task(client.close_item("A"))
+    await posting.wait()  # the first batch is on the wire
+    behind = asyncio.create_task(client.close_item("B"))
+    await asyncio.sleep(0)  # ...and the second is queued behind it
+    release.set()
+
+    async with asyncio.timeout(5):  # a stranded command shows as a hang
+        await asyncio.gather(ahead, behind)
+
+    assert route.call_count == 2
     await client.aclose()

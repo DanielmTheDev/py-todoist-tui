@@ -1212,8 +1212,8 @@ class TodoistApp(App[None]):
                 for row, due in moved
             ]
         )
-        # queued second, and the outbox is serial, so the due time is on the server
-        # by the time its relative reminder is added
+        # queued second, and the outbox keeps issue order all the way to Todoist,
+        # so the due time is set by the time its relative reminder is added
         gained = [
             str(row.id)
             for row, due in moved

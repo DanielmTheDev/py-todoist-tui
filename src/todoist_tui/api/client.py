@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -12,10 +13,16 @@ BASE_URL = "https://api.todoist.com/api/v1"
 # server-side, and a read timeout there leaves the write committed but reports
 # a failure. 30s gives ample headroom for the biggest project/section copies.
 _TIMEOUT_SECONDS = 30.0
+# Todoist takes at most this many commands in one request, so a wave bigger
+# than a batch goes as consecutive batches rather than being refused whole.
+COMMAND_LIMIT = 100
 
 
 def _random_uuid() -> str:
     return str(uuid.uuid4())
+
+
+type _Queued = tuple[list[dict[str, Any]], asyncio.Future[None]]
 
 
 class SyncCommandError(Exception):
@@ -32,6 +39,11 @@ class TodoistClient:
     ) -> None:
         self._http = http
         self._uuid = uuid_factory
+        # commands raised in one turn of the loop ride to Todoist together: it
+        # runs a batch in order, so a wave of actions costs one round trip
+        # instead of one each, and their sequence is still the user's.
+        self._queued: list[_Queued] = []
+        self._flush: asyncio.Task[None] | None = None
 
     @classmethod
     def create(
@@ -195,15 +207,53 @@ class TodoistClient:
         await self._run([{"type": kind, "uuid": self._uuid(), "args": args}])
 
     async def _run(self, commands: list[dict[str, Any]]) -> None:
+        answer = asyncio.get_running_loop().create_future()
+        self._queued.append((commands, answer))
+        if self._flush is None or self._flush.done():
+            self._flush = asyncio.create_task(self._send_queued())
+        await answer
+
+    async def _send_queued(self) -> None:
+        """Post what is queued and answer each caller with its own commands'
+        verdict — one rejection is not the others'.
+
+        It keeps draining, because a command that reads before it writes reaches
+        the queue while a batch is already on the wire, and only the flush still
+        running will pick it up.
+        """
+        while self._queued:
+            batch, self._queued = self._queued, []
+            try:
+                await self._answer(batch)
+            finally:  # nobody may be left awaiting an answer this never gave
+                for _commands, answer in batch:
+                    if not answer.done():
+                        answer.set_exception(SyncCommandError("the request was lost"))
+
+    async def _answer(self, batch: list[_Queued]) -> None:
+        commands = [c for cs, _ in batch for c in cs]
+        sync_status: dict[str, Any] = {}
+        try:
+            for start in range(0, len(commands), COMMAND_LIMIT):
+                sync_status |= await self._post(commands[start : start + COMMAND_LIMIT])
+        except Exception as error:  # the whole trip failed: so did every caller
+            for _commands, answer in batch:
+                answer.set_exception(error)
+            return
+        for own, answer in batch:
+            try:
+                _raise_for_commands(own, sync_status)
+            except Exception as error:  # incl. a verdict the response left out
+                answer.set_exception(error)
+            else:
+                answer.set_result(None)
+
+    async def _post(self, commands: list[dict[str, Any]]) -> dict[str, Any]:
         response = await self._http.post(
             "/sync", data={"commands": json.dumps(commands)}
         )
         response.raise_for_status()
-        sync_status = cast("dict[str, Any]", response.json())["sync_status"]
-        for command in commands:
-            status = sync_status[command["uuid"]]
-            if status != "ok":
-                raise SyncCommandError(str(status.get("error", status)))
+        return cast("dict[str, Any]", response.json())["sync_status"]
 
     async def _paginate(
         self, path: str, params: dict[str, str]
@@ -219,3 +269,12 @@ class TodoistClient:
             if not cursor:
                 return items
             query["cursor"] = cast("str", cursor)
+
+
+def _raise_for_commands(
+    commands: list[dict[str, Any]], sync_status: dict[str, Any]
+) -> None:
+    for command in commands:
+        status = sync_status[command["uuid"]]
+        if status != "ok":
+            raise SyncCommandError(str(status.get("error", status)))
