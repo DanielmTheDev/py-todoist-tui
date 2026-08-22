@@ -20,6 +20,11 @@ from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import merge
 from todoist_tui.domain.task import Task, TaskId
 
+# Nothing wipes the per-query cache any more, so it keeps only the queries a
+# session is still moving between — enough for the saved filters plus a few
+# searches, without holding every phrase ever typed.
+FILTER_CACHE_LIMIT = 16
+
 
 class SnapshotTaskRepository:
     """Serves projects()/inbox() from a memoized /sync snapshot, cache-first.
@@ -27,8 +32,14 @@ class SnapshotTaskRepository:
     First read prefers the persisted cache (instant, offline cold start);
     on a miss it syncs from `source` and writes through to the cache.
     `refresh()` force-resyncs from the network. today() is evaluated client-side
-    over the snapshot via a `FilterQuery`. complete() marks the snapshot dirty so
-    the next read bypasses the now-stale cache and re-syncs.
+    over the snapshot via a `FilterQuery`.
+
+    A mutation only marks the snapshot stale — it never drops it. Reads stay
+    instant, so an action never leaves the next one waiting on the network, and
+    the caller resyncs behind it (the outbox does so as soon as its queue
+    drains). What the user changed is theirs to replay on top; a stale read can
+    only lack a change they already see. `_dirty` matters just for a mutation
+    made before anything was read, where the disk copy predates it.
     """
 
     def __init__(
@@ -101,13 +112,19 @@ class SnapshotTaskRepository:
 
     async def filtered(self, query: str) -> list[Task]:
         if query not in self._filter_cache:  # cache-first; refresh happens in bg
-            self._filter_cache[query] = await self._inner.filtered(query)
+            self._remember(query, await self._inner.filtered(query))
         return self._filter_cache[query]
 
     async def refresh_filtered(self, query: str) -> list[Task]:
         result = await self._inner.filtered(query)  # server-side eval, live
-        self._filter_cache[query] = result
+        self._remember(query, result)
         return result
+
+    def _remember(self, query: str, tasks: list[Task]) -> None:
+        self._filter_cache.pop(query, None)  # re-insert, so it counts as the newest
+        self._filter_cache[query] = tasks
+        for stale in list(self._filter_cache)[:-FILTER_CACHE_LIMIT]:
+            del self._filter_cache[stale]
 
     async def filters(self) -> list[Filter]:
         return (await self._snapshot_now()).filters
@@ -120,66 +137,63 @@ class SnapshotTaskRepository:
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def uncomplete(self, task_id: TaskId) -> None:
         await self._inner.uncomplete(task_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def delete(self, task_id: TaskId) -> None:
         await self._inner.delete(task_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def delete_section(self, section_id: str) -> None:
         await self._inner.delete_section(section_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._inner.set_priority(task_id, priority)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
         await self._inner.set_due(task_id, due)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
         await self._inner.set_deadline(task_id, deadline)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_project(
         self, task_id: TaskId, project_id: str, section_id: str | None = None
     ) -> None:
         await self._inner.set_project(task_id, project_id, section_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
         await self._inner.set_parent(task_id, parent_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:
         await self._inner.set_labels(task_id, labels, create)
-        await self._invalidate()
+        self._mark_stale()
 
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         await self._inner.set_text(task_id, content, description)
-        await self._invalidate()
+        self._mark_stale()
 
     async def add_reminder(self, reminder: Reminder) -> None:
         await self._inner.add_reminder(reminder)
-        await self._invalidate()
+        self._mark_stale()
 
     async def delete_reminder(self, reminder_id: str) -> None:
         await self._inner.delete_reminder(reminder_id)
-        await self._invalidate()
+        self._mark_stale()
 
     async def apply_creation(self, plan: CreationPlan) -> None:
         await self._inner.apply_creation(plan)
-        await self._invalidate()
+        self._mark_stale()
 
-    async def _invalidate(self) -> None:
-        async with self._lock:  # a concurrent reader must not re-cache stale state
-            self._snapshot = None
-            self._dirty = True
-            self._filter_cache = {}  # a mutation changes what filters match
+    def _mark_stale(self) -> None:
+        self._dirty = True

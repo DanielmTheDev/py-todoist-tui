@@ -15,7 +15,7 @@ from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.store.repository import SnapshotTaskRepository
+from todoist_tui.store.repository import FILTER_CACHE_LIMIT, SnapshotTaskRepository
 
 
 class FakeClock:
@@ -312,166 +312,124 @@ async def test_refresh_filtered_bypasses_then_updates_cache() -> None:
     assert inner.filtered_queries == ["a", "a"]
 
 
-@pytest.mark.anyio
-async def test_complete_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+def _delegating_repo(inner: FakeInner) -> SnapshotTaskRepository:
+    """A repo whose reads are never exercised, so a write can be watched alone."""
+    return SnapshotTaskRepository(
+        inner, FakeSource(_full_delta(_snapshot())), FakeCache(), _CLOCK
     )
-
-    await repo.filtered("a")
-    await repo.complete(TaskId("x"))  # a mutation invalidates cached results
-    await repo.filtered("a")
-
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_delete_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_complete_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.delete(TaskId("x"))  # a mutation invalidates cached results
-    await repo.filtered("a")
+    await repo.complete(TaskId("x"))
+
+    assert inner.completed == [TaskId("x")]
+
+
+@pytest.mark.anyio
+async def test_uncomplete_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
+
+    await repo.uncomplete(TaskId("x"))
+
+    assert inner.uncompleted == [TaskId("x")]
+
+
+@pytest.mark.anyio
+async def test_delete_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
+
+    await repo.delete(TaskId("x"))
 
     assert inner.deleted == [TaskId("x")]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_delete_section_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_delete_section_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.delete_section("6S1")  # the section's tasks vanish with it
-    await repo.filtered("a")
+    await repo.delete_section("6S1")
 
     assert inner.deleted_sections == ["6S1"]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_priority_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_priority_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_priority(TaskId("x"), Priority.P1)  # mutation invalidates cache
-    await repo.filtered("a")
+    await repo.set_priority(TaskId("x"), Priority.P1)
 
     assert inner.priorities == [(TaskId("x"), Priority.P1)]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_due_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_due_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_due(TaskId("x"), Due(date=_TODAY))  # mutation invalidates cache
-    await repo.filtered("a")
+    await repo.set_due(TaskId("x"), Due(date=_TODAY))
 
     assert inner.dues == [(TaskId("x"), Due(date=_TODAY))]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_project_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_project_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_project(TaskId("x"), "9")  # mutation invalidates cache
-    await repo.filtered("a")
+    await repo.set_project(TaskId("x"), "9")
 
     assert inner.moves == [(TaskId("x"), "9", None)]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_parent_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_parent_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_parent(TaskId("x"), "p")  # mutation invalidates cache
-    await repo.filtered("a")
+    await repo.set_parent(TaskId("x"), "p")
 
     assert inner.parents == [(TaskId("x"), "p")]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_labels_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_labels_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_labels(TaskId("x"), ("home",), ("home",))  # mutation invalidates
-    await repo.filtered("a")
+    await repo.set_labels(TaskId("x"), ("home",), ("home",))
 
     assert inner.label_edits == [(TaskId("x"), ("home",), ("home",))]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_set_text_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_set_text_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
 
-    await repo.filtered("a")
-    await repo.set_text(TaskId("x"), "New title", "New note")  # invalidates
-    await repo.filtered("a")
+    await repo.set_text(TaskId("x"), "New title", "New note")
 
     assert inner.text_edits == [(TaskId("x"), "New title", "New note")]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
-async def test_apply_creation_delegates_then_invalidates_filter_cache() -> None:
-    inner = FakeInner(filtered_result=[_task("hit", "9")])
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(
-        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
-    )
+async def test_apply_creation_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
     plan = CreationPlan(
         projects=(NewProject(temp_id="tp", name="Work (copy)"),), sections=(), tasks=()
     )
 
-    await repo.filtered("a")
-    await repo.apply_creation(plan)  # a new project invalidates cached results
-    await repo.filtered("a")
+    await repo.apply_creation(plan)
 
     assert inner.applied == [plan]
-    assert inner.filtered_queries == ["a", "a"]
 
 
 @pytest.mark.anyio
@@ -573,38 +531,6 @@ async def test_refresh_syncs_incrementally_from_stored_token_and_merges() -> Non
 
 
 @pytest.mark.anyio
-async def test_complete_then_read_syncs_incrementally_and_drops_the_task() -> None:
-    inner = FakeInner()
-    source = FakeSource(_incremental("after", deleted_task="a"))
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
-
-    await repo.projects()  # served from cache
-    await repo.complete(TaskId("a"))
-    inbox = await repo.inbox()  # dirty -> incremental resync from the cached token
-
-    assert inner.completed == [TaskId("a")]
-    assert source.since == ["cached"]
-    assert [str(t.id) for t in inbox] == ["c"]
-
-
-@pytest.mark.anyio
-async def test_uncomplete_then_read_syncs_incrementally_and_restores_the_task() -> None:
-    inner = FakeInner()
-    source = FakeSource(_full_delta(_snapshot("after")))
-    cache = FakeCache(stored=_snapshot("cached"))
-    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
-
-    await repo.projects()  # served from cache
-    await repo.uncomplete(TaskId("a"))
-    inbox = await repo.inbox()  # dirty -> resync from the cached token
-
-    assert inner.uncompleted == [TaskId("a")]
-    assert source.since == ["cached"]
-    assert [str(t.id) for t in inbox] == ["a", "c"]
-
-
-@pytest.mark.anyio
 async def test_concurrent_first_fetch_shares_single_sync() -> None:
     source = FakeSource(_full_delta(_snapshot()))
     repo = SnapshotTaskRepository(FakeInner(), source, FakeCache(), _CLOCK)
@@ -612,3 +538,76 @@ async def test_concurrent_first_fetch_shares_single_sync() -> None:
     await asyncio.gather(repo.projects(), repo.inbox())
 
     assert source.snapshot_calls == 1
+
+
+@pytest.mark.anyio
+async def test_a_read_after_a_mutation_serves_the_memoized_snapshot() -> None:
+    source = FakeSource(_incremental("after", deleted_task="a"))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(FakeInner(), source, cache, _CLOCK)
+
+    await repo.projects()  # memoizes the cached snapshot
+    await repo.set_priority(TaskId("a"), Priority.P1)
+    inbox = await repo.inbox()
+
+    assert source.snapshot_calls == 0  # no network stall before the caller resyncs
+    assert [str(t.id) for t in inbox] == ["a", "c"]  # stale, and the outbox knows
+
+
+@pytest.mark.anyio
+async def test_a_mutation_keeps_the_filter_cache_until_the_resync() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_incremental("next", "a")), cache, _CLOCK
+    )
+
+    await repo.filtered("a")
+    await repo.complete(TaskId("x"))
+    await repo.filtered("a")
+
+    assert inner.filtered_queries == ["a"]  # still served from cache
+
+
+@pytest.mark.anyio
+async def test_refresh_after_a_mutation_pulls_the_change() -> None:
+    inner = FakeInner()
+    source = FakeSource(_incremental("after", deleted_task="a"))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
+
+    await repo.projects()
+    await repo.complete(TaskId("a"))
+    await repo.refresh()
+
+    assert source.since == ["cached"]  # incremental, from the memoized token
+    assert [str(t.id) for t in await repo.inbox()] == ["c"]
+
+
+@pytest.mark.anyio
+async def test_a_mutation_before_any_read_bypasses_the_stale_disk_cache() -> None:
+    source = FakeSource(_incremental("after", deleted_task="a"))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(FakeInner(), source, cache, _CLOCK)
+
+    await repo.complete(TaskId("a"))
+    inbox = await repo.inbox()  # nothing memoized yet, so the disk copy is stale
+
+    assert source.snapshot_calls == 1
+    assert [str(t.id) for t in inbox] == ["c"]
+
+
+@pytest.mark.anyio
+async def test_the_filter_cache_keeps_only_the_most_recent_queries() -> None:
+    inner = FakeInner(filtered_result=[_task("hit", "9")])
+    repo = SnapshotTaskRepository(
+        inner, FakeSource(_full_delta(_snapshot())), FakeCache(), _CLOCK
+    )
+
+    for i in range(FILTER_CACHE_LIMIT + 1):
+        await repo.filtered(f"q{i}")
+    fetched = len(inner.filtered_queries)
+    await repo.filtered(f"q{FILTER_CACHE_LIMIT}")  # the newest: still cached
+    await repo.filtered("q0")  # the oldest: evicted by the one that followed it
+
+    assert inner.filtered_queries[fetched:] == ["q0"]
