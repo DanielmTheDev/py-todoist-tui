@@ -50,6 +50,7 @@ from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.app import (
     MARKER_SLOT,
+    PENDING_MARK,
     ColumnHeader,
     InMemoryArrangements,
     InMemoryViewSlots,
@@ -5606,6 +5607,111 @@ async def test_a_seeds_the_strip_with_where_the_new_task_would_land() -> None:
         assert _attribute_strip(app) == (
             "Due Today · Deadline — · Project Work / Now"
             " · Parent — · Reminders — · Labels — · Priority P4"
+        )
+
+
+class HeldCreationRepository(FakeRepository):
+    """The create is held in flight, so what the list shows meanwhile is visible."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self.hold = asyncio.Event()
+
+    async def apply_creation(self, plan: CreationPlan) -> None:
+        await self.hold.wait()
+        await super().apply_creation(plan)
+
+    async def today(self) -> list[Task]:
+        # a task written into Today comes back in it, the way the server answers
+        return await self.all_tasks()
+
+
+class FailingCreationRepository(HeldCreationRepository):
+    async def apply_creation(self, plan: CreationPlan) -> None:
+        await self.hold.wait()
+        raise RuntimeError("boom")
+
+
+@pytest.mark.anyio
+async def test_a_new_task_shows_before_the_server_has_it() -> None:
+    repo = HeldCreationRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = PaintRecordingApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert repo.applied == []  # still in flight
+        assert _content_col(app.query_one(TaskTable)) == ["Buy milk" + PENDING_MARK]
+
+        repo.hold.set()
+        await settled(app)
+        await pilot.pause()
+
+        # the server's own row takes its place: one row, no longer pending
+        assert _content_col(app.query_one(TaskTable)) == ["Buy milk"]
+        # and never alongside it — the snapshot and the retirement share a frame
+        assert max(len(ids) for ids in app.paints) == 1
+
+
+@pytest.mark.anyio
+async def test_a_task_still_being_created_takes_no_action() -> None:
+    """Todoist named it nothing yet, so a command aimed at it could only be
+    refused. The row stands, and the band says why the key did nothing."""
+    repo = HeldCreationRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+        for key in ("e", "ctrl+e", "A"):  # the cursor sits on the only row there is
+            await pilot.press(key)
+            await _settle(pilot)
+
+            assert len(app.screen_stack) == 1, key  # no editor opened over it
+            assert "Still being created" in str(
+                app.query_one("#status", Static).render()
+            ), key
+
+        assert repo.completed == []
+        assert _content_col(app.query_one(TaskTable)) == ["Buy milk" + PENDING_MARK]
+
+        repo.hold.set()
+        await settled(app)
+
+
+@pytest.mark.anyio
+async def test_a_rejected_create_takes_its_row_back_off() -> None:
+    repo = FailingCreationRepository(
+        [], [Project(id="220", name="Inbox", is_inbox=True)]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert _content_col(app.query_one(TaskTable)) == ["Buy milk" + PENDING_MARK]
+
+        repo.hold.set()
+        await settled(app)
+        await pilot.pause()
+
+        assert _content_col(app.query_one(TaskTable)) == []
+        assert "Failed to add task: boom" in str(
+            app.query_one("#status", Static).render()
         )
 
 

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import datetime
+import uuid
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
@@ -142,6 +143,10 @@ _FOLD_OPEN = "▾ "  # subtree shown — on a parent task or a group header
 _FOLD_SHUT = "▸ "  # subtree folded away
 _SELECT_MARKER = "▌"  # bar on a multi-selected row
 PENDING_MARK = " ⟳"  # trails a row whose change Todoist hasn't confirmed yet
+# leads the id this client gives a task Todoist has yet to name, so an action
+# can tell one apart from a task the server would actually recognise
+_PROVISIONAL = "new-"
+_STILL_CREATING = "Still being created — try that again in a moment"
 
 
 def card_rows(bindings: list[BindingType]) -> list[tuple[str, str]]:
@@ -928,8 +933,8 @@ class TodoistApp(App[None]):
         )
 
     def action_add_subtask(self) -> None:
-        row = self._cursor_row()
-        if row is None:  # empty table or cursor on a group header
+        row = self._named_cursor_row()
+        if row is None:  # empty table, a group header, or a task not yet named
             return
         # a subtask inherits its parent's section, so only the project is carried
         self._open_add(
@@ -995,8 +1000,13 @@ class TodoistApp(App[None]):
         parent_id = draft.parent_id
         if parent_id is not None:  # else the new subtask lands out of sight
             self._expanded.add(TaskId(parent_id))
-        # the create returns no id, so the row only arrives with the drain's sync
-        self._send(
+        # the create returns no id, so the row stands in under one of its own
+        # until the drain's sync brings back the task the server actually made
+        self._queue([(self._add_step(draft), None)])
+
+    def _add_step(self, draft: TaskDraft) -> Step:
+        return Step(
+            restore([self._provisional_row(draft)]),
             partial(
                 add_task,
                 self._repo,
@@ -1004,7 +1014,7 @@ class TodoistApp(App[None]):
                 draft.description,
                 project_id=draft.project_id,
                 section_id=draft.section_id,
-                parent_id=parent_id,
+                parent_id=draft.parent_id,
                 due=draft.due,
                 deadline=draft.deadline,
                 priority=draft.priority,
@@ -1014,9 +1024,34 @@ class TodoistApp(App[None]):
             "Failed to add task",
         )
 
+    def _provisional_row(self, draft: TaskDraft) -> TaskRow:
+        """The new task as the list can already draw it, under an id only this
+        client knows. A typed phrase is Todoist's to parse, so its date arrives
+        with the sync that replaces this row."""
+        return TaskRow(
+            id=TaskId(f"{_PROVISIONAL}{uuid.uuid4()}"),
+            content=draft.content,
+            priority=draft.priority,
+            due=draft.due if isinstance(draft.due, Due) else None,
+            project_name=draft.project_name or None,
+            project_id=draft.project_id,
+            section_id=draft.section_id,
+            section_name=draft.section_name,
+            section_order=self._section_order(draft.section_id),
+            labels=draft.labels,
+            description=draft.description,
+            deadline=draft.deadline,
+            parent_id=draft.parent_id,
+        )
+
+    def _section_order(self, section_id: str | None) -> int:
+        """A sibling's, so the row groups with the section it was written into."""
+        sibling = next((r for r in self._visible if r.section_id == section_id), None)
+        return sibling.section_order if sibling is not None else 0
+
     def action_edit_task(self) -> None:
-        row = self._cursor_row()
-        if row is None:  # empty table or cursor on a group header
+        row = self._named_cursor_row()
+        if row is None:  # empty table, a group header, or a task not yet named
             return
         task_id = str(row.id)
         parent = next(
@@ -1144,6 +1179,15 @@ class TodoistApp(App[None]):
             partial(set_text, self._repo, TaskId(task_id), content, description),
             "Failed to edit task",
         )
+
+    def _named_cursor_row(self) -> TaskRow | None:
+        """The cursor's task, unless it is one Todoist has yet to name: nothing
+        can be hung off an id only this client knows."""
+        row = self._cursor_row()
+        if row is not None and _is_provisional(str(row.id)):
+            self._set_status(_STILL_CREATING)
+            return None
+        return row
 
     def _cursor_row(self) -> TaskRow | None:
         task_id = self._detail_scope or self._cursor_task_id(self.query_one(TaskTable))
@@ -1873,9 +1917,17 @@ class TodoistApp(App[None]):
             table.move_cursor(row=target)
 
     def _targets(self, table: TaskTable) -> list[str]:
-        """The task ids an action applies to: the open card's task if one started
-        the action, else the selection (in display order), else the cursor row,
-        else nothing."""
+        """The task ids an action applies to, leaving out any task Todoist has yet
+        to name — a command aimed at one of those could only be refused."""
+        picked = self._picked(table)
+        named = [task_id for task_id in picked if not _is_provisional(task_id)]
+        if len(named) != len(picked):
+            self._set_status(_STILL_CREATING)
+        return named
+
+    def _picked(self, table: TaskTable) -> list[str]:
+        """The open card's task if one started the action, else the selection (in
+        display order), else the cursor row, else nothing."""
         if self._detail_scope is not None:
             return [self._detail_scope]
         if self._selected:
@@ -2057,6 +2109,10 @@ def _header_key(index: int) -> str:
 
 def _task_key(index: int, task_id: str) -> str:
     return f"t:{index}:{task_id}"
+
+
+def _is_provisional(task_id: str) -> bool:
+    return task_id.startswith(_PROVISIONAL)
 
 
 def _task_id_of(row_key: str) -> str | None:
