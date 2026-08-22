@@ -456,10 +456,11 @@ class TodoistApp(App[None]):
         server had already acknowledged when the fetch started — one begun
         earlier could still be carrying a snapshot from before them.
 
-        The reload happens *inside* the confirmation, so the rows it loads are
-        already in place when the changes retire. Retiring first would repaint
-        the pre-change snapshot with nothing left on top of it, flashing a
-        departed row back for a frame.
+        The load happens *inside* the confirmation, so the rows it takes in are
+        already in place when the changes retire. Retiring first would leave the
+        pre-change snapshot with nothing on top of it, flashing a departed row
+        back. Only the paint waits until after, so the fresh rows and the
+        retirement reach the screen as one frame instead of two.
         """
         async with self._syncs:
             self._set_syncing(True)
@@ -468,7 +469,9 @@ class TodoistApp(App[None]):
                     await self._repo.refresh()
                     if self._active_server_query is not None:  # keep the filter live
                         await self._repo.refresh_filtered(self._active_server_query)
-                    await self._reload(self._view)
+                    loaded = await self._load_rows(self._view)
+                if loaded:
+                    self._repaint()
             except Exception:  # offline or sync failed: keep the cached view
                 pass
             finally:  # also runs on worker cancellation, so ⟳ never sticks
@@ -1622,19 +1625,26 @@ class TodoistApp(App[None]):
         )
 
     async def _reload(self, view: View) -> None:
+        if await self._load_rows(view):
+            self._repaint()
+
+    async def _load_rows(self, view: View) -> bool:
+        """Take `view`'s rows and arrangement in without drawing them, so a caller
+        that is about to change what sits on top of them can paint once. False
+        when the load failed and there is nothing new to draw."""
         try:
             rows = await load_view(self._repo, view)
             projects = await self._repo.projects()
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
-            return
+            return False
         self._inbox_id = next((p.id for p in projects if p.is_inbox), None)
         arrangement = await self._arrangements.get(view.key, view.default_arrangement)
         if arrangement != self._arrangement:
             self._collapsed.clear()  # regrouping makes the folded label paths stale
         self._arrangement = arrangement
         self._rows = rows
-        self._repaint()
+        return True
 
     def _rows_of(self, task_ids: Iterable[str]) -> list[TaskRow]:
         """The named rows as they look now, in display order."""

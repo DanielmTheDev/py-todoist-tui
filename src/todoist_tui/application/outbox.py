@@ -84,14 +84,16 @@ class Outbox:
     @asynccontextmanager
     async def syncing(self) -> AsyncGenerator[None]:
         """Wrap a snapshot fetch: on a clean exit, everything the server had
-        already acknowledged when it started is confirmed and retired."""
+        already acknowledged when it started is confirmed and retired.
+
+        Retiring does not report a change — the fetcher is about to draw the
+        snapshot it just took in, and one frame carrying both the fresh rows and
+        the retirement beats two.
+        """
         token = self._begun
         self._begun += 1
         yield
-        kept = [e for e in self._entries if not _confirmed_by(e, token)]
-        if len(kept) != len(self._entries):
-            self._entries = kept
-            self._on_change()
+        self._entries = [e for e in self._entries if not _confirmed_by(e, token)]
 
     async def _dispatch(self) -> None:
         try:

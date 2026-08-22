@@ -187,3 +187,18 @@ async def test_a_mutation_queued_during_the_drain_resync_still_runs() -> None:
     await harness.outbox.idle()
 
     assert harness.ran == ["a", "b"]
+
+
+@pytest.mark.anyio
+async def test_retiring_reports_no_change() -> None:
+    """The syncing caller draws the snapshot it fetched; a second paint to drop
+    the replay on top of it would only repeat that frame."""
+    harness = Harness()
+    harness.queue("a")
+    await harness.outbox.idle()
+    changes = harness.changes
+
+    async with harness.outbox.syncing():
+        pass
+
+    assert (harness.outbox.pending, harness.changes) == ((), changes)

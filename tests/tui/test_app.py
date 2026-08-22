@@ -1925,6 +1925,25 @@ async def test_completing_never_flashes_the_row_back() -> None:
         assert all("A" not in ids for ids in app.paints[left:]), app.paints
 
 
+@pytest.mark.anyio
+async def test_a_resync_paints_once_when_it_retires_a_change() -> None:
+    repo = TodayFilteringRepository(
+        [_due_today("A")], [Project(id="220", name="Errands")]
+    )
+    app = PaintRecordingApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        painted = len(app.paints)
+        await pilot.press("1")
+        await settled(app)  # the drain's resync reloads and retires the change
+        await pilot.pause()
+
+        # one paint for the keypress, one for the resync — not one more to retire
+        assert len(app.paints) == painted + 2
+
+
 class GatedRefreshRepository(FakeRepository):
     """refresh() blocks until released, so the syncing state is observable."""
 
