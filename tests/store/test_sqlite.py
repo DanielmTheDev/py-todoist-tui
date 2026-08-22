@@ -1,5 +1,6 @@
 import datetime
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -269,3 +270,17 @@ async def test_second_save_replaces_previous_rows(tmp_path: Path) -> None:
     await cache.save(smaller)
 
     assert (await cache.load()) == smaller
+
+
+@pytest.mark.anyio
+async def test_load_reads_past_a_writer_holding_the_lock(tmp_path: Path) -> None:
+    """A blocked read used to look like a cold cache, costing a full account sync."""
+    path = tmp_path / "cache.sqlite3"
+    cache = SqliteSnapshotCache(path)
+    await cache.save(_snapshot())
+
+    with closing(sqlite3.connect(path)) as writer:
+        writer.execute("BEGIN EXCLUSIVE")  # locks the file for the whole read
+        loaded = await cache.load()
+
+    assert loaded == _snapshot()  # the last committed snapshot, not None

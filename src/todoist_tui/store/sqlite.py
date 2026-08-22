@@ -19,6 +19,15 @@ from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.domain.view_slots import ViewSlots
 
+
+def _connect(path: Path) -> sqlite3.Connection:
+    """WAL, so the snapshot rewrite never locks a reader out. A blocked read
+    reports as a missing cache, which would cost a full sync of the account."""
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
 # Dropped and recreated on every save: the snapshot is disposable and fully
 # rewritten each time, so this also migrates any older column layout in place.
 _SCHEMA = """
@@ -72,7 +81,7 @@ class SqliteSnapshotCache:
     def _load(self) -> Snapshot | None:
         if not self._path.is_file():
             return None
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             try:
                 token_row = conn.execute("SELECT sync_token FROM meta").fetchone()
                 if token_row is None:  # schema present but never fully written
@@ -130,7 +139,7 @@ class SqliteSnapshotCache:
 
     def _save(self, snapshot: Snapshot) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             conn.executescript(_SCHEMA)  # drops + recreates the four tables
             conn.execute(
                 "INSERT INTO meta (sync_token) VALUES (?)", (snapshot.sync_token,)
@@ -189,7 +198,7 @@ class SqliteArrangementStore:
     def _get(self, view_key: str, default: Arrangement) -> Arrangement:
         if not self._path.is_file():
             return default
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             try:
                 row = conn.execute(
                     "SELECT spec FROM arrangement WHERE view_key = ?", (view_key,)
@@ -205,7 +214,7 @@ class SqliteArrangementStore:
 
     def _save(self, view_key: str, arrangement: Arrangement) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             conn.executescript(_ARRANGEMENT_SCHEMA)
             conn.execute(
                 "INSERT INTO arrangement (view_key, spec) VALUES (?, ?)"
@@ -245,7 +254,7 @@ class SqliteViewSlotStore:
     def _get(self) -> ViewSlots:
         if not self._path.is_file():
             return ViewSlots()
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             try:
                 rows = conn.execute(
                     "SELECT key, view_key FROM view_slot ORDER BY slot_order"
@@ -262,7 +271,7 @@ class SqliteViewSlotStore:
 
     def _save(self, slots: ViewSlots) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self._path)) as conn:
+        with closing(_connect(self._path)) as conn:
             conn.executescript(_VIEW_SLOT_SCHEMA)
             conn.execute("DELETE FROM view_slot")  # the given slots are the whole set
             conn.executemany(
