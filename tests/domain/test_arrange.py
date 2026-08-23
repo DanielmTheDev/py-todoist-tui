@@ -11,6 +11,8 @@ from todoist_tui.domain.arrange import (
     SortKey,
     TaskLine,
     arrange,
+    group_path_of,
+    group_paths,
 )
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -187,7 +189,11 @@ def test_group_by_project() -> None:
         Row("3", "w2", project_name="Work"),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.PROJECT,)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PROJECT,)),
+        open_groups=frozenset({("Home",), ("Work",)}),
+    )
 
     assert _shape(result) == [
         ("H", 0, "Home"),
@@ -205,7 +211,11 @@ def test_group_by_deadline_labels_dates_and_puts_no_deadline_last() -> None:
         Row("3", "soon", deadline=_deadline(2026, 8, 9)),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.DEADLINE,)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.DEADLINE,)),
+        open_groups=frozenset({("2026-08-09",), ("2026-08-15",), ("No deadline",)}),
+    )
 
     assert _shape(result) == [
         ("H", 0, "2026-08-09"),
@@ -284,7 +294,11 @@ def test_group_by_labels_multi_membership() -> None:
         Row("3", "dentist", labels=("urgent",)),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.LABELS,)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.LABELS,)),
+        open_groups=frozenset({("home",), ("urgent",)}),
+    )
 
     # leaves fall back to deterministic content order within each bucket
     assert _shape(result) == [
@@ -313,7 +327,11 @@ def test_group_by_section_orders_headers_by_section_order() -> None:
         Row("3", "b2", section_name="Backlog", section_order=2),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.SECTION,)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        open_groups=frozenset({("Planning",), ("Backlog",)}),
+    )
 
     # headers follow the sections' own order, not alphabetical
     assert _shape(result) == [
@@ -331,7 +349,11 @@ def test_group_by_section_renders_no_section_tasks_loose_at_top() -> None:
         Row("2", "in-sec", section_name="Planning", section_order=1),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.SECTION,)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        open_groups=frozenset({("Planning",)}),
+    )
 
     # a Todoist project shows section-less tasks first, with no header above them
     assert _shape(result) == [
@@ -349,7 +371,17 @@ def test_group_by_section_then_priority_keeps_loose_tasks_flat() -> None:
         Row("4", "loose-b", Priority.P4, section_name=None),
     ]
 
-    result = arrange(rows, Arrangement(group_by=(Field.SECTION, Field.PRIORITY)))
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION, Field.PRIORITY)),
+        open_groups=frozenset(
+            {
+                ("Planning",),
+                ("Planning", Priority.P1.label),
+                ("Planning", Priority.P4.label),
+            }
+        ),
+    )
 
     # section-less tasks stay a flat loose list; only sectioned tasks subgroup
     assert _shape(result) == [
@@ -375,6 +407,15 @@ def test_nested_group_project_then_priority_with_sorted_leaves() -> None:
         Arrangement(
             group_by=(Field.PROJECT, Field.PRIORITY),
             sort_by=(SortKey(Field.CONTENT),),
+        ),
+        open_groups=frozenset(
+            {
+                ("Home",),
+                ("Home", Priority.P2.label),
+                ("Work",),
+                ("Work", Priority.P1.label),
+                ("Work", Priority.P4.label),
+            }
         ),
     )
 
@@ -427,7 +468,10 @@ def test_child_stays_under_parent_and_is_not_grouped_independently() -> None:
     ]
 
     result = arrange(
-        rows, Arrangement(group_by=(Field.PRIORITY,)), expanded=frozenset({"p"})
+        rows,
+        Arrangement(group_by=(Field.PRIORITY,)),
+        expanded=frozenset({"p"}),
+        open_groups=frozenset({(Priority.P1.label,)}),
     )
 
     # Only the root is bucketed (P1); the child nests under it, never in a P4 group.
@@ -512,13 +556,23 @@ def test_group_header_counts_only_visible_lines_when_collapsed() -> None:
 # --- group fold/collapse ---
 
 
+def test_a_group_starts_folded() -> None:
+    rows = [Row("1", "w1", project_name="Work")]
+
+    result = arrange(rows, Arrangement(group_by=(Field.PROJECT,)))
+
+    assert _shape(result) == [("H", 0, "Work")]
+    header = next(r for r in result if isinstance(r, GroupHeader))
+    assert header.collapsed is True
+
+
 def test_group_header_carries_its_label_path() -> None:
     rows = [Row("1", "w-top", Priority.P1, project_name="Work")]
 
     result = arrange(
         rows,
         Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
-        collapsed=frozenset(),
+        open_groups=frozenset({("Work",), ("Work", Priority.P1.label)}),
     )
 
     headers = [r for r in result if isinstance(r, GroupHeader)]
@@ -530,7 +584,7 @@ def test_collapsed_group_shows_its_header_alone() -> None:
     rows = [Row("1", "w1", project_name="Work"), Row("2", "h1", project_name="Home")]
 
     result = arrange(
-        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Work",)})
+        rows, Arrangement(group_by=(Field.PROJECT,)), open_groups=frozenset({("Home",)})
     )
 
     assert _shape(result) == [("H", 0, "Home"), ("T", 1, "h1"), ("H", 0, "Work")]
@@ -541,9 +595,7 @@ def test_collapsed_group_shows_its_header_alone() -> None:
 def test_collapsed_group_header_still_counts_its_hidden_tasks() -> None:
     rows = [Row("1", "w1", project_name="Work"), Row("2", "w2", project_name="Work")]
 
-    result = arrange(
-        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Work",)})
-    )
+    result = arrange(rows, Arrangement(group_by=(Field.PROJECT,)))
 
     header = next(r for r in result if isinstance(r, GroupHeader))
     assert header.count == 2  # the fold hides the lines, not the tally
@@ -555,7 +607,7 @@ def test_collapsing_an_outer_group_hides_its_inner_headers() -> None:
     result = arrange(
         rows,
         Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
-        collapsed=frozenset({("Work",)}),
+        open_groups=frozenset({("Work", Priority.P1.label)}),  # open, but under a fold
     )
 
     assert _shape(result) == [("H", 0, "Work")]
@@ -570,7 +622,7 @@ def test_collapsing_an_inner_group_keeps_its_siblings_visible() -> None:
     result = arrange(
         rows,
         Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)),
-        collapsed=frozenset({("Work", Priority.P1.label)}),
+        open_groups=frozenset({("Work",), ("Work", Priority.P4.label)}),
     )
 
     assert _shape(result) == [
@@ -591,7 +643,7 @@ def test_headerless_section_tasks_cannot_be_folded_away() -> None:
         rows,
         Arrangement(group_by=(Field.SECTION,)),
         # the loose bucket's label names no header, so it stays put
-        collapsed=frozenset({("(no section)",)}),
+        open_groups=frozenset({("Planning",)}),
     )
 
     assert _shape(result) == [
@@ -601,14 +653,84 @@ def test_headerless_section_tasks_cannot_be_folded_away() -> None:
     ]
 
 
-def test_a_collapsed_path_matching_no_group_changes_nothing() -> None:
+def test_an_open_path_matching_no_group_changes_nothing() -> None:
     rows = [Row("1", "w1", project_name="Work")]
 
     result = arrange(
-        rows, Arrangement(group_by=(Field.PROJECT,)), collapsed=frozenset({("Gone",)})
+        rows,
+        Arrangement(group_by=(Field.PROJECT,)),
+        open_groups=frozenset({("Gone",), ("Work",)}),
     )
 
     assert _shape(result) == [("H", 0, "Work"), ("T", 1, "w1")]
+
+
+# --- every group path ---
+
+
+def test_group_paths_names_every_group_at_every_level() -> None:
+    rows = [
+        Row("1", "w-top", Priority.P1, project_name="Work"),
+        Row("2", "h-low", Priority.P4, project_name="Home"),
+    ]
+
+    paths = group_paths(rows, Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)))
+
+    assert paths == {
+        ("Home",),
+        ("Home", Priority.P4.label),
+        ("Work",),
+        ("Work", Priority.P1.label),
+    }
+
+
+def test_group_paths_skips_the_headerless_bucket_and_subtasks() -> None:
+    rows = [
+        Row("1", "loose", section_name=None),
+        Row("2", "in-sec", section_name="Planning", section_order=1),
+        Row("3", "child", section_name="Backlog", section_order=2, parent_id="2"),
+    ]
+
+    paths = group_paths(rows, Arrangement(group_by=(Field.SECTION,)))
+
+    # the loose bucket has no header to open, and a subtask is never grouped
+    assert paths == {("Planning",)}
+
+
+def test_group_paths_is_empty_without_grouping() -> None:
+    assert group_paths([Row("1", "w1")], Arrangement()) == set()
+
+
+def test_group_path_of_names_the_innermost_group_holding_a_row() -> None:
+    rows = [
+        Row("1", "w-top", Priority.P1, project_name="Work"),
+        Row("2", "h-low", Priority.P4, project_name="Home"),
+    ]
+
+    path = group_path_of(
+        rows, Arrangement(group_by=(Field.PROJECT, Field.PRIORITY)), "1"
+    )
+
+    assert path == ("Work", Priority.P1.label)
+
+
+def test_group_path_of_follows_a_subtask_to_its_roots_group() -> None:
+    rows = [
+        Row("p", "parent", Priority.P1, project_name="Work"),
+        Row("c", "child", Priority.P4, project_name="Home", parent_id="p"),
+    ]
+
+    # only roots are grouped, so the child sits wherever its parent does
+    assert group_path_of(rows, Arrangement(group_by=(Field.PROJECT,)), "c") == ("Work",)
+
+
+def test_group_path_of_is_empty_where_there_is_no_header_to_unfold() -> None:
+    rows = [Row("1", "loose", section_name=None)]
+    sectioned = Arrangement(group_by=(Field.SECTION,))
+
+    assert group_path_of(rows, sectioned, "1") == ()  # headerless bucket
+    assert group_path_of(rows, Arrangement(), "1") == ()  # no grouping
+    assert group_path_of(rows, sectioned, "gone") == ()  # no such row
 
 
 # --- Arrangement invariants + serde ---

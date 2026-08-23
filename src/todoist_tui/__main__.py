@@ -14,6 +14,7 @@ from todoist_tui.domain.clock import SystemClock
 from todoist_tui.store.repository import SnapshotTaskRepository
 from todoist_tui.store.sqlite import (
     SqliteArrangementStore,
+    SqliteFoldStore,
     SqliteSnapshotCache,
     SqliteViewSlotStore,
 )
@@ -46,6 +47,7 @@ async def _run(token: str) -> None:
             SqliteArrangementStore(cache_path),
             clock,
             slots=SqliteViewSlotStore(cache_path),
+            folds=SqliteFoldStore(cache_path),
         )
         await app.run_async()
 

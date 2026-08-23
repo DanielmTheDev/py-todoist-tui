@@ -6,7 +6,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import cast
 
-from todoist_tui.domain.arrange import Arrangement
+from todoist_tui.domain.arrange import Arrangement, GroupPath
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -222,6 +222,68 @@ class SqliteArrangementStore:
                 (view_key, json.dumps(arrangement.to_dict())),
             )
             conn.commit()
+
+
+_FOLD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS open_groups (
+    view_key TEXT PRIMARY KEY, paths TEXT NOT NULL
+);
+"""
+
+
+class SqliteFoldStore:
+    """Persists each view's unfolded group paths in SQLite (its own table)."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def get(self, view_key: str) -> frozenset[GroupPath]:
+        return await asyncio.to_thread(self._get, view_key)
+
+    async def save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None:
+        await asyncio.to_thread(self._save, view_key, open_groups)
+
+    def _get(self, view_key: str) -> frozenset[GroupPath]:
+        if not self._path.is_file():
+            return frozenset()
+        with closing(_connect(self._path)) as conn:
+            try:
+                row = conn.execute(
+                    "SELECT paths FROM open_groups WHERE view_key = ?", (view_key,)
+                ).fetchone()
+            except sqlite3.OperationalError:  # table not created yet
+                return frozenset()
+        if row is None:
+            return frozenset()
+        try:  # a corrupt or legacy payload folds the view back up
+            return _as_paths(json.loads(row[0]))
+        except (ValueError, TypeError):
+            return frozenset()
+
+    def _save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(_connect(self._path)) as conn:
+            conn.executescript(_FOLD_SCHEMA)
+            conn.execute(
+                "INSERT INTO open_groups (view_key, paths) VALUES (?, ?)"
+                " ON CONFLICT(view_key) DO UPDATE SET paths = excluded.paths",
+                (view_key, json.dumps([list(path) for path in open_groups])),
+            )
+            conn.commit()
+
+
+def _as_paths(data: object) -> frozenset[GroupPath]:
+    """The stored payload as group paths, refusing anything that is not one."""
+    if not isinstance(data, list):
+        raise TypeError(f"open groups are not a list: {data!r}")
+    paths: set[GroupPath] = set()
+    for path in cast(list[object], data):
+        if not isinstance(path, list) or not all(
+            isinstance(label, str) for label in cast(list[object], path)
+        ):
+            raise TypeError(f"group path is not a list of labels: {path!r}")
+        paths.add(tuple(cast(list[str], path)))
+    return frozenset(paths)
 
 
 _VIEW_SLOT_SCHEMA = """

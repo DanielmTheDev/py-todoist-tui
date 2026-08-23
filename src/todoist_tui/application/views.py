@@ -46,7 +46,7 @@ class TaskRow:
 class View:
     """A named list of tasks and how to fetch it from the repository.
 
-    `key` is a stable identity used to persist this view's arrangement.
+    `key` is a stable identity used to persist this view's arrangement and folds.
     `keeps` client-side tests whether a (possibly just-edited) row still belongs
     in this view, so an edit can drop the row without waiting for a resync. None
     when membership is fixed (Inbox) or only the server can decide (saved filters).

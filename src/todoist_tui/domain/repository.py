@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from todoist_tui.domain.arrange import Arrangement
+from todoist_tui.domain.arrange import Arrangement, GroupPath
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
@@ -132,6 +132,17 @@ class ArrangementStore(Protocol):
     ) -> Arrangement: ...
 
     async def save(self, view_key: str, arrangement: Arrangement) -> None: ...
+
+
+class FoldStore(Protocol):
+    """Persists which of a view's groups are unfolded.
+
+    An unknown view has nothing open, which is how a group starts: folded.
+    """
+
+    async def get(self, view_key: str) -> frozenset[GroupPath]: ...
+
+    async def save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None: ...
 
 
 class ViewSlotStore(Protocol):

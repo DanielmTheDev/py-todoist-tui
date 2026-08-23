@@ -63,6 +63,8 @@ from todoist_tui.domain.arrange import (
     RenderRow,
     TaskLine,
     arrange,
+    group_path_of,
+    group_paths,
 )
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.deadline import Deadline
@@ -78,6 +80,7 @@ from todoist_tui.domain.reminder import (
 )
 from todoist_tui.domain.repository import (
     ArrangementStore,
+    FoldStore,
     TaskRepository,
     ViewSlotStore,
 )
@@ -207,6 +210,19 @@ class InMemoryArrangements:
         self._by_key[view_key] = arrangement
 
 
+class InMemoryFolds:
+    """Session-only fold store (the default when none is injected)."""
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, frozenset[GroupPath]] = {}
+
+    async def get(self, view_key: str) -> frozenset[GroupPath]:
+        return self._by_key.get(view_key, frozenset())
+
+    async def save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None:
+        self._by_key[view_key] = open_groups
+
+
 class InMemoryViewSlots:
     """Session-only view-slot store (the default when none is injected)."""
 
@@ -299,6 +315,8 @@ class TaskTable(DataTable[object]):
         Binding("k,up", "cursor_up", "Up", show=False),
         Binding("h,left", "collapse", "Collapse task/group", show=False),
         Binding("l,right", "expand", "Expand task/group", show=False),
+        Binding("H", "collapse_all", "Fold every group and subtask", show=False),
+        Binding("L", "expand_all", "Unfold every group and subtask", show=False),
     ]
 
     class Expand(Message):
@@ -306,6 +324,12 @@ class TaskTable(DataTable[object]):
 
     class Collapse(Message):
         """Fold the subtasks or group under the cursor, else step out to its parent."""
+
+    class ExpandAll(Message):
+        """Unfold every group and subtask tree in the list."""
+
+    class CollapseAll(Message):
+        """Fold every group and subtask tree in the list."""
 
     class Resized(Message):
         """The table got wider or narrower, so the column stretch needs redoing."""
@@ -318,6 +342,12 @@ class TaskTable(DataTable[object]):
 
     def action_collapse(self) -> None:
         self.post_message(self.Collapse())
+
+    def action_expand_all(self) -> None:
+        self.post_message(self.ExpandAll())
+
+    def action_collapse_all(self) -> None:
+        self.post_message(self.CollapseAll())
 
 
 class TodoistApp(App[None]):
@@ -370,6 +400,7 @@ class TodoistApp(App[None]):
         clock: Clock | None = None,
         link_opener: LinkOpener | None = None,
         slots: ViewSlotStore | None = None,
+        folds: FoldStore | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(TODOIST_THEME)
@@ -377,13 +408,15 @@ class TodoistApp(App[None]):
         self._repo = repo
         self._arrangements = arrangements or InMemoryArrangements()
         self._slots = slots or InMemoryViewSlots()
+        self._folds = folds or InMemoryFolds()
         self._clock = clock or SystemClock()
         self._link_opener = link_opener or XdgOpenLinkOpener()
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, as the server has them
         self._visible: list[TaskRow] = []  # `_rows` with the outbox replayed on top
         self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
-        self._collapsed: set[GroupPath] = set()  # groups folded to their header
+        self._open_groups: set[GroupPath] = set()  # groups unfolded to show members
+        self._folds_key: str | None = None  # the view `_open_groups` was loaded for
         self._header_paths: dict[int, GroupPath] = {}  # header row index → its group
         self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
@@ -405,6 +438,7 @@ class TodoistApp(App[None]):
         self._batching = False  # a batch paints once, when all of it is queued
         self._syncs = asyncio.Lock()  # one snapshot fetch at a time
         self._slot_writes = asyncio.Lock()  # one jump-key write at a time
+        self._fold_writes = asyncio.Lock()  # one fold-state write at a time
         self._inbox_id: str | None = None  # so a move out of the Inbox drops the row
         self._picking_project = False  # guards against stacking project pickers
         self._picking_parent = False  # guards against stacking parent pickers
@@ -1689,8 +1723,12 @@ class TodoistApp(App[None]):
             return False
         self._inbox_id = next((p.id for p in projects if p.is_inbox), None)
         arrangement = await self._arrangements.get(view.key, view.default_arrangement)
-        if arrangement != self._arrangement:
-            self._collapsed.clear()  # regrouping makes the folded label paths stale
+        if view.key != self._folds_key:  # a new view opens folded as it was left
+            self._folds_key = view.key
+            self._open_groups = set(await self._folds.get(view.key))
+        elif arrangement != self._arrangement:
+            self._open_groups.clear()  # regrouping makes the open label paths stale
+            self._remember_folds()
         self._arrangement = arrangement
         self._rows = rows
         return True
@@ -1742,16 +1780,16 @@ class TodoistApp(App[None]):
             rows,
             self._arrangement,
             frozenset(self._expanded),
-            frozenset(self._collapsed),
+            frozenset(self._open_groups),
         )
 
     def on_task_table_expand(self, _message: TaskTable.Expand) -> None:
         table = self.query_one(TaskTable)
         group = self._cursor_group_path(table)
         if group is not None:  # on a group header: unfold it
-            if group in self._collapsed:
-                self._collapsed.discard(group)
-                self._repaint()
+            if group not in self._open_groups:
+                self._open_groups.add(group)
+                self._fold_changed()
             return
         task_id = self._cursor_task_id(table)
         if task_id is None or task_id in self._expanded:
@@ -1765,9 +1803,9 @@ class TodoistApp(App[None]):
         table = self.query_one(TaskTable)
         group = self._cursor_group_path(table)
         if group is not None:
-            if group not in self._collapsed:  # an open group: fold it away
-                self._collapsed.add(group)
-                self._repaint()
+            if group in self._open_groups:  # an open group: fold it away
+                self._open_groups.discard(group)
+                self._fold_changed()
             elif len(group) > 1:  # already folded: step out to the enclosing group
                 self._move_cursor_to_group(table, group[:-1])
             return
@@ -1781,6 +1819,36 @@ class TodoistApp(App[None]):
         parent_id = self._parent_of(task_id)  # a leaf/child: step out to the parent
         if parent_id is not None:
             self._move_cursor_to_task(table, parent_id)
+
+    def on_task_table_expand_all(self, _message: TaskTable.ExpandAll) -> None:
+        self._open_groups = group_paths(self._visible, self._arrangement)
+        # every id that parents a visible row; arrange ignores the childless ones
+        self._expanded = {
+            TaskId(row.parent_id) for row in self._visible if row.parent_id is not None
+        }
+        self._fold_changed()
+
+    def on_task_table_collapse_all(self, _message: TaskTable.CollapseAll) -> None:
+        self._open_groups.clear()
+        self._expanded.clear()
+        self._fold_changed()
+
+    def _fold_changed(self) -> None:
+        self._repaint()
+        self._remember_folds()
+
+    def _remember_folds(self) -> None:
+        """Write the folds down under the view they were made in, one at a time:
+        the view can change before the write runs, and writes that overtook each
+        other would put an earlier fold back."""
+        if self._folds_key is not None:
+            self.run_worker(
+                self._save_folds(self._folds_key, frozenset(self._open_groups))
+            )
+
+    async def _save_folds(self, key: str, open_groups: frozenset[GroupPath]) -> None:
+        async with self._fold_writes:
+            await self._folds.save(key, open_groups)
 
     def _has_children(self, task_id: str) -> bool:
         return any(row.parent_id == task_id for row in self._visible)
@@ -1808,7 +1876,28 @@ class TodoistApp(App[None]):
             return
         self._visible = self._members(apply(self._rows, self._outbox.pending))
         self._selected &= {str(r.id) for r in self._visible}  # drop ids now gone
+        self._unfold_to_the_changed_task()
         self._render(self._arrange(self._visible), self._view)
+
+    def _unfold_to_the_changed_task(self) -> None:
+        """Open the groups hiding the task under the cursor once a change has moved
+        it — a task must not vanish because the edit sent it into a folded group.
+
+        Only a task the outbox is still carrying counts, so folding the list keeps
+        the cursor's task folded away like every other.
+        """
+        try:
+            table = self.query_one(TaskTable)
+        except NoMatches:
+            return
+        task_id = self._cursor_task_id(table)
+        if task_id is None or task_id not in touched(self._outbox.pending):
+            return
+        path = group_path_of(self._visible, self._arrangement, task_id)
+        opened = {path[:depth] for depth in range(1, len(path) + 1)} - self._open_groups
+        if opened:
+            self._open_groups |= opened
+            self._remember_folds()
 
     def _render(self, render_rows: list[RenderRow[TaskRow]], view: View) -> None:
         try:

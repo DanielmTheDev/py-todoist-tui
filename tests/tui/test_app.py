@@ -34,6 +34,7 @@ from todoist_tui.application.views import TaskRow, View
 from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
+    GroupPath,
     RenderRow,
     SortKey,
     TaskLine,
@@ -54,6 +55,7 @@ from todoist_tui.tui.app import (
     PENDING_MARK,
     ColumnHeader,
     InMemoryArrangements,
+    InMemoryFolds,
     InMemoryViewSlots,
     StatusBand,
     TaskTable,
@@ -2096,6 +2098,8 @@ async def test_setting_priority_regroups_task_immediately_when_grouped() -> None
         await pilot.pause()
         await settled(app)
         table = app.query_one(TaskTable)
+        await pilot.press("L")  # unfold, so the task itself is on screen
+        await pilot.pause()
         assert "P4" in _content_col(table)[0]  # starts under the P4 header
         await pilot.press("j")  # move cursor onto the task
         repo.release.clear()  # block the post-change sync
@@ -4149,6 +4153,7 @@ async def test_opening_a_project_groups_tasks_under_section_headers() -> None:
         await pilot.pause()
         await open_view(pilot, "work")
         await settled(app)
+        await pilot.press("L")  # sections open folded
         await pilot.pause()
         col = _content_col(app.query_one(DataTable[object]))
 
@@ -4188,6 +4193,8 @@ async def test_grouping_renders_headers_and_tasks() -> None:
     app = TodoistApp(repo, arrangements=await _grouped_by_project())
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("L")
         await pilot.pause()
         col2 = _content_col(app.query_one(DataTable[object]))
 
@@ -4258,6 +4265,8 @@ async def test_e_on_a_task_under_a_header_completes_it() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await settled(app)
+        await pilot.press("L")  # unfold, so the task is on screen
+        await pilot.pause()
         await pilot.press("j")  # move off the header onto the task
         await pilot.press("e")
         await settled(app)
@@ -4282,6 +4291,8 @@ async def test_label_grouping_lists_task_under_each_label() -> None:
     app = TodoistApp(repo, arrangements=store)
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("L")
         await pilot.pause()
         col2 = _content_col(app.query_one(DataTable[object]))
 
@@ -4604,16 +4615,15 @@ async def test_a_pulled_in_subtask_leaves_with_the_parent_that_carried_it() -> N
 
 
 @pytest.mark.anyio
-async def test_initial_cursor_lands_on_first_task_not_header() -> None:
+async def test_initial_cursor_lands_on_the_leading_header_when_all_is_folded() -> None:
     repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
     app = TodoistApp(repo, arrangements=await _grouped_by_project())
 
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert "──" in _content_col(table)[0]  # row 0 is a group header
-        assert table.cursor_row == 1
-        assert _cursor_content(table).strip() == "w1"  # a task, not the header
+        assert "──" in _content_col(table)[0]  # every group starts folded
+        assert table.cursor_row == 0  # the only row there is
 
 
 @pytest.mark.anyio
@@ -4627,7 +4637,9 @@ async def test_j_moves_onto_a_group_header() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        assert table.cursor_row == 1  # h1, under the Home header
+        await pilot.press("L")
+        await pilot.pause()
+        await pilot.press("j")  # onto h1, under the Home header
         await pilot.press("j")  # headers are foldable, so the cursor rests on them
         assert table.cursor_row == 2
         assert "Work (1)" in _cursor_content(table)
@@ -4664,7 +4676,11 @@ async def test_group_headers_carry_a_fold_marker() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert _content_col(app.query_one(TaskTable))[0].startswith("▾ ──")
+        table = app.query_one(TaskTable)
+        assert _content_col(table)[0].startswith("▸ ──")  # folded
+        await pilot.press("L")
+        await pilot.pause()
+        assert _content_col(table)[0].startswith("▾ ──")  # open
 
 
 @pytest.mark.anyio
@@ -4674,7 +4690,8 @@ async def test_h_folds_the_group_under_the_cursor() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("k")  # onto the Home header
+        await pilot.press("L")  # open both groups; the cursor rests on Home's header
+        await pilot.pause()
         await pilot.press("h")
         await pilot.pause()
         contents = [c.strip() for c in _content_col(table)]
@@ -4691,7 +4708,7 @@ async def test_l_reopens_a_folded_group() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("k")
+        await pilot.press("L")
         await pilot.press("h")
         await pilot.pause()
         await pilot.press("l")
@@ -4709,8 +4726,9 @@ async def test_folding_a_group_keeps_the_view_count() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         status = app.query_one("#status", Static)
+        await pilot.press("L")
+        await pilot.pause()
         assert "Today · 2 task(s)" in str(status.render())
-        await pilot.press("k")
         await pilot.press("h")
         await pilot.pause()
         assert "Today · 2 task(s)" in str(status.render())
@@ -4725,8 +4743,8 @@ async def test_folding_an_outer_group_hides_its_inner_headers() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("k")  # onto the Home header at row 0
-        await pilot.press("k")
+        await pilot.press("L")  # the cursor rests on the Home header at row 0
+        await pilot.pause()
         await pilot.press("h")
         await pilot.pause()
         contents = [c.strip() for c in _content_col(table)]
@@ -4745,6 +4763,8 @@ async def test_folding_an_inner_group_leaves_its_outer_header_open() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
+        await pilot.press("L")
+        await pilot.pause()
         table.move_cursor(row=1)  # the priority header under Home
         await pilot.press("h")
         await pilot.pause()
@@ -4763,6 +4783,8 @@ async def test_h_on_a_folded_header_jumps_to_its_outer_header() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
+        await pilot.press("L")
+        await pilot.pause()
         table.move_cursor(row=1)
         await pilot.press("h")  # fold the inner group
         await pilot.pause()
@@ -4779,8 +4801,7 @@ async def test_h_on_a_top_level_folded_header_stays_put() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("k")
-        await pilot.press("h")
+        await pilot.press("h")  # already folded
         await pilot.pause()
         await pilot.press("h")  # no outer group to step out to
         await pilot.pause()
@@ -4812,14 +4833,13 @@ async def test_enter_on_a_group_header_opens_no_detail() -> None:
 
 
 @pytest.mark.anyio
-async def test_regrouping_unfolds_everything() -> None:
+async def test_regrouping_folds_everything() -> None:
     app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
 
     async with app.run_test() as pilot:
         await pilot.pause()
         table = app.query_one(TaskTable)
-        await pilot.press("k")
-        await pilot.press("h")  # fold "Home"
+        await pilot.press("L")  # open both project groups
         await pilot.pause()
         await pilot.press("g")
         await pilot.pause()
@@ -4829,8 +4849,268 @@ async def test_regrouping_unfolds_everything() -> None:
         await settled(app)
         await pilot.pause()
         contents = [c.strip() for c in _content_col(table)]
-        assert not any(c.startswith("▸ ──") for c in contents)
-        assert "h1" in contents and "w1" in contents
+        assert all(c.startswith("▸ ──") for c in contents)
+        assert "h1" not in contents and "w1" not in contents
+
+
+@pytest.mark.anyio
+async def test_L_unfolds_every_group_and_subtask_tree() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220"), _row("sub", "220", parent_id="w1"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+
+        await pilot.press("L")
+        await pilot.pause()
+
+        contents = [c.strip() for c in _content_col(table)]
+        assert not any(c.startswith("\u25b8") for c in contents)
+        assert all(any(name in c for c in contents) for name in ("w1", "sub", "h1"))
+
+
+@pytest.mark.anyio
+async def test_H_folds_every_group_and_subtask_tree() -> None:
+    repo = FakeRepository(
+        [_row("w1", "220"), _row("sub", "220", parent_id="w1"), _row("h1", "9")],
+        [Project(id="220", name="Work"), Project(id="9", name="Home")],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("L")
+        await pilot.pause()
+
+        await pilot.press("H")
+        await pilot.pause()
+
+        contents = [c.strip() for c in _content_col(table)]
+        # the counts tally visible lines, so Work's folded subtask is not one
+        assert [c.split("\u2500\u2500 ")[1].split(" \u2500")[0] for c in contents] == [
+            "Home (1)",
+            "Work (1)",
+        ]
+
+
+@pytest.mark.anyio
+async def test_H_folds_subtasks_when_nothing_is_grouped() -> None:
+    repo = FakeRepository([_row("A"), _row("sub", parent_id="A")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("l")  # reveal the subtask
+        await pilot.pause()
+        assert table.row_count == 2
+
+        await pilot.press("H")
+        await pilot.pause()
+
+        assert table.row_count == 1
+
+
+@pytest.mark.anyio
+async def test_folding_everything_keeps_the_cursor_on_a_visible_row() -> None:
+    app = TodoistApp(_two_project_repo(), arrangements=await _grouped_by_project())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("L")
+        await pilot.pause()
+        table.move_cursor(row=table.row_count - 1)  # onto a task, which H hides
+
+        await pilot.press("H")
+        await pilot.pause()
+
+        assert table.cursor_row < table.row_count
+        assert _cursor_content(table).startswith("\u25b8")  # a surviving header
+
+
+@pytest.mark.anyio
+async def test_a_change_unfolds_the_group_it_moves_the_task_into() -> None:
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.PRIORITY,)))
+    repo = FakeRepository([_row("w1", "220")], [Project(id="220", name="Work")])
+    app = TodoistApp(repo, arrangements=store)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        await pilot.press("L")
+        await pilot.press("j")  # onto the task, under the P4 header
+        await pilot.pause()
+
+        await pilot.press("1")
+        await settled(app)
+        await pilot.pause()
+
+        # the task moved into a P1 group that was never opened: it must not vanish
+        contents = [c.strip() for c in _content_col(table)]
+        assert "w1" in contents
+        assert contents[0].startswith("\u25be \u2500\u2500") and "P1" in contents[0]
+
+
+@pytest.mark.anyio
+async def test_a_saved_open_group_is_unfolded_when_the_view_opens() -> None:
+    folds = InMemoryFolds()
+    await folds.save("today", frozenset({("Home",)}))
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project(), folds=folds
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+
+        contents = [c.strip() for c in _content_col(table)]
+        assert contents[0].startswith("\u25be \u2500\u2500")  # Home, as it was left
+        assert "h1" in contents
+        assert "w1" not in contents  # Work was never opened
+        assert table.cursor_row == 1  # a task, not the leading header
+
+
+@pytest.mark.anyio
+async def test_unfolding_a_group_is_remembered_for_the_view() -> None:
+    folds = InMemoryFolds()
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project(), folds=folds
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold Home, under the cursor
+        await settled(app)
+        await pilot.pause()
+
+    assert await folds.get("today") == frozenset({("Home",)})
+
+
+@pytest.mark.anyio
+async def test_folds_are_kept_apart_per_view() -> None:
+    folds = InMemoryFolds()
+    repo = FakeRepository(
+        [_row("w1", "9")],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    app = TodoistApp(repo, arrangements=await _grouped_by_project(), folds=folds)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold Today's only group
+        await settled(app)
+        await open_view(pilot, "work")
+        await settled(app)
+        await pilot.pause()
+
+        assert await folds.get("today") == frozenset({("Work",)})
+        assert await folds.get("project:9") == frozenset()  # its sections stay folded
+
+
+@pytest.mark.anyio
+async def test_regrouping_drops_the_saved_folds() -> None:
+    folds = InMemoryFolds()
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project(), folds=folds
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("L")
+        await settled(app)
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("r")  # group by Priority: the old label paths are stale
+        await pilot.press("enter")
+        await settled(app)
+        await pilot.pause()
+
+    assert await folds.get("today") == frozenset()
+
+
+class StalledFolds(InMemoryFolds):
+    """Holds the first save open, as a slow disk write would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.released = asyncio.Event()
+        self.calls = 0
+
+    async def save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            await self.released.wait()
+        await super().save(view_key, open_groups)
+
+
+@pytest.mark.anyio
+async def test_a_fold_save_lands_on_the_view_it_was_made_in() -> None:
+    folds = StalledFolds()
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project(), folds=folds
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold Home; this save stalls
+        await pilot.pause()
+        await pilot.press("j", "j")  # onto the Work header
+        await pilot.press("l")  # a second unfold, queued behind the first
+        await pilot.pause()
+        await open_view(pilot, "work")  # switch away before either write lands
+        while "Work" not in _status(app):  # the stalled save blocks `settled`
+            await pilot.pause()
+
+        folds.released.set()
+        await settled(app)
+        await pilot.pause()
+
+    assert await folds.get("today") == frozenset({("Home",), ("Work",)})
+    assert await folds.get("project:220") == frozenset()
+
+
+class ReorderedFolds(InMemoryFolds):
+    """Makes the first save finish last, as a slower disk write would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.overtaken = asyncio.Event()
+        self.calls = 0
+
+    async def save(self, view_key: str, open_groups: frozenset[GroupPath]) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            await self.overtaken.wait()
+        await super().save(view_key, open_groups)
+
+
+@pytest.mark.anyio
+async def test_a_slow_fold_save_cannot_undo_a_later_one() -> None:
+    folds = ReorderedFolds()
+    app = TodoistApp(
+        _two_project_repo(), arrangements=await _grouped_by_project(), folds=folds
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold Home; its save stalls
+        await pilot.pause()
+        await pilot.press("h")  # fold it back up again
+        await pilot.pause()
+
+        folds.overtaken.set()
+        await settled(app)
+        await pilot.pause()
+
+    assert await folds.get("today") == frozenset()
 
 
 @pytest.mark.anyio

@@ -50,15 +50,19 @@ One rung per context; check off as landed. Full design:
 - Group headers render as a divider rule with a task count —
   `▾ ── <label> (N) ───────`, bold accent (deeper levels dimmer). `GroupHeader`
   carries the subtree task count from `arrange()`.
-- Group fold/collapse: the cursor rests on headers, `h` folds, `l` unfolds
-  (`▸` when folded, count unchanged). Fold state is session-only, keyed by the
-  header's `GroupPath` (its label chain), and cleared when the arrangement
-  changes since those paths go stale.
+- Group fold/collapse: every group starts folded, the cursor rests on headers,
+  `h` folds, `l` unfolds (`▸` when folded, count unchanged). `arrange()` takes
+  the *open* paths, so the empty set means folded. Fold state is keyed by the
+  header's `GroupPath` (its label chain), persisted per view through
+  `FoldStore.save(view.key)`, and cleared when the arrangement changes since
+  those paths go stale. A change that moves a task into a folded group unfolds
+  it, so the task never vanishes under the cursor.
+- Fold-all/unfold-all: `H` folds every group and subtask tree, `L` unfolds them
+  (`group_paths()` names the paths to open).
 - Arrange transient: key hints render literal (markup off); all keys consumed
   (no leak to app bindings); clear = shift+G/S (matched by character) or ctrl+u.
 - Snapshot cache rebuilds its tables on save → migrates a pre-labels cache.
 
 ## Out of scope (future)
-- Persisting fold state; fold-all/unfold-all.
 - Group/sort by **section** (needs `Task.section_id` + parser + name resolve).
 - Typed-DSL power-user entry.

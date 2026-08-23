@@ -251,14 +251,14 @@ class _Ctx[T: ArrangeRow]:
     arrangement: Arrangement
     children: dict[Any, list[T]]
     expanded: frozenset[Any]
-    collapsed: frozenset[GroupPath]
+    open_groups: frozenset[GroupPath]
 
 
 def arrange[T: ArrangeRow](
     rows: list[T],
     arrangement: Arrangement,
     expanded: frozenset[Any] = frozenset(),
-    collapsed: frozenset[GroupPath] = frozenset(),
+    open_groups: frozenset[GroupPath] = frozenset(),
 ) -> list[RenderRow[T]]:
     """Group/sort the *root* tasks; nest each task's subtasks directly beneath it.
 
@@ -267,9 +267,82 @@ def arrange[T: ArrangeRow](
     a task's children always follow it, indented one level deeper, and appear
     only when the task's id is in `expanded`.
 
-    A group whose path is in `collapsed` renders as its header alone; the header
-    still reports the count it would have shown open.
+    A group renders as its header alone unless its path is in `open_groups`; a
+    folded header still reports the count it would have shown open.
     """
+    roots, children = _partition(rows)
+    out: list[RenderRow[T]] = []
+    _emit(roots, 0, (), out, _Ctx(arrangement, children, expanded, open_groups))
+    return out
+
+
+def group_paths[T: ArrangeRow](
+    rows: list[T], arrangement: Arrangement
+) -> set[GroupPath]:
+    """Every group path `arrange` would render for these rows, at every level.
+
+    Unfolding the whole list has to name the paths to open, and a path only
+    exists once the buckets are formed.
+    """
+    roots, _ = _partition(rows)
+    out: set[GroupPath] = set()
+    _collect_paths(roots, 0, (), out, arrangement)
+    return out
+
+
+def _collect_paths[T: ArrangeRow](
+    rows: list[T],
+    level: int,
+    path: GroupPath,
+    out: set[GroupPath],
+    arrangement: Arrangement,
+) -> None:
+    if level >= len(arrangement.group_by):
+        return
+    for label, members, headerless in _bucketed(
+        arrangement.group_by[level], rows, arrangement
+    ):
+        if headerless:  # no header, so nothing to fold or unfold
+            continue
+        group_path = (*path, label)
+        out.add(group_path)
+        _collect_paths(members, level + 1, group_path, out, arrangement)
+
+
+def group_path_of[T: ArrangeRow](
+    rows: list[T], arrangement: Arrangement, row_id: Any
+) -> GroupPath:
+    """The innermost group path holding `row_id` — its root ancestor's group.
+
+    Empty where there is no header to unfold: no grouping, a headerless bucket,
+    or no such row.
+    """
+    by_id = {row.id: row for row in rows}
+    row = by_id.get(row_id)
+    if row is None:
+        return ()
+    while row.parent_id is not None and row.parent_id in by_id:
+        row = by_id[row.parent_id]  # only roots are grouped
+    members, _ = _partition(rows)
+    path: GroupPath = ()
+    for field in arrangement.group_by:
+        bucket = next(
+            (
+                b
+                for b in _bucketed(field, members, arrangement)
+                if any(m.id == row.id for m in b[1])
+            ),
+            None,
+        )
+        if bucket is None or bucket[2]:  # headerless: nothing to unfold
+            break
+        path = (*path, bucket[0])
+        members = bucket[1]
+    return path
+
+
+def _partition[T: ArrangeRow](rows: list[T]) -> tuple[list[T], dict[Any, list[T]]]:
+    """Split into the roots to group and each task's children, by `parent_id`."""
     present = {row.id for row in rows}
     children: dict[Any, list[T]] = {}
     roots: list[T] = []
@@ -279,9 +352,29 @@ def arrange[T: ArrangeRow](
             children.setdefault(parent, []).append(row)
         else:
             roots.append(row)
-    out: list[RenderRow[T]] = []
-    _emit(roots, 0, (), out, _Ctx(arrangement, children, expanded, collapsed))
-    return out
+    return roots, children
+
+
+def _bucketed[T: ArrangeRow](
+    field: Field, rows: list[T], arrangement: Arrangement
+) -> list[tuple[str, list[T], bool]]:
+    """This level's buckets in render order: (label, members, headerless)."""
+    members: dict[str, list[T]] = {}
+    order: dict[str, _OrderKey] = {}
+    headerless: set[str] = set()
+    for row in rows:
+        for bucket in _buckets(field, row):
+            members.setdefault(bucket.label, []).append(row)
+            order[bucket.label] = bucket.order
+            if bucket.headerless:
+                headerless.add(bucket.label)
+    ascending = arrangement.group_ascending(field)
+    return [
+        (label, members[label], label in headerless)
+        for label in sorted(
+            members, key=lambda lbl: _bucket_order(order[lbl], lbl, ascending)
+        )
+    ]
 
 
 def _emit[T: ArrangeRow](
@@ -300,31 +393,19 @@ def _emit[T: ArrangeRow](
             total += _emit_subtree(row, level, out, ctx)
         return total
     field = group_by[0]
-    ascending = arrangement.group_ascending(field)
-    members: dict[str, list[T]] = {}
-    order: dict[str, _OrderKey] = {}
-    headerless: set[str] = set()
-    for row in rows:
-        for bucket in _buckets(field, row):
-            members.setdefault(bucket.label, []).append(row)
-            order[bucket.label] = bucket.order
-            if bucket.headerless:
-                headerless.add(bucket.label)
     total = 0
-    for label in sorted(
-        members, key=lambda lbl: _bucket_order(order[lbl], lbl, ascending)
-    ):
-        if label in headerless:
+    for label, members, headerless in _bucketed(field, rows, arrangement):
+        if headerless:
             # A headerless bucket (section-less tasks) is a flat loose list at this
             # level: no header, and no further subgrouping — mirroring how Todoist
             # shows a project's un-sectioned tasks above the first section.
-            for row in _sorted(members[label], arrangement.sort_by):
+            for row in _sorted(members, arrangement.sort_by):
                 total += _emit_subtree(row, level, out, ctx)
             continue
         group_path = (*path, label)
         subtree: list[RenderRow[T]] = []  # emit children first to know the count
-        count = _emit(members[label], level + 1, group_path, subtree, ctx)
-        collapsed = group_path in ctx.collapsed
+        count = _emit(members, level + 1, group_path, subtree, ctx)
+        collapsed = group_path not in ctx.open_groups
         out.append(GroupHeader(level, label, field, count, group_path, collapsed))
         if not collapsed:  # folded: the count stands in for the whole subtree
             out.extend(subtree)
