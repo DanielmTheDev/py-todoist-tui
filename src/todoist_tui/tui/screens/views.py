@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -17,6 +18,12 @@ from todoist_tui.tui.screens.scrolling import PickList
 _HINT = "ctrl+b bind key · ctrl+s startup · enter open · esc close"
 
 _SIGILS = {"project": "#", "filter": "⚑"}
+
+# the gutter each row opens with: startup mark, jump key, kind sigil. Fixed so a
+# badged row keeps its name in the same column as an unbadged one.
+_STARTUP_WIDTH = 2
+_KEY_WIDTH = 5
+_SIGIL_WIDTH = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,12 +73,17 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
     """
 
     def __init__(
-        self, views: list[View], slots: ViewSlots, taken: Mapping[str, str]
+        self,
+        views: list[View],
+        slots: ViewSlots,
+        taken: Mapping[str, str],
+        current: str | None = None,
     ) -> None:
         super().__init__()
         self._views = views
         self._slots = slots
         self._taken = taken
+        self._current = current  # the view key the app is showing, if it is listed
         self._query = ""
         self._capturing: View | None = None  # the view awaiting a key, if any
         self._visible = self._matches()
@@ -83,6 +95,7 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
+        self.query_one(OptionList).highlighted = self._index_of(self._current)
 
     def on_key(self, event: events.Key) -> None:
         """Keys are handled here rather than as bindings: while a key is being
@@ -189,11 +202,12 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         options = self.query_one(OptionList)
         options.clear_options()
         options.add_options([self._option(v) for v in self._visible])
-        if not self._visible:
-            return
-        options.highlighted = next(
-            (i for i, v in enumerate(self._visible) if v.key == (was and was.key)), 0
-        )
+        options.highlighted = self._index_of(was and was.key)
+
+    def _index_of(self, key: str | None) -> int:
+        """The row a key sits on, 0 when it is not listed — a view the typed text
+        filters out, or one the list never carries (a search view)."""
+        return next((i for i, v in enumerate(self._visible) if v.key == key), 0)
 
     def _option(self, view: View) -> Option:
         # Text, not a plain string: a view name or a `[w]` badge would otherwise be
@@ -203,18 +217,24 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
     def _label(self, view: View) -> Text:
         key = self._slots.key_for(view.key)
         label = Text()
-        if self._slots.startup == view.key:
-            label.append("★ ")
-        if key is not None:
-            label.append(f"[{key}] ")
-        sigil = _sigil(view)
-        if sigil:
-            label.append(f"{sigil} ", style="dim")  # the kind recedes, the name leads
+        _field(label, "★" if self._slots.startup == view.key else "", _STARTUP_WIDTH)
+        _field(label, "" if key is None else f"[{key}]", _KEY_WIDTH)
+        # the kind recedes, the name leads
+        _field(label, _sigil(view), _SIGIL_WIDTH, style="dim")
         label.append(view.title)
         return label
 
     def _hint(self, text: str) -> None:
         self.query_one("#views-hint", Static).update(Text(text))
+
+
+def _field(label: Text, text: str, width: int, style: str | None = None) -> None:
+    """Append one gutter field, padded to `width` by cell width — a jump key bound to
+    a wide character would otherwise shift its row out of column. The pad carries no
+    style, so a dim field cannot dim the gap before the name."""
+    if text:
+        label.append(text, style=style)
+    label.append(" " * max(1, width - cell_len(text)))
 
 
 def _sigil(view: View) -> str:

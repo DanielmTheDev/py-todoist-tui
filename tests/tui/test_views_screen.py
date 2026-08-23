@@ -7,6 +7,7 @@ from textual.content import Content
 from textual.visual import visualize
 from textual.widgets import OptionList, Static
 
+from tests.tui.view_labels import view_label
 from todoist_tui.application.views import all_views
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
@@ -28,15 +29,22 @@ class _Host(App[None]):
         on_result: Callable[[ViewsOutcome | None], None],
         slots: ViewSlots | None = None,
         taken: Mapping[str, str] | None = None,
+        current: str | None = None,
     ) -> None:
         super().__init__()
         self._slots = slots or ViewSlots()
         self._taken = taken if taken is not None else _TAKEN
+        self._current = current
         self._on_result = on_result
 
     def on_mount(self) -> None:
         self.push_screen(
-            ViewsScreen(all_views(_PROJECTS, _FILTERS), self._slots, self._taken),
+            ViewsScreen(
+                all_views(_PROJECTS, _FILTERS),
+                self._slots,
+                self._taken,
+                self._current,
+            ),
             self._on_result,
         )
 
@@ -46,6 +54,10 @@ def _labels(host: _Host) -> list[str]:
     return [
         str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
     ]
+
+
+def _highlighted(host: _Host) -> int | None:
+    return host.screen.query_one(OptionList).highlighted
 
 
 def _painted(host: _Host) -> list[str]:
@@ -85,11 +97,11 @@ async def test_a_sigil_marks_each_view_s_kind() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == [
-            "⚑ Next",
-            "# Work",
-            "# Backlog",
-            "Today",  # one of a kind: nothing to tell it apart from
-            "Inbox",
+            view_label("Next", sigil="⚑"),
+            view_label("Work", sigil="#"),
+            view_label("Backlog", sigil="#"),
+            view_label("Today"),  # one of a kind: nothing to tell it apart from
+            view_label("Inbox"),
         ]
 
 
@@ -98,8 +110,8 @@ async def test_the_sigil_recedes_and_the_name_leads() -> None:
     host = _Host(lambda _o: None)
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host)[0] == "⚑ Next"
-        assert _spans(host, 0) == [("⚑ ", "dim")]  # the name carries no style
+        assert _labels(host)[0] == view_label("Next", sigil="⚑")
+        assert _spans(host, 0) == [("⚑", "dim")]  # the name carries no style
 
 
 @pytest.mark.anyio
@@ -109,11 +121,11 @@ async def test_assigned_views_lead_the_list_badged_and_starred() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _labels(host) == [
-            "[w] ⚑ Next",
-            "★ # Work",
-            "# Backlog",
-            "Today",
-            "Inbox",
+            view_label("Next", key="w", sigil="⚑"),
+            view_label("Work", star=True, sigil="#"),
+            view_label("Backlog", sigil="#"),
+            view_label("Today"),
+            view_label("Inbox"),
         ]
 
 
@@ -122,7 +134,7 @@ async def test_a_badge_survives_being_painted() -> None:
     host = _Host(lambda _o: None, ViewSlots().assign("w", "project:9"))
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _painted(host)[0] == "[w] # Work"
+        assert _painted(host)[0] == view_label("Work", key="w", sigil="#")
 
 
 @pytest.mark.anyio
@@ -132,7 +144,7 @@ async def test_typing_filters_by_title() -> None:
         await pilot.pause()
         await pilot.press("b", "a", "c")  # "bac" only in "Backlog"
         await pilot.pause()
-        assert _labels(host) == ["# Backlog"]
+        assert _labels(host) == [view_label("Backlog", sigil="#")]
 
 
 @pytest.mark.anyio
@@ -172,7 +184,7 @@ async def test_enter_with_no_match_stays_open() -> None:
 
 
 @pytest.mark.anyio
-async def test_binding_a_free_key_badges_the_row() -> None:
+async def test_binding_a_free_key_badges_theview_label() -> None:
     outcomes: list[ViewsOutcome | None] = []
     host = _Host(outcomes.append)
     async with host.run_test() as pilot:
@@ -184,7 +196,7 @@ async def test_binding_a_free_key_badges_the_row() -> None:
 
         await pilot.press("w")
         await pilot.pause()
-        assert "[w] # Work" in _labels(host)
+        assert view_label("Work", key="w", sigil="#") in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -200,7 +212,7 @@ async def test_a_punctuation_key_is_shown_as_the_character_typed() -> None:
         await pilot.pause()
         await pilot.press("ctrl+b", "full_stop")
         await pilot.pause()
-        assert _labels(host)[0] == "[.] ⚑ Next"
+        assert _labels(host)[0] == view_label("Next", key=".", sigil="⚑")
 
         await pilot.press("escape")
         await pilot.pause()
@@ -217,7 +229,7 @@ async def test_typing_resumes_filtering_after_a_key_is_bound() -> None:
         await pilot.pause()
         await pilot.press("b", "a", "c")
         await pilot.pause()
-        assert _labels(host) == ["# Backlog"]
+        assert _labels(host) == [view_label("Backlog", sigil="#")]
 
 
 @pytest.mark.anyio
@@ -229,7 +241,7 @@ async def test_binding_a_key_an_app_binding_owns_is_refused() -> None:
         await pilot.press("ctrl+b", "t")
         await pilot.pause()
         assert "t is already Due" in _hint(host)
-        assert _labels(host)[0] == "⚑ Next"
+        assert _labels(host)[0] == view_label("Next", sigil="⚑")
 
         await pilot.press("escape")  # a refusal keeps waiting, so this only cancels
         await pilot.press("escape")
@@ -254,16 +266,16 @@ async def test_escape_during_capture_only_cancels_the_capture() -> None:
 
 
 @pytest.mark.anyio
-async def test_backspace_during_capture_unbinds_the_row() -> None:
+async def test_backspace_during_capture_unbinds_theview_label() -> None:
     outcomes: list[ViewsOutcome | None] = []
     host = _Host(outcomes.append, ViewSlots().assign("w", "project:9"))
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _labels(host)[0] == "[w] # Work"
+        assert _labels(host)[0] == view_label("Work", key="w", sigil="#")
 
         await pilot.press("ctrl+b", "backspace")
         await pilot.pause()
-        assert "# Work" in _labels(host)
+        assert view_label("Work", sigil="#") in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -294,7 +306,7 @@ async def test_ctrl_s_marks_the_highlighted_view_as_startup() -> None:
         await pilot.press("down")  # Work
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert "★ # Work" in _labels(host)
+        assert view_label("Work", star=True, sigil="#") in _labels(host)
 
         await pilot.press("escape")
         await pilot.pause()
@@ -309,7 +321,7 @@ async def test_ctrl_s_on_the_startup_view_drops_it() -> None:
         await pilot.pause()
         await pilot.press("ctrl+s")  # the leading filter is highlighted first
         await pilot.pause()
-        assert _labels(host)[0] == "⚑ Next"
+        assert _labels(host)[0] == view_label("Next", sigil="⚑")
 
         await pilot.press("escape")
         await pilot.pause()
@@ -335,3 +347,49 @@ async def test_the_list_fits_a_terminal_shorter_than_its_cap() -> None:
         await pilot.pause()
         assert host.screen.query_one("#views-hint", Static).region.bottom <= 9
         assert host.screen.query_one(OptionList).max_scroll_y > 0
+
+
+@pytest.mark.anyio
+async def test_the_gutter_keeps_every_name_in_one_column() -> None:
+    """A badge used to push its own row right, so the names read ragged."""
+    slots = ViewSlots().assign("w", "filter:f1").with_startup("project:9")
+    host = _Host(lambda _o: None, slots)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        columns = {
+            label.index(title)
+            for label, title in zip(
+                _labels(host),
+                ["Next", "Work", "Backlog", "Today", "Inbox"],
+                strict=True,
+            )
+        }
+        assert len(columns) == 1
+
+
+@pytest.mark.anyio
+async def test_the_screen_opens_on_the_current_view() -> None:
+    host = _Host(lambda _o: None, current="project:7")
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _highlighted(host) == 2  # Next, Work, Backlog
+
+
+@pytest.mark.anyio
+async def test_a_current_view_the_list_lacks_leaves_the_cursor_on_top() -> None:
+    """A search view is not bindable, so it never appears among the views."""
+    host = _Host(lambda _o: None, current="search:milk")
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _highlighted(host) == 0
+
+
+@pytest.mark.anyio
+async def test_filtering_out_the_current_view_falls_back_to_the_first_match() -> None:
+    host = _Host(lambda _o: None, current="project:7")
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("w", "o", "r")  # "wor" only in "Work"
+        await pilot.pause()
+        assert _labels(host) == [view_label("Work", sigil="#")]
+        assert _highlighted(host) == 0

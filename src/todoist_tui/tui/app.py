@@ -567,7 +567,12 @@ class TodoistApp(App[None]):
             self._picking_views = False
             return
         self.push_screen(
-            ViewsScreen(all_views(projects, filters), self._bound, self._taken_keys()),
+            ViewsScreen(
+                all_views(projects, filters),
+                self._bound,
+                self._taken_keys(),
+                self._view.key,
+            ),
             self._on_views_closed,
         )
 

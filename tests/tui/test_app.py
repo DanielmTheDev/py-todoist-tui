@@ -28,6 +28,7 @@ from tests.tui.tiers import (
     tier_at,
     title_cell,
 )
+from tests.tui.view_labels import view_label
 from tests.tui.waiting import settled
 from todoist_tui.application.views import TaskRow, View
 from todoist_tui.domain.arrange import (
@@ -417,12 +418,12 @@ async def test_a_long_message_keeps_the_band_one_line() -> None:
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test(size=(40, 24)) as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await open_view(pilot, "narrow")
         await settled(app)
 
+        assert _status(app).startswith(
+            name[:10]
+        )  # the long-named view is the one shown
         assert app.query_one(StatusBand).size.height == 1
 
 
@@ -436,10 +437,7 @@ async def test_a_bracketed_project_name_reaches_the_status_line_verbatim() -> No
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await open_view(pilot, "work")
         await settled(app)
 
         assert "[b]Work" in _status(app)
@@ -1296,10 +1294,7 @@ async def test_selecting_a_filter_from_views_revalidates_in_background() -> None
     async with app.run_test() as pilot:
         await pilot.pause()
         await settled(app)
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # My Filter leads the list
-        await pilot.pause()
+        await open_view(pilot, "filter")
         await settled(app)
         await pilot.pause()
         assert "p1" in repo.refresh_filtered_queries
@@ -1315,10 +1310,7 @@ async def test_leaving_filter_view_stops_background_filter_refresh() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await settled(app)
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await open_view(pilot, "filter")
         await settled(app)
         await open_view(pilot, "today")  # back to Today clears the active filter
         await pilot.pause()
@@ -1341,6 +1333,24 @@ async def test_p_while_the_views_screen_is_open_does_not_stack_screens() -> None
         await pilot.press("p")  # second press must not stack a second screen
         await pilot.pause()
         assert len([s for s in app.screen_stack if isinstance(s, ViewsScreen)]) == 1
+
+
+@pytest.mark.anyio
+async def test_the_views_screen_opens_on_the_view_being_shown() -> None:
+    repo = FakeRepository([], [Project(id="9", name="Work")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await open_view(pilot, "work")
+        await settled(app)
+
+        await pilot.press("p")
+        await pilot.pause()
+        options = app.screen.query_one(OptionList)
+        index = options.highlighted
+        assert index is not None
+        assert "Work" in str(options.get_option_at_index(index).prompt)
 
 
 @pytest.mark.anyio
@@ -2281,10 +2291,8 @@ async def test_due_survives_a_sync_that_began_before_the_command_landed() -> Non
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
         # the Work project view: a due change cannot evict a row from it
-        await pilot.press("enter")
+        await open_view(pilot, "work")
         await settled(app)
         await pilot.pause()
         await pilot.press("t")
@@ -2620,9 +2628,7 @@ async def test_undo_reverses_a_reschedule() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # the Work project view leads the list
+        await open_view(pilot, "work")
         await settled(app)
         await pilot.pause()
         await pilot.press("t")
@@ -2715,10 +2721,7 @@ async def test_recurring_completion_reappears_with_its_next_due() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # the Work project view leads the list
-        await pilot.pause()
+        await open_view(pilot, "work")
         await settled(app)
         await pilot.pause()
         assert app.query_one(DataTable[object]).row_count == 1
@@ -3101,10 +3104,7 @@ async def test_reschedule_on_filter_view_keeps_the_task_until_the_server_answers
     async with app.run_test() as pilot:
         await pilot.pause()
         await settled(app)
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # the Overdue filter leads the list
-        await pilot.pause()
+        await open_view(pilot, "overdue")
         await settled(app)
         assert app.query_one(DataTable[object]).row_count == 1
         repo.release.clear()  # block the sync that follows the change
@@ -4147,10 +4147,7 @@ async def test_opening_a_project_groups_tasks_under_section_headers() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await open_view(pilot, "work")
         await settled(app)
         await pilot.pause()
         col = _content_col(app.query_one(DataTable[object]))
@@ -4174,10 +4171,7 @@ async def test_saved_project_arrangement_overrides_the_section_default() -> None
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await open_view(pilot, "work")
         await settled(app)
         await pilot.pause()
         col = _content_col(app.query_one(DataTable[object]))
@@ -5246,7 +5240,12 @@ async def test_pressing_p_opens_the_views_screen() -> None:
             str(options.get_option_at_index(i).prompt)
             for i in range(options.option_count)
         ]
-        assert labels == ["⚑ My Filter", "# Work", "Today", "Inbox"]
+        assert labels == [
+            view_label("My Filter", sigil="⚑"),
+            view_label("Work", sigil="#"),
+            view_label("Today"),
+            view_label("Inbox"),
+        ]
 
 
 @pytest.mark.anyio
@@ -5255,10 +5254,7 @@ async def test_opening_a_project_from_the_views_screen_switches_to_it() -> None:
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # the Work project leads the list
-        await pilot.pause()
+        await open_view(pilot, "work")
         await settled(app)
         assert "Work" in _status(app)
 
@@ -5273,10 +5269,7 @@ async def test_opening_a_filter_from_the_views_screen_refreshes_it_live() -> Non
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        await pilot.press("enter")  # the filter leads the list
-        await pilot.pause()
+        await open_view(pilot, "filter")
         await settled(app)
         assert "My Filter" in _status(app)
         assert "p1" in repo.refresh_filtered_queries
@@ -5291,7 +5284,9 @@ async def test_a_key_bound_in_the_views_screen_is_persisted() -> None:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("ctrl+b", "w")  # Work leads the list
+        await pilot.press("w", "o", "r")  # narrow to Work, then bind it a key
+        await pilot.pause()
+        await pilot.press("ctrl+b", "w")
         await pilot.press("escape")
         await pilot.pause()
     assert (await slots.get()).view_key_for("w") == "project:9"
@@ -5321,13 +5316,17 @@ async def test_a_slow_save_cannot_undo_a_later_edit() -> None:
         await pilot.pause()
         await pilot.press("p")
         await pilot.pause()
-        await pilot.press("ctrl+b", "w")  # Work leads the list
+        await pilot.press("w", "o", "r")  # narrow to Work, then bind it a key
+        await pilot.pause()
+        await pilot.press("ctrl+b", "w")
         await pilot.press("escape")
         await pilot.pause()
 
         await pilot.press("p")  # edit again while the first save is still in flight
         await pilot.pause()
-        await pilot.press("ctrl+s")  # the bound Work leads the list
+        await pilot.press("w", "o", "r")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
         await pilot.press("escape")
         await pilot.pause()
 
