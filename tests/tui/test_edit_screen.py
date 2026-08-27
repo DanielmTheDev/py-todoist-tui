@@ -15,7 +15,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.screens.draft import TaskDraft
+from todoist_tui.tui.screens.draft import Subtask, TaskDraft, draft_of
 from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen
@@ -23,6 +23,7 @@ from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 from todoist_tui.tui.screens.scrolling import ScrollBody
+from todoist_tui.tui.screens.subtask_list import SubtaskList
 
 TODAY = datetime.date(2026, 8, 19)
 
@@ -342,7 +343,7 @@ async def test_the_strip_shows_every_attribute_the_draft_carries() -> None:
         await pilot.pause()
         assert _strip(host) == (
             "Due Tomorrow · Deadline 30 Sep · Project Work / Backlog"
-            " · Parent — · Reminders — · Labels @errand · Priority P2"
+            " · Parent — · Subtasks — · Reminders — · Labels @errand · Priority P2"
         )
 
 
@@ -353,7 +354,7 @@ async def test_the_strip_dashes_what_the_draft_leaves_unset() -> None:
         await pilot.pause()
         assert (
             _strip(host) == "Due — · Deadline — · Project — · Parent —"
-            " · Reminders — · Labels — · Priority P4"
+            " · Subtasks — · Reminders — · Labels — · Priority P4"
         )
 
 
@@ -783,3 +784,129 @@ async def test_a_question_mark_is_typed_into_the_title() -> None:
         await pilot.pause()
 
         assert edited == [TaskDraft("Buy milk?", "")]
+
+
+def _sub_lines(app: App[None]) -> list[str]:
+    options = app.screen.query_one(SubtaskList)
+    return [
+        str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
+    ]
+
+
+@pytest.mark.anyio
+async def test_the_subtasks_are_listed_under_the_description() -> None:
+    row = _row("tag version", project_name=None)
+    draft = TaskDraft("Ship release", "", subtasks=(Subtask(draft_of(row), row),))
+    host = _Host("", "", lambda _r: None, draft=draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _sub_lines(host) == ["tag version"]
+        assert "Subtasks 1" in _strip(host)
+
+
+@pytest.mark.anyio
+async def test_an_empty_list_says_how_to_fill_it() -> None:
+    host = _Host("Ship release", "", lambda _r: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _sub_lines(host) == ["No subtasks — alt+a adds one."]
+
+
+@pytest.mark.anyio
+async def test_alt_a_writes_a_subtask_in_an_editor_of_its_own() -> None:
+    saved: list[TaskDraft | None] = []
+    host = _Host("Ship release", "", saved.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert isinstance(host.screen, TaskEditScreen)
+        assert host.screen.query_one(Static).content == "New subtask"
+        host.screen.query_one(Input).value = "tag version"
+        await pilot.press("alt+1")  # the subtask carries attributes of its own
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert _sub_lines(host) == ["tag version (new)"]
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert saved[0] is not None
+    written = saved[0].subtasks[0]
+    assert (written.row, written.draft.content) == (None, "tag version")
+    assert written.draft.priority is Priority.P1
+
+
+@pytest.mark.anyio
+async def test_a_subtasks_editor_offers_no_subtasks_of_its_own() -> None:
+    host = _Host("Ship release", "", lambda _r: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert not host.screen.query(SubtaskList)
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_subtask_editor_adds_nothing() -> None:
+    host = _Host("Ship release", "", lambda _r: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+a")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert _sub_lines(host) == ["No subtasks — alt+a adds one."]
+
+
+@pytest.mark.anyio
+async def test_ctrl_e_on_a_subtask_edits_that_subtask() -> None:
+    row = _row("tag version", project_name=None)
+    draft = TaskDraft("Ship release", "", subtasks=(Subtask(draft_of(row), row),))
+    host = _Host("", "", lambda _r: None, draft=draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.screen.query_one(SubtaskList).focus()
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert host.screen.query_one(Input).value == "tag version"
+        host.screen.query_one(Input).value = "tag v2.1"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert _sub_lines(host) == ["tag v2.1"]
+
+
+@pytest.mark.anyio
+async def test_e_marks_the_highlighted_subtask_done_and_takes_it_back() -> None:
+    row = _row("tag version", project_name=None)
+    draft = TaskDraft("Ship release", "", subtasks=(Subtask(draft_of(row), row),))
+    host = _Host("", "", lambda _r: None, draft=draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.screen.query_one(SubtaskList).focus()
+        await pilot.press("e")
+        await pilot.pause()
+        assert _sub_lines(host) == ["✓ tag version"]
+        await pilot.press("e")
+        await pilot.pause()
+        assert _sub_lines(host) == ["tag version"]
+
+
+@pytest.mark.anyio
+async def test_delete_drops_the_highlighted_subtask() -> None:
+    rows = [_row("tag version", project_name=None), _row("push tag", project_name=None)]
+    draft = TaskDraft(
+        "Ship release",
+        "",
+        subtasks=tuple(Subtask(draft_of(r), r) for r in rows),
+    )
+    host = _Host("", "", lambda _r: None, draft=draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        host.screen.query_one(SubtaskList).focus()
+        await pilot.press("j")  # vim keys move the cursor, as in the task list
+        await pilot.press("delete")
+        await pilot.pause()
+
+        assert _sub_lines(host) == ["tag version"]

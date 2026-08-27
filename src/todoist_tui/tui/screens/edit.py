@@ -18,7 +18,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
-from todoist_tui.tui.screens.draft import TaskDraft, attribute_strip
+from todoist_tui.tui.screens.draft import Subtask, TaskDraft, attribute_strip
 from todoist_tui.tui.screens.help import HelpScreen, shortcut_rows
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
@@ -26,6 +26,7 @@ from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.scrolling import ScrollBody
+from todoist_tui.tui.screens.subtask_list import HINT, SubtaskList
 
 _HELP_HINT = "f1 help"  # `?` is a character here: the fields take it
 # Declared, not bound: Textual moves the focus on tab itself, but help should
@@ -98,6 +99,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         Binding("alt+d", "set_deadline", "Editor: deadline", show=False),
         Binding("alt+v", "move", "Editor: project / section", show=False),
         Binding("alt+n", "move_parent", "Editor: parent", show=False),
+        Binding("alt+a", "subtasks", "Editor: subtasks", show=False),
         # the list reaches labels by @, which needs a shift alt cannot join here
         Binding("alt+l", "set_labels", "Editor: labels", show=False),
         Binding("alt+m", "reminders", "Editor: reminders", show=False),
@@ -117,6 +119,8 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     TaskEditScreen #hint { padding: 0 1; color: $text-muted; }
     TaskEditScreen #link { padding: 0 1; color: $text-muted; }
     TaskEditScreen #attributes { padding: 0 1; }
+    TaskEditScreen SubtaskList { border: round $primary; }
+    TaskEditScreen #subtask-hint { padding: 0 1; color: $text-muted; }
     """
 
     def __init__(
@@ -125,8 +129,10 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         today: datetime.date,
         catalog: Catalog,
         heading: str | None = None,
+        nests: bool = True,
     ) -> None:
         super().__init__()
+        self._nests = nests
         self._draft = draft
         self._today = today
         self._catalog = catalog
@@ -145,6 +151,10 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
             yield Static("", id="link")
             yield Static("Description", classes="label")
             yield DescriptionArea(self._draft.description.strip())
+            if self._nests:  # a subtask's own editor stops the nesting here
+                yield Static("Subtasks", classes="label")
+                yield SubtaskList()
+                yield Static(HINT, id="subtask-hint")
             yield Static(attribute_strip(self._draft, self._today), id="attributes")
             yield Static(_HELP_HINT, id="hint")
 
@@ -152,6 +162,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         self.query_one(Input).focus()
         description = self.query_one(TextArea)
         description.move_cursor(description.document.end)  # append, don't prepend
+        self._repaint()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
@@ -258,6 +269,59 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
             due=None if target.clear_due else self._draft.due,
         )
 
+    def action_subtasks(self) -> None:
+        """Write a subtask in an editor of its own: a subtask is a task, so it
+        gets every attribute one has."""
+        if not self._nests:
+            return
+        self._edit_subtask(TaskDraft("", ""), "New subtask", self._appended)
+
+    def on_subtask_list_acted(self, event: SubtaskList.Acted) -> None:
+        event.stop()
+        subtask = self._draft.subtasks[event.index]
+        if event.action == "edit":
+            self._edit_subtask(
+                subtask.draft,
+                "Edit subtask",
+                lambda draft: self._replaced(
+                    event.index, replace(subtask, draft=draft)
+                ),
+            )
+        elif event.action == "complete":
+            self._replaced(event.index, replace(subtask, done=not subtask.done))
+        else:
+            self._dropped(event.index)
+
+    def _edit_subtask(
+        self, draft: TaskDraft, heading: str, onto: Callable[[TaskDraft], None]
+    ) -> None:
+        def written(saved: TaskDraft | None) -> None:
+            if saved is not None:  # a cancelled editor changes nothing
+                onto(saved)
+
+        self._app.push_screen(
+            TaskEditScreen(draft, self._today, self._catalog, heading, nests=False),
+            written,
+        )
+
+    def _appended(self, draft: TaskDraft) -> None:
+        self._draft = replace(
+            self._draft, subtasks=(*self._draft.subtasks, Subtask(draft))
+        )
+        self._repaint()
+
+    def _replaced(self, index: int, subtask: Subtask) -> None:
+        subtasks = list(self._draft.subtasks)
+        subtasks[index] = subtask
+        self._draft = replace(self._draft, subtasks=tuple(subtasks))
+        self._repaint()
+
+    def _dropped(self, index: int) -> None:
+        subtasks = list(self._draft.subtasks)
+        del subtasks[index]
+        self._draft = replace(self._draft, subtasks=tuple(subtasks))
+        self._repaint()
+
     async def action_set_labels(self) -> None:
         known = await self._load(self._catalog.labels, "labels")
         if known is None:
@@ -331,6 +395,8 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         self.query_one("#attributes", Static).update(
             attribute_strip(self._draft, self._today)
         )
+        if self._nests:
+            self.query_one(SubtaskList).show(self._draft.subtasks)
 
     def _pick[T](
         self, screen: ModalScreen[T | None], onto: Callable[[T], TaskDraft]

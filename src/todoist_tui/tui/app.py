@@ -67,6 +67,7 @@ from todoist_tui.domain.arrange import (
     group_paths,
 )
 from todoist_tui.domain.clock import Clock, SystemClock
+from todoist_tui.domain.creation import NewChild
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.humanize import humanize_date
@@ -113,7 +114,7 @@ from todoist_tui.tui.screens.detail import (
     FORWARDED,
     TaskDetailScreen,
 )
-from todoist_tui.tui.screens.draft import TaskDraft, draft_of
+from todoist_tui.tui.screens.draft import Subtask, TaskDraft, draft_of
 from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
 from todoist_tui.tui.screens.help import (
     HelpScreen,
@@ -917,7 +918,9 @@ class TodoistApp(App[None]):
 
     def _open_detail(self, row: TaskRow) -> None:
         self.push_screen(
-            TaskDetailScreen(row, self._link_opener, self._clock.today()),
+            TaskDetailScreen(
+                row, self._link_opener, self._clock.today(), self._children_of(row)
+            ),
             lambda action: self._on_detail_closed(row, action),
         )
 
@@ -1041,11 +1044,15 @@ class TodoistApp(App[None]):
             self._expanded.add(TaskId(parent_id))
         # the create returns no id, so the row stands in under one of its own
         # until the drain's sync brings back the task the server actually made
-        self._queue([(self._add_step(draft), None)])
+        row = self._provisional_row(draft)
+        if draft.subtasks:  # same again, one level down
+            self._expanded.add(row.id)
+        self._queue([(self._add_step(draft, row), None)])
 
-    def _add_step(self, draft: TaskDraft) -> Step:
+    def _add_step(self, draft: TaskDraft, row: TaskRow) -> Step:
+        children = tuple(s.draft for s in draft.subtasks if s.row is None)
         return Step(
-            restore([self._provisional_row(draft)]),
+            restore([row, *(self._provisional_child(row, c) for c in children)]),
             partial(
                 add_task,
                 self._repo,
@@ -1059,8 +1066,22 @@ class TodoistApp(App[None]):
                 priority=draft.priority,
                 labels=draft.labels,
                 reminders=draft.reminders,
+                subtasks=tuple(_child_of(c) for c in children),
             ),
             "Failed to add task",
+        )
+
+    def _provisional_child(self, parent: TaskRow, draft: TaskDraft) -> TaskRow:
+        """A subtask of a task the server has yet to name: it hangs off the id
+        only this client knows, and both rows retire together."""
+        return replace(
+            self._provisional_row(draft),
+            project_id=parent.project_id,
+            project_name=parent.project_name,
+            section_id=parent.section_id,
+            section_name=parent.section_name,
+            section_order=parent.section_order,
+            parent_id=str(parent.id),
         )
 
     def _provisional_row(self, draft: TaskDraft) -> TaskRow:
@@ -1098,18 +1119,110 @@ class TodoistApp(App[None]):
         )  # not every parent is on screen; the id alone still drives the save
         self._push(
             TaskEditScreen(
-                draft_of(row, parent), self._clock.today(), self._catalog(task_id)
+                draft_of(row, parent, self._children_of(row)),
+                self._clock.today(),
+                self._catalog(task_id),
             ),
             lambda saved: self._on_edited(row, saved),
         )
 
+    def _children_of(self, row: TaskRow) -> list[TaskRow]:
+        """The task's own subtasks. A view grafts every match's subtree into its
+        rows, so they are here whether or not the parent is folded open. One
+        Todoist has yet to name is left out: nothing can be hung off an id only
+        this client knows."""
+        return [
+            r
+            for r in self._visible
+            if r.parent_id == str(row.id) and not _is_provisional(str(r.id))
+        ]
+
     def _on_edited(self, row: TaskRow, draft: TaskDraft | None) -> None:
         if draft is None:  # editor was cancelled
             return
-        work = self._draft_steps(row, draft)
+        work = self._draft_steps(row, draft) + self._subtask_steps(row, draft.subtasks)
         if work:  # a save that changed nothing queues nothing, and so undoes nothing
             self._queue(work)
         self._apply_reminders(row, draft)
+        self._drop_subtasks(row, draft.subtasks)
+
+    def _subtask_steps(
+        self, row: TaskRow, subtasks: tuple[Subtask, ...]
+    ) -> list[tuple[Step, Step | None]]:
+        """What the editor did to the task's children, bar the deletions: those
+        are permanent, so they wait for their own confirmation. An edited subtask
+        travels the same attribute-by-attribute path its own editor would."""
+        before = {str(child.id): child for child in self._children_of(row)}
+        work: list[tuple[Step, Step | None]] = []
+        for subtask in subtasks:
+            if subtask.row is None:
+                work.append((self._add_subtask_step(row, subtask.draft), None))
+                continue
+            was = before.get(str(subtask.row.id))
+            if was is None:  # a sync took the child away while the editor was open
+                continue
+            work.extend(self._draft_steps(was, subtask.draft))
+            if subtask.done:
+                close = Close(TaskId(str(was.id)), self._subtree_rows(str(was.id)))
+                work.append((_close_step(self._repo, close), self._reopen_step(close)))
+        return work
+
+    def _add_subtask_step(self, parent: TaskRow, draft: TaskDraft) -> Step:
+        self._expanded.add(parent.id)  # else the new subtask lands out of sight
+        return Step(
+            restore([self._provisional_child(parent, draft)]),
+            partial(
+                add_task,
+                self._repo,
+                draft.content,
+                draft.description,
+                parent_id=str(parent.id),
+                project_id=parent.project_id,
+                due=draft.due,
+                deadline=draft.deadline,
+                priority=draft.priority,
+                labels=draft.labels,
+                reminders=draft.reminders,
+            ),
+            "Failed to add subtask",
+        )
+
+    def _drop_subtasks(self, row: TaskRow, subtasks: tuple[Subtask, ...]) -> None:
+        """Deleting a subtask takes its own subtree with it and cannot be undone,
+        so the save asks before it goes — as the list's own delete does."""
+        kept = {str(s.row.id) for s in subtasks if s.row is not None}
+        gone = [c for c in self._children_of(row) if str(c.id) not in kept]
+        if not gone:
+            return
+        prompt = (
+            f"Delete {len(gone)} subtasks?"
+            if len(gone) > 1
+            else f"Delete “{gone[0].content}”?"
+        )
+        self._push(
+            ConfirmScreen(prompt),
+            lambda confirmed: self._delete_subtasks(gone) if confirmed else None,
+        )
+
+    def _delete_subtasks(self, gone: list[TaskRow]) -> None:
+        self._queue(
+            [
+                (
+                    Step(
+                        hide([str(r.id) for r in self._subtree_rows(str(child.id))]),
+                        partial(delete_task, self._repo, TaskId(str(child.id))),
+                        "Failed to delete task",
+                    ),
+                    None,  # delete is permanent, so there is no reversal to record
+                )
+                for child in gone
+            ]
+        )
+
+    def _subtree_rows(self, task_id: str) -> list[TaskRow]:
+        """The task and everything under it, in view order."""
+        subtree = with_subtrees(self._visible, {task_id})
+        return [row for row in self._visible if str(row.id) in subtree]
 
     def _apply_reminders(self, row: TaskRow, draft: TaskDraft) -> None:
         """Reminders are their own resources, added and deleted one by one — the
@@ -2102,6 +2215,20 @@ def _title_cell(
         title.append(PENDING_MARK, style=styles[Tier.MUTED])
     cell.append_text(title)
     return cell
+
+
+def _child_of(draft: TaskDraft) -> NewChild:
+    """A subtask draft as the create takes it: everything but where it goes,
+    which its parent supplies."""
+    return NewChild(
+        content=draft.content,
+        description=draft.description,
+        priority=draft.priority,
+        due=draft.due,
+        deadline=draft.deadline,
+        labels=draft.labels,
+        reminders=draft.reminders,
+    )
 
 
 def _close_step(repo: TaskRepository, close: Close) -> Step:

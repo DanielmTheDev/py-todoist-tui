@@ -6,6 +6,7 @@ shows; the ids are what the save applies.
 """
 
 import datetime
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from todoist_tui.application.views import TaskRow
@@ -21,6 +22,21 @@ from todoist_tui.tui.format import (
 )
 
 _UNSET = "—"
+
+
+@dataclass(frozen=True, slots=True)
+class Subtask:
+    """A subtask as the editor holds it: a draft of its own, plus the row it came
+    from — None for one the save has yet to create. `done` is a completion the
+    save applies, so it can be taken back until then."""
+
+    draft: "TaskDraft"
+    row: TaskRow | None = None
+    done: bool = False
+
+    @property
+    def content(self) -> str:
+        return self.draft.content
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,10 +57,15 @@ class TaskDraft:
     # the parent as picked here, carrying what an optimistic re-parent needs. A
     # task already nested when the editor opened has the id without the row.
     parent: TaskRow | None = None
+    subtasks: tuple[Subtask, ...] = ()
     reminders: tuple[Reminder, ...] = ()
 
 
-def draft_of(row: TaskRow, parent: TaskRow | None = None) -> TaskDraft:
+def draft_of(
+    row: TaskRow,
+    parent: TaskRow | None = None,
+    children: Iterable[TaskRow] = (),
+) -> TaskDraft:
     """The task as it stands, ready to be edited."""
     return TaskDraft(
         content=row.content,
@@ -59,6 +80,7 @@ def draft_of(row: TaskRow, parent: TaskRow | None = None) -> TaskDraft:
         section_name=row.section_name,
         parent_id=row.parent_id,
         parent=parent,
+        subtasks=tuple(Subtask(draft_of(child), child) for child in children),
         reminders=row.reminders,
     )
 
@@ -73,6 +95,7 @@ def attribute_strip(draft: TaskDraft, today: datetime.date) -> str:
             ("Deadline", format_deadline(draft.deadline, today)),
             ("Project", _project(draft)),
             ("Parent", _parent(draft)),
+            ("Subtasks", _subtasks(draft)),
             ("Reminders", _reminders(draft, today)),
             ("Labels", format_labels(draft.labels)),
             ("Priority", draft.priority.label),
@@ -84,6 +107,10 @@ def _parent(draft: TaskDraft) -> str:
     if draft.parent is not None:
         return draft.parent.content
     return "(a task)" if draft.parent_id else ""
+
+
+def _subtasks(draft: TaskDraft) -> str:
+    return str(len(draft.subtasks)) if draft.subtasks else ""
 
 
 def _due(due: Due | DueText | None, today: datetime.date) -> str:

@@ -73,6 +73,7 @@ from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen
 from todoist_tui.tui.screens.scrolling import ScrollBody
+from todoist_tui.tui.screens.subtask_list import SubtaskList
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 from todoist_tui.tui.screens.views import ViewsScreen
 from todoist_tui.tui.theme import Tier
@@ -5863,8 +5864,8 @@ async def test_ctrl_e_seeds_the_strip_from_the_cursor_row() -> None:
         await pilot.pause()
 
         assert _attribute_strip(app) == (
-            "Due Today · Deadline 30 Aug · Project Work / Now · Parent — · Reminders —"
-            " · Labels @errand · Priority P2"
+            "Due Today · Deadline 30 Aug · Project Work / Now · Parent —"
+            " · Subtasks — · Reminders — · Labels @errand · Priority P2"
         )
 
 
@@ -5885,7 +5886,7 @@ async def test_a_seeds_the_strip_with_where_the_new_task_would_land() -> None:
         # Today's view dates the task, and it keeps the cursor row's company
         assert _attribute_strip(app) == (
             "Due Today · Deadline — · Project Work / Now"
-            " · Parent — · Reminders — · Labels — · Priority P4"
+            " · Parent — · Subtasks — · Reminders — · Labels — · Priority P4"
         )
 
 
@@ -7362,3 +7363,235 @@ async def test_the_editor_dropping_a_reminder_does_not_re_add_the_default() -> N
 
         assert repo.deleted_reminders == ["r1"]
         assert repo.added_reminders == []
+
+
+def _sub_lines(app: TodoistApp) -> list[str]:
+    options = app.screen.query_one(SubtaskList)
+    return [
+        str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
+    ]
+
+
+async def _write_subtask(pilot: Pilot[None], title: str, *keys: str) -> None:
+    """alt+a in the editor, then the subtask's own editor: title, extras, save."""
+    await pilot.press("alt+a")
+    await pilot.pause()
+    await _type(pilot, title)
+    for key in keys:
+        await pilot.press(key)
+        await pilot.pause()
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+
+
+def _parented() -> FakeRepository:
+    return FakeRepository(
+        [_row("p1")], [], pool=[_row("c1", parent_id="p1"), _row("c2", parent_id="p1")]
+    )
+
+
+@pytest.mark.anyio
+async def test_a_new_task_and_its_subtasks_are_created_in_one_batch() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "Ship release")
+        await _write_subtask(pilot, "tag version", "alt+1")
+        await _write_subtask(pilot, "push tag")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert len(repo.applied) == 1
+        parent, *children = repo.applied[0].tasks
+        assert parent.content == "Ship release"
+        assert [(c.content, c.parent_ref) for c in children] == [
+            ("tag version", parent.temp_id),
+            ("push tag", parent.temp_id),
+        ]
+        # the subtask's own editor gave it a priority the parent does not carry
+        assert (children[0].priority, parent.priority) == (Priority.P1, Priority.P4)
+
+
+@pytest.mark.anyio
+async def test_the_new_subtasks_show_nested_before_the_server_has_them() -> None:
+    repo = HeldCreationRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "Ship release")
+        await _write_subtask(pilot, "tag version")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert _content_col(app.query_one(TaskTable)) == [
+            "▾ Ship release" + PENDING_MARK,
+            "  tag version" + PENDING_MARK,
+        ]
+
+
+@pytest.mark.anyio
+async def test_the_editor_lists_the_task_s_own_subtasks() -> None:
+    app = TodoistApp(_parented(), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+
+        assert _sub_lines(app) == ["c1", "c2"]
+        assert "Subtasks 2" in _attribute_strip(app)
+
+
+@pytest.mark.anyio
+async def test_editing_a_subtask_in_the_editor_edits_that_task() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("ctrl+e")  # the highlighted subtask's own editor
+        await pilot.pause()
+        app.screen.query_one(Input).value = "c1 renamed"
+        await pilot.press("alt+1")  # and every attribute it offers
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await pilot.press("ctrl+s")  # save the parent
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.text_edits == [(TaskId("c1"), "c1 renamed", "")]
+        assert repo.priorities == [(TaskId("c1"), Priority.P1)]
+
+
+@pytest.mark.anyio
+async def test_marking_a_subtask_done_in_the_editor_completes_it() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold, so the subtasks are on screen
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("e")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.completed == [TaskId("c1")]
+        assert _content_col(app.query_one(TaskTable)) == ["▾ p1", "  c2"]
+
+
+@pytest.mark.anyio
+async def test_adding_a_subtask_in_the_editor_hangs_it_off_the_open_task() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await _write_subtask(pilot, "c3")
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        task = _added(repo)
+        assert (task.content, task.parent_ref) == ("c3", "p1")
+
+
+@pytest.mark.anyio
+async def test_dropping_a_subtask_deletes_it_once_confirmed() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted == [TaskId("c1")]
+
+
+@pytest.mark.anyio
+async def test_a_refused_confirmation_deletes_no_subtask() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("l")  # unfold, so the subtasks are on screen
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await pilot.press("n")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted == []
+        assert _content_col(app.query_one(TaskTable)) == ["▾ p1", "  c1", "  c2"]
+
+
+@pytest.mark.anyio
+async def test_a_subtask_todoist_has_yet_to_name_is_not_offered_for_editing() -> None:
+    """Nothing can be hung off an id only this client knows, so a child still
+    being created stays out of the list until its own id arrives."""
+    repo = HeldCreationRepository([_row("p1")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("A")  # a subtask whose create is held in flight
+        await pilot.pause()
+        await _type(pilot, "c1")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        await pilot.press("ctrl+e")  # the parent's editor
+        await pilot.pause()
+
+        assert _sub_lines(app) == ["No subtasks — alt+a adds one."]
+
+
+@pytest.mark.anyio
+async def test_the_detail_card_lists_the_open_task_s_subtasks() -> None:
+    app = TodoistApp(_parented(), clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        shown = str(app.screen.query_one("#detail", Static).render())
+        assert "SUBTASKS" in shown
+        assert "c1" in shown and "c2" in shown
