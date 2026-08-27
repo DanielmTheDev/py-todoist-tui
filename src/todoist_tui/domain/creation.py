@@ -43,6 +43,23 @@ class NewTask:
 
 
 @dataclass(frozen=True, slots=True)
+class NewChild:
+    """A subtask to create alongside its parent, which supplies where it goes.
+
+    Its own reminders ride along the same way the parent's do: the child has no
+    id until the batch lands.
+    """
+
+    content: str
+    description: str = ""
+    priority: Priority = Priority.P4
+    due: Due | DueText | None = None
+    deadline: Deadline | None = None
+    labels: tuple[str, ...] = ()
+    reminders: tuple[Reminder, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class NewReminder:
     """A reminder for a task the same plan creates. `reminder`'s own `id` and
     `item_id` say nothing here — the plan's refs place it — but its payload rule

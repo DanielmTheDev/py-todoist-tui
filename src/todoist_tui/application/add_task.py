@@ -4,7 +4,12 @@ batched Sync command, so the work is one `CreationPlan` holding one task."""
 import uuid
 from collections.abc import Iterator
 
-from todoist_tui.domain.creation import CreationPlan, NewReminder, NewTask
+from todoist_tui.domain.creation import (
+    CreationPlan,
+    NewChild,
+    NewReminder,
+    NewTask,
+)
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
@@ -33,6 +38,7 @@ async def add_task(
     priority: Priority = Priority.P4,
     labels: tuple[str, ...] = (),
     reminders: tuple[Reminder, ...] = (),
+    subtasks: tuple[NewChild, ...] = (),
     temp_ids: Iterator[str] | None = None,
 ) -> None:
     """Add `content` to `project_id`, falling back to the Inbox when it is None.
@@ -42,6 +48,9 @@ async def add_task(
     registered by the create itself, so no separate step declares it. A due time
     with no reminder of its own earns the default one, as Todoist's own clients
     give it.
+
+    `subtasks` are nested under the new task and created in the same batch — the
+    parent has no id yet, so each points at its temp_id instead.
     """
     ids = temp_ids or _uuid_temp_ids()
     if wants_default_reminder(None, due, reminders):
@@ -60,15 +69,39 @@ async def add_task(
         parent_ref=parent_id,
     )
     # the task has no id until the batch lands, so its reminders ride along in it
-    await repo.apply_creation(
-        CreationPlan(
-            (),
-            (),
-            (task,),
-            tuple(
-                NewReminder(next(ids), task.temp_id, reminder) for reminder in reminders
-            ),
-        )
+    alerts = [NewReminder(next(ids), task.temp_id, reminder) for reminder in reminders]
+    children: list[NewTask] = []
+    for child in subtasks:
+        born = _under(task, child, next(ids))
+        children.append(born)
+        alerts += [
+            NewReminder(next(ids), born.temp_id, reminder)
+            for reminder in _wanted(child)
+        ]
+    await repo.apply_creation(CreationPlan((), (), (task, *children), tuple(alerts)))
+
+
+def _wanted(child: NewChild) -> tuple[Reminder, ...]:
+    if wants_default_reminder(None, child.due, child.reminders):
+        return (default_reminder(),)
+    return child.reminders
+
+
+def _under(parent: NewTask, child: NewChild, temp_id: str) -> NewTask:
+    """A subtask of `parent`: its own attributes, in its parent's project and
+    section — a subtask inherits where it goes, nothing else."""
+    return NewTask(
+        temp_id=temp_id,
+        content=child.content,
+        priority=child.priority,
+        due=child.due,
+        deadline=child.deadline,
+        labels=child.labels,
+        description=child.description,
+        child_order=None,  # Todoist appends, so the batch's order is the list's
+        project_ref=parent.project_ref,
+        section_ref=None,
+        parent_ref=parent.temp_id,
     )
 
 

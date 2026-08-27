@@ -3,7 +3,12 @@ import datetime
 import pytest
 
 from todoist_tui.application.add_task import add_task
-from todoist_tui.domain.creation import CreationPlan, NewReminder, NewTask
+from todoist_tui.domain.creation import (
+    CreationPlan,
+    NewChild,
+    NewReminder,
+    NewTask,
+)
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
@@ -228,3 +233,124 @@ async def test_a_chosen_reminder_beats_the_default() -> None:
     )
 
     assert repo.applied[0].reminders == (NewReminder("rem", "task", chosen),)
+
+
+@pytest.mark.anyio
+async def test_subtasks_ride_in_the_same_plan_under_the_new_task() -> None:
+    """The parent has no id yet, so each subtask points at its temp_id."""
+    repo = FakeRepository()
+
+    await add_task(
+        repo,
+        "Ship release",
+        project_id="P",
+        section_id="s1",
+        subtasks=(NewChild("tag version"), NewChild("write changelog")),
+        temp_ids=iter(["parent", "kid-1", "kid-2"]),
+    )
+
+    plan = repo.applied[0]
+    parent, *children = plan.tasks
+    assert parent.temp_id == "parent"
+    assert [(c.temp_id, c.content, c.parent_ref, c.section_ref) for c in children] == [
+        ("kid-1", "tag version", "parent", None),
+        ("kid-2", "write changelog", "parent", None),
+    ]
+    assert {c.project_ref for c in children} == {"P"}
+
+
+@pytest.mark.anyio
+async def test_a_subtask_carries_its_own_attributes_into_the_batch() -> None:
+    repo = FakeRepository()
+    due = Due(date=datetime.date(2026, 8, 8))
+    deadline = Deadline(date=datetime.date(2026, 8, 9))
+
+    await add_task(
+        repo,
+        "Ship release",
+        project_id="P",
+        subtasks=(
+            NewChild(
+                "tag version",
+                description="annotated",
+                priority=Priority.P1,
+                due=due,
+                deadline=deadline,
+                labels=("work",),
+            ),
+        ),
+        temp_ids=iter(["parent", "kid-1"]),
+    )
+
+    child = repo.applied[0].tasks[1]
+    assert (child.due, child.deadline, child.labels, child.description) == (
+        due,
+        deadline,
+        ("work",),
+        "annotated",
+    )
+    assert child.priority is Priority.P1
+
+
+@pytest.mark.anyio
+async def test_a_subtask_keeps_the_parents_place_but_not_its_attributes() -> None:
+    repo = FakeRepository()
+
+    await add_task(
+        repo,
+        "Ship release",
+        description="the 2.1 cut",
+        project_id="P",
+        due=Due(date=datetime.date(2026, 8, 8)),
+        priority=Priority.P1,
+        labels=("work",),
+        subtasks=(NewChild("tag version"),),
+        temp_ids=iter(["parent", "kid-1"]),
+    )
+
+    child = repo.applied[0].tasks[1]
+    assert (child.due, child.labels, child.description, child.priority) == (
+        None,
+        (),
+        "",
+        Priority.P4,
+    )
+
+
+@pytest.mark.anyio
+async def test_a_subtasks_own_reminder_points_at_the_subtask() -> None:
+    repo = FakeRepository()
+
+    await add_task(
+        repo,
+        "Ship release",
+        project_id="P",
+        subtasks=(
+            NewChild(
+                "tag version",
+                reminders=(Reminder("", "", "relative", minute_offset=30),),
+            ),
+        ),
+        temp_ids=iter(["parent", "kid-1", "rem"]),
+    )
+
+    assert repo.applied[0].reminders == (
+        NewReminder("rem", "kid-1", Reminder("", "", "relative", minute_offset=30)),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_reminder_still_points_at_the_parent_past_its_subtasks() -> None:
+    repo = FakeRepository(projects=[Project(id="220", name="Inbox", is_inbox=True)])
+
+    await add_task(
+        repo,
+        "Ship release",
+        reminders=(Reminder("", "", "relative", minute_offset=30),),
+        subtasks=(NewChild("tag version"),),
+        temp_ids=iter(["parent", "rem", "kid-1"]),
+    )
+
+    assert repo.applied[0].reminders[0] == NewReminder(
+        "rem", "parent", Reminder("", "", "relative", minute_offset=30)
+    )
