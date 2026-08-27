@@ -37,6 +37,7 @@ _MIN_RULE = 8  # a rule shorter than this reads as debris, not a separator
 # run out of keys at 9. A sixth link is listed but carries no reference.
 FIRST_LINK = 5
 LAST_LINK = 9
+_BULLET = "• "
 CLOSE_KEYS = ("escape", "enter", "q")
 HELP_KEYS = ("question_mark", "f1")  # f1 as well, since the editor needs it
 # The card is a lid over the list, not a different place: a key that acts on a
@@ -83,9 +84,11 @@ class DetailCard(Static):
         description: str,
         links: list[Link],
         today: datetime.date,
+        subtasks: list[TaskRow] | None = None,
     ) -> None:
         super().__init__(id="detail", markup=False)
         self._row = row
+        self._subtasks = subtasks or []
         self._title = title
         self._description = description
         self._links = links
@@ -115,6 +118,11 @@ class DetailCard(Static):
             text.append(self._description, style=value)
         else:
             text.append("No description", style=label)
+        if self._subtasks:
+            self._append_section(text, "SUBTASKS", styles)
+            for subtask in self._subtasks:
+                text.append(_BULLET, style=label)
+                text.append(f"{subtask.content}\n", style=value)
         if self._links:
             self._append_section(text, "LINKS", styles)
             for number, link in enumerate(self._links, start=FIRST_LINK):
@@ -202,9 +210,11 @@ class TaskDetailScreen(ModalScreen[str]):
         row: TaskRow,
         opener: LinkOpener | None = None,
         today: datetime.date | None = None,
+        subtasks: list[TaskRow] | None = None,
     ) -> None:
         super().__init__()
         self._row = row
+        self._subtasks = subtasks or []
         self._opener = opener or XdgOpenLinkOpener()
         self._today = today or datetime.date.today()
         content, content_links = annotate(row.content, FIRST_LINK, LAST_LINK)
@@ -224,6 +234,7 @@ class TaskDetailScreen(ModalScreen[str]):
                 self._description_text,
                 self._links,
                 self._today,
+                self._subtasks,
             )
 
     class HelpRequested(Message):

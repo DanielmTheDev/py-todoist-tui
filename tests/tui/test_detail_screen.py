@@ -64,8 +64,10 @@ class _Host(App[None]):
         dismissed: list[str | None],
         opener: _FakeOpener | None = None,
         today: datetime.date = _TODAY,
+        subtasks: list[TaskRow] | None = None,
     ) -> None:
         super().__init__()
+        self._subtasks = subtasks or []
         # the card only ever opens inside TodoistApp, so host it on the same
         # theme — the built-in default collapses $warning onto $accent
         self.register_theme(TODOIST_THEME)
@@ -77,13 +79,13 @@ class _Host(App[None]):
 
     def on_mount(self) -> None:
         self.push_screen(
-            TaskDetailScreen(self._row, self._opener, self._today),
+            TaskDetailScreen(self._row, self._opener, self._today, self._subtasks),
             self._dismissed.append,
         )
 
 
-async def _shown(row: TaskRow) -> str:
-    host = _Host(row, [])
+async def _shown(row: TaskRow, subtasks: list[TaskRow] | None = None) -> str:
+    host = _Host(row, [], subtasks=subtasks)
     async with host.run_test() as pilot:
         await pilot.pause()
         return str(host.screen.query_one("#detail", Static).render())
@@ -403,3 +405,27 @@ async def test_a_card_that_fits_stays_put() -> None:
     async with host.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         assert host.screen.query_one(ScrollBody).max_scroll_y == 0
+
+
+def _child(content: str) -> TaskRow:
+    return TaskRow(
+        id=TaskId(content),
+        content=content,
+        priority=Priority.P4,
+        due=None,
+        project_name=None,
+        parent_id="6X4",
+    )
+
+
+@pytest.mark.anyio
+async def test_the_card_lists_the_task_s_subtasks() -> None:
+    shown = await _shown(_row(), [_child("tag version"), _child("push tag")])
+
+    assert "SUBTASKS" in shown
+    assert "tag version" in shown and "push tag" in shown
+
+
+@pytest.mark.anyio
+async def test_a_task_without_subtasks_gets_no_subtask_section() -> None:
+    assert "SUBTASKS" not in await _shown(_row())
