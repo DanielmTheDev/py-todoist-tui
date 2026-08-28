@@ -16,6 +16,9 @@ _TIMEOUT_SECONDS = 30.0
 # Todoist takes at most this many commands in one request, so a wave bigger
 # than a batch goes as consecutive batches rather than being refused whole.
 COMMAND_LIMIT = 100
+# activity is read a page at a time, on demand: enough to fill a screen and
+# leave scrolling room, small enough that opening the feed feels instant.
+ACTIVITY_PAGE = 50
 
 
 def _random_uuid() -> str:
@@ -83,6 +86,20 @@ class TodoistClient:
 
     async def projects(self) -> list[dict[str, Any]]:
         return await self._paginate("/projects", {})
+
+    async def activities(
+        self, event_type: str | None = None, cursor: str | None = None
+    ) -> dict[str, Any]:
+        """One page of the task activity log, newest first. Unlike `_paginate`,
+        which drains every page, the caller walks `next_cursor` itself."""
+        params = {"object_type": "item", "limit": str(ACTIVITY_PAGE)}
+        if event_type is not None:
+            params["event_type"] = event_type
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = await self._http.get("/activities", params=params)
+        response.raise_for_status()
+        return cast("dict[str, Any]", response.json())
 
     async def sync(self, sync_token: str = "*") -> dict[str, Any]:
         response = await self._http.post(

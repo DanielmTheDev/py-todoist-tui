@@ -1,7 +1,9 @@
+import datetime
 from collections.abc import Callable
 from typing import Any
 
 from todoist_tui.api.client import TodoistClient
+from todoist_tui.domain.activity import ActivityEvent, ActivityPage, EventKind
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -30,6 +32,16 @@ class ApiTaskRepository:
 
     async def refresh_filtered(self, query: str) -> list[Task]:
         return await self.filtered(query)  # no cache here; every read is live
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        body = await self._client.activities(event_type, cursor)
+        records: list[dict[str, Any]] = body.get("results") or []
+        return ActivityPage(
+            events=tuple(_to_event(record) for record in records),
+            next_cursor=body.get("next_cursor"),
+        )
 
     async def filters(self) -> list[Filter]:
         # No REST list endpoint for filters; a full /sync is the only source.
@@ -222,6 +234,21 @@ def _item_add_args(task: NewTask) -> dict[str, Any]:
     if task.deadline is not None:
         args["deadline"] = task.deadline.to_api
     return args
+
+
+def _to_event(record: dict[str, Any]) -> ActivityEvent:
+    extra: dict[str, Any] = record.get("extra_data") or {}
+    project_id = record.get("parent_project_id")
+    return ActivityEvent(
+        id=str(record["id"]),
+        at=datetime.datetime.fromisoformat(
+            str(record["event_date"]).replace("Z", "+00:00")
+        ),
+        kind=EventKind(record["event_type"]),
+        content=str(extra.get("content") or ""),
+        task_id=str(record["object_id"]),
+        project_id=str(project_id) if project_id else None,
+    )
 
 
 def _to_project(record: dict[str, Any]) -> Project:

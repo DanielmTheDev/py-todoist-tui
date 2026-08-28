@@ -8,6 +8,7 @@ import respx
 
 from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
+from todoist_tui.domain.activity import ActivityEvent, EventKind
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
@@ -1382,3 +1383,88 @@ async def test_apply_creation_hangs_a_reminder_off_the_task_it_creates() -> None
         "temp_id": "r1",
         "args": {"item_id": "t1", "type": "relative", "minute_offset": 30},
     }
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_activity_maps_json_to_domain_events() -> None:
+    respx.get(f"{BASE_URL}/activities").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": 216135371122208792669432007104429266,
+                        "event_date": "2026-08-27T11:24:46.712678Z",
+                        "event_type": "completed",
+                        "object_type": "item",
+                        "object_id": "6hJQCmHP8Mc4xcH2",
+                        "parent_project_id": "6PRwWGV8c58g2Xjj",
+                        "extra_data": {"content": "Buy milk"},
+                    }
+                ],
+                "next_cursor": "more",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    page = await repo.activity()
+
+    assert page.next_cursor == "more"
+    assert page.events == (
+        ActivityEvent(
+            id="216135371122208792669432007104429266",
+            at=datetime.datetime(2026, 8, 27, 11, 24, 46, 712678, tzinfo=datetime.UTC),
+            kind=EventKind.COMPLETED,
+            content="Buy milk",
+            task_id="6hJQCmHP8Mc4xcH2",
+            project_id="6PRwWGV8c58g2Xjj",
+        ),
+    )
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_activity_survives_missing_content_and_unknown_kind() -> None:
+    respx.get(f"{BASE_URL}/activities").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": 42,
+                        "event_date": "2026-08-27T11:24:46.712678Z",
+                        "event_type": "archived",
+                        "object_type": "item",
+                        "object_id": "6hJ",
+                        "parent_project_id": None,
+                        "extra_data": {},
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    event = (await repo.activity()).events[0]
+
+    assert event.kind is EventKind.OTHER
+    assert event.content == ""
+    assert event.project_id is None
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_activity_forwards_event_type_and_cursor() -> None:
+    route = respx.get(f"{BASE_URL}/activities").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    await repo.activity(event_type=EventKind.ADDED, cursor="abc")
+
+    params = route.calls.last.request.url.params
+    assert params["event_type"] == "added"
+    assert params["cursor"] == "abc"

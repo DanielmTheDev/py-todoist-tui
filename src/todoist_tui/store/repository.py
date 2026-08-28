@@ -1,5 +1,6 @@
 import asyncio
 
+from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.clock import Clock
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
@@ -134,6 +135,12 @@ class SnapshotTaskRepository:
 
     async def reminders(self) -> list[Reminder]:
         return (await self._snapshot_now()).reminders
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        # history is append-only and outside the sync token: always live
+        return await self._inner.activity(event_type, cursor)
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)

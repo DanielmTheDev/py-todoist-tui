@@ -8,6 +8,7 @@ import pytest
 import respx
 
 from todoist_tui.api.client import (
+    ACTIVITY_PAGE,
     BASE_URL,
     COMMAND_LIMIT,
     SyncCommandError,
@@ -842,4 +843,41 @@ async def test_a_command_raised_mid_flight_is_still_sent() -> None:
         await asyncio.gather(ahead, behind)
 
     assert route.call_count == 2
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_activities_asks_for_one_page_of_task_events() -> None:
+    route = respx.get(f"{BASE_URL}/activities").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"id": "1"}], "next_cursor": "next"}
+        )
+    )
+    client = TodoistClient.create("tok")
+
+    body = await client.activities()
+
+    assert body == {"results": [{"id": "1"}], "next_cursor": "next"}
+    params = route.calls.last.request.url.params
+    assert params["object_type"] == "item"
+    assert params["limit"] == str(ACTIVITY_PAGE)
+    assert "event_type" not in params
+    assert "cursor" not in params
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_activities_passes_event_type_and_cursor() -> None:
+    route = respx.get(f"{BASE_URL}/activities").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None})
+    )
+    client = TodoistClient.create("tok")
+
+    await client.activities(event_type="completed", cursor="abc")
+
+    params = route.calls.last.request.url.params
+    assert params["event_type"] == "completed"
+    assert params["cursor"] == "abc"
     await client.aclose()

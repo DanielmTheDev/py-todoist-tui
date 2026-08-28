@@ -2,6 +2,7 @@ import asyncio
 import datetime
 from dataclasses import replace
 from functools import partial
+from typing import cast
 
 import pytest
 from rich.cells import cell_len
@@ -31,6 +32,7 @@ from tests.tui.tiers import (
 from tests.tui.view_labels import view_label
 from tests.tui.waiting import settled
 from todoist_tui.application.views import TaskRow, View
+from todoist_tui.domain.activity import ActivityEvent, ActivityPage, EventKind
 from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
@@ -62,6 +64,7 @@ from todoist_tui.tui.app import (
     TodoistApp,
     as_binding,
 )
+from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
@@ -90,6 +93,7 @@ class FakeRepository:
         labels: list[Label] | None = None,
         reminders: list[Reminder] | None = None,
         pool: list[Task] | None = None,
+        events: tuple[ActivityEvent, ...] = (),
     ) -> None:
         self._tasks = tasks
         self._projects = projects
@@ -99,6 +103,7 @@ class FakeRepository:
         self._sections = sections or []
         self._labels = labels or []
         self._reminders = reminders or []
+        self._events = events
         self.added_reminders: list[Reminder] = []
         self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
@@ -154,6 +159,11 @@ class FakeRepository:
 
     async def labels(self) -> list[Label]:
         return list(self._labels)
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        return ActivityPage(events=self._events, next_cursor=None)
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -307,6 +317,13 @@ class FakeRepository:
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
+
+
+class FailingActivityRepository(FakeRepository):
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        raise RuntimeError("offline")
 
 
 class FakeClock:
@@ -7595,3 +7612,62 @@ async def test_the_detail_card_lists_the_open_task_s_subtasks() -> None:
         shown = str(app.screen.query_one("#detail", Static).render())
         assert "SUBTASKS" in shown
         assert "c1" in shown and "c2" in shown
+
+
+_EVENT = ActivityEvent(
+    id="e1",
+    at=datetime.datetime(2026, 7, 28, 9, 15, tzinfo=datetime.UTC),
+    kind=EventKind.COMPLETED,
+    content="Something that happened",
+    task_id="t1",
+    project_id="9",
+)
+
+
+@pytest.mark.anyio
+async def test_c_opens_the_activity_feed() -> None:
+    repo = FakeRepository([], [Project(id="9", name="Work")], events=(_EVENT,))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ActivityScreen)
+        feed = cast(Content, app.screen.query_one("#activity", Static).render())
+        assert "Something that happened" in feed.plain
+        assert "#Work" in feed.plain
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ActivityScreen)
+
+
+@pytest.mark.anyio
+async def test_a_failed_activity_load_is_reported_and_stays_put() -> None:
+    repo = FailingActivityRepository([], [])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ActivityScreen)
+        assert "Failed to load activity" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_the_feed_can_be_reopened_after_it_was_closed() -> None:
+    """The re-entrancy guard has to clear, or `c` works exactly once."""
+    repo = FakeRepository([], [], events=(_EVENT,))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ActivityScreen)

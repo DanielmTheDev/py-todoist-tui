@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.creation import CreationPlan, NewProject
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -71,6 +72,7 @@ class FakeInner:
         self.text_edits: list[tuple[TaskId, str, str]] = []
         self.applied: list[CreationPlan] = []
         self.filtered_queries: list[str] = []
+        self.activity_calls: list[tuple[EventKind | None, str | None]] = []
         self._filtered_result = filtered_result or []
 
     async def today(self) -> list[Task]:
@@ -108,6 +110,12 @@ class FakeInner:
 
     async def labels(self) -> list[Label]:  # pragma: no cover
         raise AssertionError("labels() must be served from the snapshot")
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        self.activity_calls.append((event_type, cursor))
+        return ActivityPage(events=(), next_cursor="next")
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -611,3 +619,15 @@ async def test_the_filter_cache_keeps_only_the_most_recent_queries() -> None:
     await repo.filtered("q0")  # the oldest: evicted by the one that followed it
 
     assert inner.filtered_queries[fetched:] == ["q0"]
+
+
+@pytest.mark.anyio
+async def test_activity_goes_straight_to_the_backend() -> None:
+    inner = FakeInner()
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
+
+    page = await repo.activity(event_type=EventKind.COMPLETED, cursor="abc")
+
+    assert page.next_cursor == "next"
+    assert inner.activity_calls == [(EventKind.COMPLETED, "abc")]

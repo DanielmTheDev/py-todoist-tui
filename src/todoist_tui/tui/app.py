@@ -20,6 +20,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Rule, Static
 
+from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.add_task import add_task
 from todoist_tui.application.complete import complete_task, uncomplete_task
@@ -55,6 +56,7 @@ from todoist_tui.application.views import (
     view_from_key,
     with_subtrees,
 )
+from todoist_tui.domain.activity import EventKind
 from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
@@ -107,6 +109,7 @@ from todoist_tui.tui.format import (
     priority_dot,
     render_links,
 )
+from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import (
@@ -368,6 +371,7 @@ class TodoistApp(App[None]):
         Binding("i", "view_inbox", "Inbox", show=False),
         Binding("slash", "search", "Search", show=False),
         Binding("p", "views", "Views", show=False),
+        Binding("c", "activity", "Activity", show=False),
         Binding("g", "arrange_group", "Group", show=False),
         Binding("s", "arrange_sort", "Sort", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -449,6 +453,7 @@ class TodoistApp(App[None]):
         self._picking_views = False  # guards against stacking the views screen
         self._bound = ViewSlots()  # jump keys, reloaded from the store on mount
         self._picking_labels = False  # guards against stacking the labels editor
+        self._reading_activity = False  # guards against stacking the activity feed
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
         self._active_server_query: str | None = None
@@ -610,6 +615,29 @@ class TodoistApp(App[None]):
             ),
             self._on_views_closed,
         )
+
+    async def action_activity(self) -> None:
+        if self._reading_activity:  # already loading or the feed is already open
+            return
+        self._reading_activity = True
+        try:
+            rows, cursor = await self._activity_page(None, None)
+        except Exception as error:  # offline / sync failed: report, stay put
+            self._set_status(f"Failed to load activity: {error}")
+            self._reading_activity = False
+            return
+        self.push_screen(
+            ActivityScreen(rows, self._clock.today(), self._activity_page, cursor),
+            self._on_activity_closed,
+        )
+
+    async def _activity_page(
+        self, event_type: EventKind | None, cursor: str | None
+    ) -> tuple[tuple[ActivityRow, ...], str | None]:
+        return await load_activity(self._repo, event_type, cursor)
+
+    def _on_activity_closed(self, _result: None) -> None:
+        self._reading_activity = False
 
     def _taken_keys(self) -> dict[str, str]:
         """Every key a binding already owns, named by what it does — a jump key that

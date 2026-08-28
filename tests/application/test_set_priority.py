@@ -1,6 +1,7 @@
 import pytest
 
 from todoist_tui.application.set_priority import set_priority
+from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -46,6 +47,11 @@ class FakeRepository:
 
     async def labels(self) -> list[Label]:
         return []
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        return ActivityPage(events=(), next_cursor=None)
 
     async def complete(self, task_id: TaskId) -> None: ...
 

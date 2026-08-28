@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
+from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.arrange import Arrangement, GroupPath
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -45,6 +46,12 @@ class TaskRepository(Protocol):
     async def labels(self) -> list[Label]: ...
 
     async def reminders(self) -> list[Reminder]: ...
+
+    async def activity(
+        self, event_type: EventKind | None = None, cursor: str | None = None
+    ) -> ActivityPage:
+        """One page of the task activity log, newest first."""
+        ...
 
     async def complete(self, task_id: TaskId) -> None: ...
 
