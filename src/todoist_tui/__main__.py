@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
@@ -21,25 +22,40 @@ from todoist_tui.store.sqlite import (
 from todoist_tui.tui.app import TodoistApp
 
 
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="todoist-tui")
+    parser.add_argument(
+        "--reset-cache",
+        action="store_true",
+        help="discard the cached snapshot and resync from scratch"
+        " (view bindings, arrangements and folds are kept)",
+    )
+    return parser.parse_args(argv)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
     try:
         token = load_token(default_config_path())
     except ConfigError as error:
         print(f"todoist-tui: {error}", file=sys.stderr)
         return 1
 
-    asyncio.run(_run(token))
+    asyncio.run(_run(token, reset_cache=args.reset_cache))
     return 0
 
 
-async def _run(token: str) -> None:
+async def _run(token: str, reset_cache: bool = False) -> None:
     cache_path = default_cache_path()
     clock = SystemClock()
+    cache = SqliteSnapshotCache(cache_path)
+    if reset_cache:
+        await cache.clear()
     async with TodoistClient.create(token) as client:
         repo = SnapshotTaskRepository(
             ApiTaskRepository(client),
             ApiSnapshotSource(client),
-            SqliteSnapshotCache(cache_path),
+            cache,
             clock,
         )
         app = TodoistApp(

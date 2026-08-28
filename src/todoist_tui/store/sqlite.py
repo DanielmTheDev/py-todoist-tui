@@ -28,16 +28,25 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+# The cache's own tables, and nothing else: the file is shared with the stores
+# that hold view bindings, arrangements and folds, which a wipe must not touch.
+_CACHED_TABLES = (
+    "meta",
+    "projects",
+    "tasks",
+    "filters",
+    "sections",
+    "labels",
+    "reminders",
+)
+
+_DROPS = "".join(f"DROP TABLE IF EXISTS {table};\n" for table in _CACHED_TABLES)
+
 # Dropped and recreated on every save: the snapshot is disposable and fully
 # rewritten each time, so this also migrates any older column layout in place.
-_SCHEMA = """
-DROP TABLE IF EXISTS meta;
-DROP TABLE IF EXISTS projects;
-DROP TABLE IF EXISTS tasks;
-DROP TABLE IF EXISTS filters;
-DROP TABLE IF EXISTS sections;
-DROP TABLE IF EXISTS labels;
-DROP TABLE IF EXISTS reminders;
+_SCHEMA = (
+    _DROPS
+    + """
 CREATE TABLE meta (sync_token TEXT NOT NULL);
 CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER, child_order INTEGER);
 CREATE TABLE tasks (
@@ -61,6 +70,7 @@ CREATE TABLE reminders (
     due_date TEXT, due_time TEXT, minute_offset INTEGER, notify_uid TEXT
 );
 """
+)
 
 
 class SqliteSnapshotCache:
@@ -77,6 +87,10 @@ class SqliteSnapshotCache:
 
     async def save(self, snapshot: Snapshot) -> None:
         await asyncio.to_thread(self._save, snapshot)
+
+    async def clear(self) -> None:
+        """Discard the cached snapshot, so the next start syncs from scratch."""
+        await asyncio.to_thread(self._clear)
 
     def _load(self) -> Snapshot | None:
         if not self._path.is_file():
@@ -136,6 +150,12 @@ class SqliteSnapshotCache:
             labels=labels,
             reminders=reminders,
         )
+
+    def _clear(self) -> None:
+        if not self._path.is_file():  # nothing cached: already as clear as it gets
+            return
+        with closing(_connect(self._path)) as conn:
+            conn.executescript(_DROPS)
 
     def _save(self, snapshot: Snapshot) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

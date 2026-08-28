@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -15,7 +16,13 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
-from todoist_tui.store.sqlite import SqliteSnapshotCache
+from todoist_tui.domain.view_slots import ViewSlots
+from todoist_tui.store.sqlite import (
+    SqliteArrangementStore,
+    SqliteFoldStore,
+    SqliteSnapshotCache,
+    SqliteViewSlotStore,
+)
 
 
 def _snapshot(sync_token: str = "tok-1") -> Snapshot:
@@ -284,3 +291,58 @@ async def test_load_reads_past_a_writer_holding_the_lock(tmp_path: Path) -> None
         loaded = await cache.load()
 
     assert loaded == _snapshot()  # the last committed snapshot, not None
+
+
+@pytest.mark.anyio
+async def test_clear_discards_the_snapshot(tmp_path: Path) -> None:
+    cache = SqliteSnapshotCache(tmp_path / "cache.sqlite3")
+    await cache.save(_snapshot())
+
+    await cache.clear()
+
+    assert await cache.load() is None
+
+
+@pytest.mark.anyio
+async def test_clear_keeps_what_the_other_stores_put_in_the_same_file(
+    tmp_path: Path,
+) -> None:
+    """The file is shared, so a cache wipe must not cost the view bindings."""
+    path = tmp_path / "cache.sqlite3"
+    cache = SqliteSnapshotCache(path)
+    slots = SqliteViewSlotStore(path)
+    folds = SqliteFoldStore(path)
+    arrangements = SqliteArrangementStore(path)
+    bound = ViewSlots().assign("w", "project:9").with_startup("project:9")
+    await cache.save(_snapshot())
+    await slots.save(bound)
+    await folds.save("today", frozenset({("Work",)}))
+    await arrangements.save("today", Arrangement(group_by=(Field.PROJECT,)))
+
+    await cache.clear()
+
+    assert await slots.get() == bound
+    assert await folds.get("today") == frozenset({("Work",)})
+    assert await arrangements.get("today") == Arrangement(group_by=(Field.PROJECT,))
+
+
+@pytest.mark.anyio
+async def test_clear_is_silent_when_there_is_no_cache_file(tmp_path: Path) -> None:
+    cache = SqliteSnapshotCache(tmp_path / "missing.sqlite3")
+
+    await cache.clear()
+
+    assert not (tmp_path / "missing.sqlite3").exists()
+
+
+@pytest.mark.anyio
+async def test_saving_after_a_clear_starts_a_fresh_cache(tmp_path: Path) -> None:
+    cache = SqliteSnapshotCache(tmp_path / "cache.sqlite3")
+    await cache.save(_snapshot("tok-1"))
+    await cache.clear()
+
+    await cache.save(_snapshot("tok-2"))
+
+    loaded = await cache.load()
+    assert loaded is not None
+    assert loaded.sync_token == "tok-2"
