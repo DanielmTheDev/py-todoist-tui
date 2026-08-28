@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from todoist_tui.domain.arrange import Arrangement, Field
 from todoist_tui.domain.deadline import Deadline
@@ -12,6 +12,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.search import SearchTerm, parse_search
+from todoist_tui.domain.section import Section, sections_by_project
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.domain.tree import with_descendants
 
@@ -61,6 +62,10 @@ class View:
     # the project every task here belongs to, when the view has one — where a
     # task added to an empty view lands. None means "no one project".
     project_id: str | None = None
+    # the section group the cursor opens on when this view was reached by picking
+    # a section. The key stays the project's, so arrangement, folds and jump
+    # slots are shared with it — a section is a place, not a view of its own.
+    land_section: str | None = None
 
 
 def _due_today(row: TaskRow, today: datetime.date) -> bool:
@@ -107,15 +112,36 @@ def project_view(p: Project) -> View:
     )
 
 
-def all_views(projects: list[Project], filters: list[Filter]) -> list[View]:
-    """Every view a slot key can be bound to, in the order they are listed.
+def section_view(project: Project, section: Section) -> View:
+    """The project view, opened at one of its sections."""
+    return replace(
+        project_view(project),
+        title=f"{project.name} / {section.name}",
+        land_section=section.name,
+    )
 
-    Saved filters lead, then projects; Today and Inbox come last because they
-    already have keys of their own. The Inbox project is skipped, INBOX covers it.
+
+def all_views(
+    projects: list[Project], filters: list[Filter], sections: list[Section]
+) -> list[View]:
+    """Every view the Views screen lists, in order.
+
+    Saved filters lead, then each project followed by its sections; Today and
+    Inbox come last because they already have keys of their own. The Inbox
+    project is skipped, INBOX covers it — its sections go with it.
     """
+    by_project = sections_by_project(sections)
     return [
         *(filter_view(f) for f in filters),
-        *(project_view(p) for p in projects if not p.is_inbox),
+        *(
+            view
+            for p in projects
+            if not p.is_inbox
+            for view in (
+                project_view(p),
+                *(section_view(p, s) for s in by_project.get(p.id, [])),
+            )
+        ),
         TODAY,
         INBOX,
     ]

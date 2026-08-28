@@ -11,6 +11,7 @@ from tests.tui.view_labels import view_label
 from todoist_tui.application.views import all_views
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.project import Project
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.screens.views import ViewsOutcome, ViewsScreen
 
@@ -20,6 +21,7 @@ _PROJECTS = [
     Project(id="7", name="Backlog"),
 ]
 _FILTERS = [Filter(id="f1", name="Next", query="p1", order=1)]
+_SECTIONS = [Section(id="s1", project_id="9", name="Planning", order=1)]
 _TAKEN = {"t": "Due", "escape": "Clear selection"}
 
 
@@ -40,7 +42,7 @@ class _Host(App[None]):
     def on_mount(self) -> None:
         self.push_screen(
             ViewsScreen(
-                all_views(_PROJECTS, _FILTERS),
+                all_views(_PROJECTS, _FILTERS, _SECTIONS),
                 self._slots,
                 self._taken,
                 self._current,
@@ -99,6 +101,7 @@ async def test_a_sigil_marks_each_view_s_kind() -> None:
         assert _labels(host) == [
             view_label("Next", sigil="⚑"),
             view_label("Work", sigil="#"),
+            view_label("Work / Planning", sigil="§"),
             view_label("Backlog", sigil="#"),
             view_label("Today"),  # one of a kind: nothing to tell it apart from
             view_label("Inbox"),
@@ -123,6 +126,7 @@ async def test_assigned_views_lead_the_list_badged_and_starred() -> None:
         assert _labels(host) == [
             view_label("Next", key="w", sigil="⚑"),
             view_label("Work", star=True, sigil="#"),
+            view_label("Work / Planning", sigil="§"),
             view_label("Backlog", sigil="#"),
             view_label("Today"),
             view_label("Inbox"),
@@ -360,7 +364,7 @@ async def test_the_gutter_keeps_every_name_in_one_column() -> None:
             label.index(title)
             for label, title in zip(
                 _labels(host),
-                ["Next", "Work", "Backlog", "Today", "Inbox"],
+                ["Next", "Work", "Work / Planning", "Backlog", "Today", "Inbox"],
                 strict=True,
             )
         }
@@ -372,7 +376,7 @@ async def test_the_screen_opens_on_the_current_view() -> None:
     host = _Host(lambda _o: None, current="project:7")
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert _highlighted(host) == 2  # Next, Work, Backlog
+        assert _highlighted(host) == 3  # Next, Work, Work / Planning, Backlog
 
 
 @pytest.mark.anyio
@@ -389,7 +393,79 @@ async def test_filtering_out_the_current_view_falls_back_to_the_first_match() ->
     host = _Host(lambda _o: None, current="project:7")
     async with host.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("w", "o", "r")  # "wor" only in "Work"
+        await pilot.press("w", "o", "r")  # "wor" only in the Work rows
         await pilot.pause()
-        assert _labels(host) == [view_label("Work", sigil="#")]
+        assert _labels(host) == [
+            view_label("Work", sigil="#"),
+            view_label("Work / Planning", sigil="§"),
+        ]
         assert _highlighted(host) == 0
+
+
+@pytest.mark.anyio
+async def test_a_projects_key_and_star_do_not_leak_onto_its_sections() -> None:
+    slots = ViewSlots().assign("w", "project:9").with_startup("project:9")
+    host = _Host(lambda _o: None, slots)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert _labels(host) == [
+            view_label("Work", star=True, key="w", sigil="#"),
+            view_label("Next", sigil="⚑"),
+            view_label("Work / Planning", sigil="§"),
+            view_label("Backlog", sigil="#"),
+            view_label("Today"),
+            view_label("Inbox"),
+        ]
+
+
+@pytest.mark.anyio
+async def test_ctrl_b_on_a_section_is_refused() -> None:
+    outcomes: list[ViewsOutcome | None] = []
+    host = _Host(outcomes.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down")  # onto Work / Planning
+        await pilot.press("ctrl+b")
+        assert "opens inside its project" in _hint(host)
+        await pilot.press("x")  # no capture is waiting: types into the filter
+        await pilot.press("escape")
+        assert _only(outcomes).slots == ViewSlots()
+
+
+@pytest.mark.anyio
+async def test_ctrl_s_on_a_section_is_refused() -> None:
+    outcomes: list[ViewsOutcome | None] = []
+    host = _Host(outcomes.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down")  # onto Work / Planning
+        await pilot.press("ctrl+s")
+        assert "opens inside its project" in _hint(host)
+        await pilot.press("escape")
+        assert _only(outcomes).slots == ViewSlots()
+
+
+@pytest.mark.anyio
+async def test_enter_on_a_section_hands_back_its_project_view_and_the_section() -> None:
+    outcomes: list[ViewsOutcome | None] = []
+    host = _Host(outcomes.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(*"planning")
+        await pilot.press("enter")
+        jump = _only(outcomes).jump
+        assert jump is not None
+        assert jump.key == "project:9"
+        assert jump.land_section == "Planning"
+
+
+@pytest.mark.anyio
+async def test_typing_keeps_the_highlight_on_the_section_it_was_on() -> None:
+    host = _Host(lambda _o: None)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down")  # onto Work / Planning
+        await pilot.press("w")  # both Work rows still match
+        index = _highlighted(host)
+        assert index is not None
+        assert _labels(host)[index] == view_label("Work / Planning", sigil="§")

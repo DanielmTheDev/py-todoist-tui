@@ -9,7 +9,7 @@ from textual.widgets import Input, OptionList
 from textual.widgets.option_list import Option
 
 from todoist_tui.domain.project import Project, sorted_projects
-from todoist_tui.domain.section import Section, sorted_sections
+from todoist_tui.domain.section import Section, sections_by_project
 from todoist_tui.tui.screens.picking import PickFilter, numbered, row_for_key
 from todoist_tui.tui.screens.scrolling import PickList
 
@@ -108,16 +108,14 @@ class ProjectPickerScreen(ModalScreen["MoveTarget | None"]):
 def _targets(
     projects: list[Project], sections: list[Section], sections_only: bool
 ) -> list[MoveTarget]:
-    by_project: dict[str, list[Section]] = {}
-    for section in sections:
-        by_project.setdefault(section.project_id, []).append(section)
+    by_project = sections_by_project(sections)
     targets: list[MoveTarget] = []
     for project in sorted_projects(projects):
         # the Inbox root is not a target (it has its own `i` key), but its
         # sections are ordinary targets
         if not sections_only and not project.is_inbox:
             targets.append(MoveTarget(project.id, project.name))
-        for section in sorted_sections(by_project.get(project.id, [])):
+        for section in by_project.get(project.id, []):
             targets.append(
                 MoveTarget(project.id, project.name, section.id, section.name)
             )

@@ -46,7 +46,7 @@ uv run todoist-tui # from a checkout
 | Key | Action |
 |-----|--------|
 | `i` | Inbox view |
-| `p` | Views: keys you bound, then saved filters, projects, Today and Inbox (type to filter, `Enter` opens) |
+| `p` | Views: keys you bound, then saved filters, projects and their sections, Today and Inbox (type to filter, `Enter` opens) |
 | *your own keys* | Jump straight to a view you bound in the Views screen (Today included — it has no reserved key) |
 | `/` | Search every task by title or description; matches preview as you type, `Enter` opens them as a view |
 | `e` | Complete the highlighted task |
@@ -59,7 +59,9 @@ uv run todoist-tui # from a checkout
 Inside the Views screen (`p`): `ctrl+b` binds the highlighted view to a key you
 then press — any key no shortcut already owns, `Backspace` unbinds it, `Esc`
 cancels. `ctrl+s` marks the view the app opens into (`★`); pressing it again
-clears the mark and startup falls back to Today.
+clears the mark and startup falls back to Today. Picking a `§` section opens
+its project with the cursor on that section's header — a section takes no jump
+key and no startup mark of its own.
 
 Saved filters sync from your Todoist account; opening one runs its query on
 Todoist (full fidelity) and caches the result, refreshing in the background.

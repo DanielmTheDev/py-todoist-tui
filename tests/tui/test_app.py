@@ -3952,7 +3952,12 @@ def _parsed(due: DueText) -> Due:
     return Due(date=_PARSED_DATE, is_recurring=True, string=due.text)
 
 
-def _row(content: str, project_id: str = "220", parent_id: str | None = None) -> Task:
+def _row(
+    content: str,
+    project_id: str = "220",
+    parent_id: str | None = None,
+    section_id: str | None = None,
+) -> Task:
     return Task(
         id=TaskId(content),
         content=content,
@@ -3960,6 +3965,7 @@ def _row(content: str, project_id: str = "220", parent_id: str | None = None) ->
         due=Due(date=datetime.date(2026, 7, 21)),
         project_id=project_id,
         parent_id=parent_id,
+        section_id=section_id,
     )
 
 
@@ -5571,6 +5577,89 @@ async def test_opening_a_filter_from_the_views_screen_refreshes_it_live() -> Non
         await settled(app)
         assert "My Filter" in _status(app)
         assert "p1" in repo.refresh_filtered_queries
+
+
+def _section_jump_repo() -> FakeRepository:
+    """A Work project with a sectioned and a loose task, plus an empty section."""
+    return FakeRepository(
+        [_row("planned", "9", section_id="s1"), _row("loose", "9")],
+        [Project(id="9", name="Work")],
+        sections=[
+            Section(id="s1", project_id="9", name="Planning", order=1),
+            Section(id="s2", project_id="9", name="Someday", order=2),
+        ],
+    )
+
+
+@pytest.mark.anyio
+async def test_the_views_screen_lists_a_projects_sections() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        options = app.screen.query_one(OptionList)
+        labels = [
+            str(options.get_option_at_index(i).prompt)
+            for i in range(options.option_count)
+        ]
+        assert labels == [
+            view_label("Work", sigil="#"),
+            view_label("Work / Planning", sigil="§"),
+            view_label("Work / Someday", sigil="§"),
+            view_label("Today"),
+            view_label("Inbox"),
+        ]
+
+
+@pytest.mark.anyio
+async def test_opening_a_section_lands_the_cursor_on_its_header() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "planning")
+        await settled(app)
+        await pilot.pause()
+        assert "Work" in _status(app)  # the project view opened, not a new one
+        table = app.query_one(TaskTable)
+        assert "Planning" in _content_col(table)[table.cursor_row]
+
+
+@pytest.mark.anyio
+async def test_opening_a_section_leaves_it_folded() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "planning")
+        await settled(app)
+        await pilot.pause()
+        assert not any("planned" in c for c in _content_col(app.query_one(TaskTable)))
+
+
+@pytest.mark.anyio
+async def test_opening_a_section_that_is_not_grouped_lands_nowhere() -> None:
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement())  # user ungrouped the project
+    app = TodoistApp(_section_jump_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "planning")
+        await settled(app)
+        await pilot.pause()
+        assert "Work" in _status(app)
+        assert app.query_one(TaskTable).cursor_row == 0
+
+
+@pytest.mark.anyio
+async def test_opening_an_empty_section_lands_nowhere() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "someday")
+        await settled(app)
+        await pilot.pause()
+        assert "Work" in _status(app)
+        assert app.query_one(TaskTable).cursor_row == 0
 
 
 @pytest.mark.anyio

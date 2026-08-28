@@ -423,6 +423,9 @@ class TodoistApp(App[None]):
         self._open_groups: set[GroupPath] = set()  # groups unfolded to show members
         self._folds_key: str | None = None  # the view `_open_groups` was loaded for
         self._header_paths: dict[int, GroupPath] = {}  # header row index → its group
+        # the view key + group the next load of that view opens at, from a picked
+        # section — keyed so an interleaved reload of another view drops it
+        self._pending_land: tuple[str, GroupPath] | None = None
         self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
         self._syncing = False
@@ -602,13 +605,14 @@ class TodoistApp(App[None]):
         try:
             projects = await self._repo.projects()
             filters = await self._repo.filters()
+            sections = await self._repo.sections()
         except Exception as error:  # offline / sync failed: report, stay put
             self._set_status(f"Failed to load views: {error}")
             self._picking_views = False
             return
         self.push_screen(
             ViewsScreen(
-                all_views(projects, filters),
+                all_views(projects, filters, sections),
                 self._bound,
                 self._taken_keys(),
                 self._view.key,
@@ -655,7 +659,7 @@ class TodoistApp(App[None]):
             self._bound = outcome.slots
             self.run_worker(self._save_bound())
         if outcome.jump is not None:
-            self.run_worker(self._go_to(outcome.jump.key))
+            self.run_worker(self._go_to(outcome.jump.key, outcome.jump.land_section))
 
     async def _save_bound(self) -> None:
         """One write at a time, each carrying what is bound when it starts: writes
@@ -696,7 +700,7 @@ class TodoistApp(App[None]):
         if not await self._go_to(view_key):
             self._set_status(f"{key} no longer opens anything")
 
-    async def _go_to(self, view_key: str) -> bool:
+    async def _go_to(self, view_key: str, land_section: str | None = None) -> bool:
         """Open the view a stored key names; False when its target is gone."""
         try:
             projects = await self._repo.projects()
@@ -706,6 +710,10 @@ class TodoistApp(App[None]):
         view = view_from_key(view_key, projects, filters)
         if view is None:  # the project or filter it named was deleted
             return False
+        # unconditionally, so a plain jump clears the pending of an earlier one
+        self._pending_land = (
+            None if land_section is None else (view.key, (land_section,))
+        )
         query = query_for_key(view_key, filters)
         self._active_server_query = query
         if query is None:
@@ -1851,6 +1859,22 @@ class TodoistApp(App[None]):
     async def _reload(self, view: View) -> None:
         if await self._load_rows(view):
             self._repaint()
+            self._land(view)
+
+    def _land(self, view: View) -> None:
+        """Put the cursor on the group a picked section named, once its view has
+        painted. A missing header (empty section, regrouped view) lands nowhere."""
+        if self._pending_land is None:
+            return
+        key, path = self._pending_land
+        if key != view.key:
+            return
+        self._pending_land = None
+        try:
+            table = self.query_one(TaskTable)
+        except NoMatches:  # reload landed mid-teardown: nothing to move
+            return
+        self._move_cursor_to_group(table, path)
 
     async def _load_rows(self, view: View) -> bool:
         """Take `view`'s rows and arrangement in without drawing them, so a caller

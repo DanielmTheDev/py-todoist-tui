@@ -15,6 +15,7 @@ from todoist_tui.application.views import (
     prune,
     query_for_key,
     search_view,
+    section_view,
     view_from_key,
     with_subtrees,
 )
@@ -738,6 +739,7 @@ def test_all_views_lists_filters_then_projects_then_today_and_inbox() -> None:
             Project(id="7", name="Home"),
         ],
         [Filter(id="f1", name="Next", query="p1", order=1)],
+        [],
     )
 
     assert [(v.title, v.key) for v in views] == [
@@ -750,14 +752,75 @@ def test_all_views_lists_filters_then_projects_then_today_and_inbox() -> None:
 
 
 def test_all_views_without_projects_or_filters_still_offers_today_and_inbox() -> None:
-    assert [v.key for v in all_views([], [])] == ["today", "inbox"]
+    assert [v.key for v in all_views([], [], [])] == ["today", "inbox"]
 
 
 def test_all_views_keys_round_trip_back_through_view_from_key() -> None:
-    """Every listed view must be storable as a slot, i.e. rebuildable from its key."""
+    """Every bindable view must be storable as a slot, i.e. rebuildable from its key."""
     projects = [Project(id="9", name="Work")]
     filters = [Filter(id="f1", name="Next", query="p1", order=1)]
+    sections = [Section(id="s1", project_id="9", name="Planning", order=1)]
 
-    for view in all_views(projects, filters):
+    for view in all_views(projects, filters, sections):
         rebuilt = view_from_key(view.key, projects, filters)
-        assert rebuilt is not None and rebuilt.title == view.title
+        assert rebuilt is not None
+        if view.land_section is None:
+            assert rebuilt.title == view.title
+
+
+def test_section_view_opens_its_project_view_at_the_section() -> None:
+    project = Project(id="9", name="Work")
+    section = Section(id="s1", project_id="9", name="Planning", order=1)
+
+    view = section_view(project, section)
+
+    assert view.title == "Work / Planning"
+    assert view.key == "project:9"
+    assert view.land_section == "Planning"
+    assert view.project_id == "9"
+    assert view.default_arrangement == Arrangement(group_by=(Field.SECTION,))
+
+
+def test_all_views_lists_each_section_after_its_project() -> None:
+    views = all_views(
+        [Project(id="9", name="Work"), Project(id="7", name="Home")],
+        [],
+        [
+            Section(id="s2", project_id="9", name="Backlog", order=2),
+            Section(id="s3", project_id="7", name="Errands", order=1),
+            Section(id="s1", project_id="9", name="Planning", order=1),
+        ],
+    )
+
+    assert [v.title for v in views] == [
+        "Work",
+        "Work / Planning",
+        "Work / Backlog",
+        "Home",
+        "Home / Errands",
+        "Today",
+        "Inbox",
+    ]
+
+
+def test_all_views_skips_the_inbox_projects_sections() -> None:
+    views = all_views(
+        [Project(id="220", name="Eingang", is_inbox=True)],
+        [],
+        [Section(id="s1", project_id="220", name="Later", order=1)],
+    )
+
+    assert [v.key for v in views] == ["today", "inbox"]
+
+
+def test_a_section_row_rebuilds_as_its_project_view() -> None:
+    """A section takes no slot of its own: its key names the project view."""
+    projects = [Project(id="9", name="Work")]
+    section = Section(id="s1", project_id="9", name="Planning", order=1)
+
+    row = section_view(projects[0], section)
+    rebuilt = view_from_key(row.key, projects, [])
+
+    assert rebuilt is not None
+    assert rebuilt.title == "Work"
+    assert rebuilt.land_section is None

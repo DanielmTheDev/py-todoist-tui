@@ -18,6 +18,9 @@ from todoist_tui.tui.screens.scrolling import PickList
 _HINT = "ctrl+b bind key · ctrl+s startup · enter open · esc close"
 
 _SIGILS = {"project": "#", "filter": "⚑"}
+_SECTION_SIGIL = "§"
+
+_SECTION_REFUSED = "a section opens inside its project — it has no key of its own"
 
 # the gutter each row opens with: startup mark, jump key, kind sigil. Fixed so a
 # badged row keeps its name in the same column as an unbadged one.
@@ -139,7 +142,7 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         self.dismiss(ViewsOutcome(self._slots, view))
 
     def _start_capture(self) -> None:
-        view = self._highlighted()
+        view = self._bindable()
         if view is None:
             return
         self._capturing = view
@@ -175,7 +178,7 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         self._repaint()
 
     def _toggle_startup(self) -> None:
-        view = self._highlighted()
+        view = self._bindable()
         if view is None:
             return
         opens_here = self._slots.startup == view.key
@@ -186,12 +189,21 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         index = self.query_one(OptionList).highlighted
         return None if index is None else self._visible[index]
 
+    def _bindable(self) -> View | None:
+        """The highlighted view when a slot can name it — a section row is refused
+        with a hint: it is a place inside its project view, not a view of its own."""
+        view = self._highlighted()
+        if view is not None and view.land_section is not None:
+            self._hint(_SECTION_REFUSED)
+            return None
+        return view
+
     def _matches(self) -> list[View]:
         """The views the typed text matches, slotted ones first — a key's badge is
         easiest to find where the keys cluster."""
         query = self._query.casefold()
         found = [v for v in self._views if query in v.title.casefold()]
-        by_key = {v.key: v for v in found}
+        by_key = {_slot_key(v): v for v in found}
         bound = [by_key[k] for k in self._slots.by_key.values() if k in by_key]
         return bound + [v for v in found if v not in bound]
 
@@ -202,12 +214,17 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         options = self.query_one(OptionList)
         options.clear_options()
         options.add_options([self._option(v) for v in self._visible])
-        options.highlighted = self._index_of(was and was.key)
+        options.highlighted = 0 if was is None else self._row_of(was)
 
     def _index_of(self, key: str | None) -> int:
         """The row a key sits on, 0 when it is not listed — a view the typed text
         filters out, or one the list never carries (a search view)."""
         return next((i for i, v in enumerate(self._visible) if v.key == key), 0)
+
+    def _row_of(self, view: View) -> int:
+        """The row `view` sits on, 0 when the typed text has filtered it out. By
+        identity, not key: a section row shares its project's key."""
+        return next((i for i, v in enumerate(self._visible) if v is view), 0)
 
     def _option(self, view: View) -> Option:
         # Text, not a plain string: a view name or a `[w]` badge would otherwise be
@@ -215,9 +232,11 @@ class ViewsScreen(ModalScreen[ViewsOutcome]):
         return Option(self._label(view))
 
     def _label(self, view: View) -> Text:
-        key = self._slots.key_for(view.key)
+        slot_key = _slot_key(view)
+        key = None if slot_key is None else self._slots.key_for(slot_key)
         label = Text()
-        _field(label, "★" if self._slots.startup == view.key else "", _STARTUP_WIDTH)
+        starred = slot_key is not None and self._slots.startup == slot_key
+        _field(label, "★" if starred else "", _STARTUP_WIDTH)
         _field(label, "" if key is None else f"[{key}]", _KEY_WIDTH)
         # the kind recedes, the name leads
         _field(label, _sigil(view), _SIGIL_WIDTH, style="dim")
@@ -241,5 +260,13 @@ def _sigil(view: View) -> str:
     """The kind marker a title carries — two views can share a name. `#` is
     Todoist's own project sigil, so it reads without being learnt. Today and Inbox
     are one of a kind, so they carry nothing."""
+    if view.land_section is not None:  # its key prefix is the project's
+        return _SECTION_SIGIL
     prefix, _, _ = view.key.partition(":")
     return _SIGILS.get(prefix, "")
+
+
+def _slot_key(view: View) -> str | None:
+    """The key this row's badge, star and slot read — None for a section row: a
+    section is a place inside its project view, not a view a key can name."""
+    return None if view.land_section is not None else view.key
