@@ -68,6 +68,13 @@ from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
+from todoist_tui.tui.screens.draft import (
+    DEADLINE_ICON,
+    DUE_ICON,
+    LABELS_ICON,
+    PROJECT_ICON,
+    SUBTASKS_ICON,
+)
 from todoist_tui.tui.screens.edit import TaskEditScreen
 from todoist_tui.tui.screens.help import HelpScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
@@ -5970,8 +5977,8 @@ async def test_ctrl_e_seeds_the_strip_from_the_cursor_row() -> None:
         await pilot.pause()
 
         assert _attribute_strip(app) == (
-            "Due Today · Deadline 30 Aug · Project Work / Now · Parent —"
-            " · Subtasks — · Reminders — · Labels @errand · Priority P2"
+            f"{DUE_ICON} Today · {DEADLINE_ICON} 30 Aug"
+            f" · {PROJECT_ICON} Work / Now · {LABELS_ICON} @errand · ● P2"
         )
 
 
@@ -5991,8 +5998,7 @@ async def test_a_seeds_the_strip_with_where_the_new_task_would_land() -> None:
 
         # Today's view dates the task, and it keeps the cursor row's company
         assert _attribute_strip(app) == (
-            "Due Today · Deadline — · Project Work / Now"
-            " · Parent — · Subtasks — · Reminders — · Labels — · Priority P4"
+            f"{DUE_ICON} Today · {PROJECT_ICON} Work / Now · P4"
         )
 
 
@@ -7554,7 +7560,7 @@ async def test_the_editor_lists_the_task_s_own_subtasks() -> None:
         await pilot.pause()
 
         assert _sub_lines(app) == ["c1", "c2"]
-        assert "Subtasks 2" in _attribute_strip(app)
+        assert f"{SUBTASKS_ICON} 2" in _attribute_strip(app)
 
 
 @pytest.mark.anyio

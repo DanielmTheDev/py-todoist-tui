@@ -15,7 +15,18 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
-from todoist_tui.tui.screens.draft import Subtask, TaskDraft, draft_of
+from todoist_tui.tui.screens.draft import (
+    DEADLINE_ICON,
+    DUE_ICON,
+    LABELS_ICON,
+    PARENT_ICON,
+    PROJECT_ICON,
+    REMINDERS_ICON,
+    SUBTASKS_ICON,
+    Subtask,
+    TaskDraft,
+    draft_of,
+)
 from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
 from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen
@@ -342,20 +353,36 @@ async def test_the_strip_shows_every_attribute_the_draft_carries() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _strip(host) == (
-            "Due Tomorrow · Deadline 30 Sep · Project Work / Backlog"
-            " · Parent — · Subtasks — · Reminders — · Labels @errand · Priority P2"
+            f"{DUE_ICON} Tomorrow · {DEADLINE_ICON} 30 Sep"
+            f" · {PROJECT_ICON} Work / Backlog · {LABELS_ICON} @errand · ● P2"
         )
 
 
 @pytest.mark.anyio
-async def test_the_strip_dashes_what_the_draft_leaves_unset() -> None:
+async def test_the_strip_drops_what_the_draft_leaves_unset() -> None:
     host = _Host("Buy milk", "", lambda _r: None)
     async with host.run_test() as pilot:
         await pilot.pause()
-        assert (
-            _strip(host) == "Due — · Deadline — · Project — · Parent —"
-            " · Subtasks — · Reminders — · Labels — · Priority P4"
-        )
+        assert _strip(host) == "P4"
+
+
+@pytest.mark.anyio
+async def test_user_text_with_brackets_is_shown_literally() -> None:
+    """Titles and names are the user's own; Rich must not read them as markup."""
+    parent = _row("check [urgent] items", project_name=None)
+    draft = TaskDraft(
+        "Buy milk",
+        "",
+        project_id="7",
+        project_name="Work [old]",
+        parent_id="check [urgent] items",
+        parent=parent,
+    )
+    host = _Host("", "", lambda _r: None, draft=draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert f"{PROJECT_ICON} Work [old]" in _strip(host)
+        assert f"{PARENT_ICON} check [urgent] items" in _strip(host)
 
 
 @pytest.mark.anyio
@@ -391,7 +418,7 @@ async def test_alt_t_picks_a_due_date_into_the_draft() -> None:
         await pilot.press("m")  # tomorrow
         await pilot.pause()
 
-        assert _strip(host).startswith("Due Tomorrow ·")
+        assert _strip(host).startswith(f"{DUE_ICON} Tomorrow ·")
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -436,7 +463,7 @@ async def test_a_typed_phrase_is_carried_as_written() -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        assert _strip(host).startswith("Due every friday ·")
+        assert _strip(host).startswith(f"{DUE_ICON} every friday ·")
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [TaskDraft("Buy milk", "", due=DueText("every friday"))]
@@ -453,7 +480,7 @@ async def test_alt_d_picks_a_deadline_into_the_draft() -> None:
         await pilot.press("m")  # tomorrow
         await pilot.pause()
 
-        assert "Deadline Tomorrow" in _strip(host)
+        assert f"{DEADLINE_ICON} Tomorrow" in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -474,7 +501,7 @@ async def test_cancelling_a_picker_leaves_the_draft_alone() -> None:
         await pilot.press("escape")
         await pilot.pause()
 
-        assert _strip(host).startswith("Due — ·")
+        assert DUE_ICON not in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [TaskDraft("Buy milk", "")]
@@ -489,7 +516,7 @@ async def test_alt_1_sets_the_priority_without_leaving_the_editor() -> None:
         await pilot.press("alt+1")
         await pilot.pause()
 
-        assert "Priority P1" in _strip(host)
+        assert _strip(host).endswith("● P1")
         assert host.screen.query_one(Input).value == "Buy milk"  # not typed into
         await pilot.press("ctrl+s")
         await pilot.pause()
@@ -516,7 +543,7 @@ async def test_alt_v_moves_the_draft_to_a_section() -> None:
         await pilot.press("2")  # the section under its project
         await pilot.pause()
 
-        assert "Project Work / Now" in _strip(host)
+        assert f"{PROJECT_ICON} Work / Now" in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -544,8 +571,8 @@ async def test_alt_n_nests_the_draft_and_takes_the_parents_project() -> None:
         await pilot.press("2")  # 1 is the top-level entry
         await pilot.pause()
 
-        assert "Parent chores" in _strip(host)
-        assert "Project Work" in _strip(host)
+        assert f"{PARENT_ICON} chores" in _strip(host)
+        assert f"{PROJECT_ICON} Work" in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -579,7 +606,7 @@ async def test_nesting_drops_the_due_date_the_parent_picker_offers_to_drop() -> 
         await pilot.press("2")
         await pilot.pause()
 
-        assert _strip(host).startswith("Due — ·")
+        assert DUE_ICON not in _strip(host)
 
 
 @pytest.mark.anyio
@@ -602,7 +629,7 @@ async def test_alt_l_replaces_the_labels_and_flags_a_new_one() -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        assert "Labels @errand @home" in _strip(host)
+        assert f"{LABELS_ICON} @errand @home" in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [TaskDraft("Buy milk", "", labels=("errand", "home"))]
@@ -658,7 +685,7 @@ async def test_alt_r_adds_a_relative_reminder_to_a_dated_draft() -> None:
         await pilot.press("h")  # the 1-hour-before preset
         await pilot.pause()
 
-        assert "Reminders 60 min before" in _strip(host)
+        assert f"{REMINDERS_ICON} 60 min before" in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited[0] is not None
@@ -688,7 +715,7 @@ async def test_alt_r_drops_a_reminder_the_draft_already_had() -> None:
         await pilot.pause()
         await pilot.pause()
 
-        assert "Reminders —" in _strip(host)
+        assert REMINDERS_ICON not in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -736,7 +763,7 @@ async def test_naming_a_project_lifts_the_draft_out_of_its_parent() -> None:
         await pilot.press("1")  # Home
         await pilot.pause()
 
-        assert "Parent —" in _strip(host)
+        assert PARENT_ICON not in _strip(host)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert edited == [
@@ -801,7 +828,7 @@ async def test_the_subtasks_are_listed_under_the_description() -> None:
     async with host.run_test() as pilot:
         await pilot.pause()
         assert _sub_lines(host) == ["tag version"]
-        assert "Subtasks 1" in _strip(host)
+        assert f"{SUBTASKS_ICON} 1" in _strip(host)
 
 
 @pytest.mark.anyio

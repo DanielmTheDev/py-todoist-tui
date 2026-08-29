@@ -27,6 +27,12 @@ from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
 from todoist_tui.tui.screens.schedule import ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.scrolling import ScrollBody
 from todoist_tui.tui.screens.subtask_list import HINT, SubtaskList
+from todoist_tui.tui.theme import (
+    PALETTE_CLASSES,
+    PALETTE_CSS,
+    priority_styles,
+    tier_styles,
+)
 
 _HELP_HINT = "f1 help"  # `?` is a character here: the fields take it
 # Declared, not bound: Textual moves the focus on tab itself, but help should
@@ -109,7 +115,10 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         Binding("alt+4", "set_priority('P4')", "Editor: P4", show=False),
     ]
 
-    DEFAULT_CSS = """
+    COMPONENT_CLASSES: ClassVar[set[str]] = set(PALETTE_CLASSES)
+    DEFAULT_CSS = (
+        PALETTE_CSS
+        + """
     TaskEditScreen { align: center middle; }
     TaskEditScreen #fields { width: 70%; max-width: 80; height: auto; }
     TaskEditScreen #heading { padding: 0 1; text-style: bold; }
@@ -122,6 +131,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     TaskEditScreen SubtaskList { border: round $primary; }
     TaskEditScreen #subtask-hint { padding: 0 1; color: $text-muted; }
     """
+    )
 
     def __init__(
         self,
@@ -155,7 +165,8 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
                 yield Static("Subtasks", classes="label")
                 yield SubtaskList()
                 yield Static(HINT, id="subtask-hint")
-            yield Static(attribute_strip(self._draft, self._today), id="attributes")
+            # painted by `_repaint` once mounted, when the palette can resolve
+            yield Static(id="attributes", markup=False)
             yield Static(_HELP_HINT, id="hint")
 
     def on_mount(self) -> None:
@@ -393,7 +404,9 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
 
     def _repaint(self) -> None:
         self.query_one("#attributes", Static).update(
-            attribute_strip(self._draft, self._today)
+            attribute_strip(
+                self._draft, self._today, tier_styles(self), priority_styles(self)
+            )
         )
         if self._nests:
             self.query_one(SubtaskList).show(self._draft.subtasks)

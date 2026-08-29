@@ -6,8 +6,11 @@ shows; the ids are what the save applies.
 """
 
 import datetime
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+
+from rich.style import Style
+from rich.text import Text
 
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.deadline import Deadline
@@ -19,9 +22,19 @@ from todoist_tui.tui.format import (
     format_due,
     format_labels,
     format_reminder,
+    priority_dot,
 )
+from todoist_tui.tui.theme import Tier
 
-_UNSET = "—"
+# Nerd Font (nf-md) glyphs standing in for the field names
+DUE_ICON = "\U000f00ed"  # calendar
+DEADLINE_ICON = "\U000f00f0"  # calendar-clock
+PROJECT_ICON = "\U000f024b"  # folder
+PARENT_ICON = "\U000f005d"  # arrow-up
+SUBTASKS_ICON = "\U000f0645"  # file-tree
+REMINDERS_ICON = "\U000f009a"  # bell
+LABELS_ICON = "\U000f04f9"  # tag
+_SEPARATOR = " · "
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,22 +98,36 @@ def draft_of(
     )
 
 
-def attribute_strip(draft: TaskDraft, today: datetime.date) -> str:
-    """One line naming every attribute the draft carries, in the detail card's
-    wording so the two read the same."""
-    return " · ".join(
-        f"{name} {value or _UNSET}"
-        for name, value in (
-            ("Due", _due(draft.due, today)),
-            ("Deadline", format_deadline(draft.deadline, today)),
-            ("Project", _project(draft)),
-            ("Parent", _parent(draft)),
-            ("Subtasks", _subtasks(draft)),
-            ("Reminders", _reminders(draft, today)),
-            ("Labels", format_labels(draft.labels)),
-            ("Priority", draft.priority.label),
-        )
-    )
+def attribute_strip(
+    draft: TaskDraft,
+    today: datetime.date,
+    tiers: Mapping[Tier, Style],
+    priorities: Mapping[Priority, Style],
+) -> Text:
+    """One line of icon-marked runs for the attributes the draft carries; an
+    unset field drops out entirely, since f1 help names them all. A `Text` so
+    a title's own brackets never read as Rich markup."""
+    icon, value = tiers[Tier.MUTED], tiers[Tier.PRIMARY]
+    text = Text()
+    for glyph, shown in (
+        (DUE_ICON, _due(draft.due, today)),
+        (DEADLINE_ICON, format_deadline(draft.deadline, today)),
+        (PROJECT_ICON, _project(draft)),
+        (PARENT_ICON, _parent(draft)),
+        (SUBTASKS_ICON, _subtasks(draft)),
+        (REMINDERS_ICON, _reminders(draft, today)),
+        (LABELS_ICON, format_labels(draft.labels)),
+    ):
+        if not shown:
+            continue
+        text.append(f"{glyph} ", style=icon)
+        text.append(shown, style=value)
+        text.append(_SEPARATOR, style=icon)
+    dot = priority_dot(draft.priority)
+    if dot:
+        text.append(f"{dot} ", style=priorities[draft.priority])
+    text.append(draft.priority.label, style=value)
+    return text
 
 
 def _parent(draft: TaskDraft) -> str:
