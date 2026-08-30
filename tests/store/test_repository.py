@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from datetime import date
 
 import pytest
@@ -68,6 +69,7 @@ class FakeInner:
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
+        self.reorders: list[list[tuple[TaskId, int]]] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.text_edits: list[tuple[TaskId, str, str]] = []
         self.applied: list[CreationPlan] = []
@@ -145,6 +147,9 @@ class FakeInner:
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
         self.parents.append((task_id, parent_id))
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        self.reorders.append(list(items))
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -405,6 +410,16 @@ async def test_set_parent_delegates_to_the_api() -> None:
     await repo.set_parent(TaskId("x"), "p")
 
     assert inner.parents == [(TaskId("x"), "p")]
+
+
+@pytest.mark.anyio
+async def test_reorder_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
+
+    await repo.reorder([(TaskId("x"), 2), (TaskId("y"), 1)])
+
+    assert inner.reorders == [[(TaskId("x"), 2), (TaskId("y"), 1)]]
 
 
 @pytest.mark.anyio

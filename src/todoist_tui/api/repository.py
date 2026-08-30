@@ -1,5 +1,5 @@
 import datetime
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from todoist_tui.api.client import TodoistClient
@@ -125,6 +125,9 @@ class ApiTaskRepository:
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
         await self._client.move_item_under(str(task_id), parent_id)
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        await self._client.reorder_items([(str(tid), order) for tid, order in items])
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -304,4 +307,5 @@ def _to_task(record: dict[str, Any]) -> Task:
         description=str(record.get("description") or ""),
         deadline=Deadline.from_api(deadline) if deadline else None,
         parent_id=str(record["parent_id"]) if record.get("parent_id") else None,
+        child_order=int(record.get("child_order") or 0),
     )

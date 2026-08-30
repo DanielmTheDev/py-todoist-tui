@@ -39,6 +39,7 @@ class TaskRow:
     description: str = ""
     deadline: Deadline | None = None
     parent_id: str | None = None
+    child_order: int = 0
     reminders: tuple[Reminder, ...] = ()
     matched: bool = True
 
@@ -256,6 +257,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             description=task.description,
             deadline=task.deadline,
             parent_id=task.parent_id,
+            child_order=task.child_order,
             reminders=tuple(reminders_by_item.get(str(task.id), ())),
             matched=task.id not in pulled_in,
         )

@@ -58,6 +58,38 @@ async def _gated(gate: asyncio.Event) -> None:
 
 
 @pytest.mark.anyio
+async def test_one_command_can_carry_several_mutations() -> None:
+    """A swap patches two rows differently but must stand or fall as one command."""
+    harness = Harness()
+    first = edit(["a"], priority=Priority.P1)
+    second = edit(["b"], priority=Priority.P4)
+
+    async def command() -> None:
+        harness.ran.append("swap")
+
+    harness.outbox.queue([first, second], command)
+
+    assert harness.outbox.pending == (first, second)
+    await harness.outbox.idle()
+    assert harness.ran == ["swap"]
+
+
+@pytest.mark.anyio
+async def test_a_rejected_command_retires_all_of_its_mutations() -> None:
+    harness = Harness()
+    first = edit(["a"], priority=Priority.P1)
+    second = edit(["b"], priority=Priority.P4)
+
+    async def command() -> None:
+        raise RuntimeError("nope")
+
+    harness.outbox.queue([first, second], command, "Failed")
+    await harness.outbox.idle()
+
+    assert harness.outbox.pending == ()
+
+
+@pytest.mark.anyio
 async def test_a_queued_mutation_is_pending_at_once() -> None:
     harness = Harness()
 

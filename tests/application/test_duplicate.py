@@ -1,5 +1,5 @@
 import itertools
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
 
@@ -110,6 +110,8 @@ class FakeRepository:
     ) -> None: ...
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()

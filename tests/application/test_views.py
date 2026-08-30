@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from collections.abc import Sequence
 
 import pytest
 
@@ -107,6 +108,8 @@ class FakeRepository:
     ) -> None: ...
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -248,6 +251,24 @@ async def test_load_view_resolves_section_order() -> None:
     rows = await load_view(repo, TODAY)
 
     assert rows[0].section_order == 3
+
+
+@pytest.mark.anyio
+async def test_load_view_carries_child_order() -> None:
+    """Manual ordering needs the task's place among its siblings on the row."""
+    task = Task(
+        id=TaskId("x"),
+        content="Third",
+        priority=Priority.P2,
+        due=None,
+        project_id="9",
+        child_order=3,
+    )
+    repo = FakeRepository([task], [], [Project(id="9", name="Work")])
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].child_order == 3
 
 
 @pytest.mark.anyio
@@ -703,6 +724,8 @@ class BarrierRepository:
     ) -> None: ...
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()

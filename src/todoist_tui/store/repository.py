@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.clock import Clock
@@ -178,6 +179,10 @@ class SnapshotTaskRepository:
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None:
         await self._inner.set_parent(task_id, parent_id)
+        self._mark_stale()
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        await self._inner.reorder(items)
         self._mark_stale()
 
     async def set_labels(

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
@@ -78,6 +79,10 @@ class TaskRepository(Protocol):
     ) -> None: ...
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        """Set each task's `child_order` — its place among its siblings."""
+        ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()

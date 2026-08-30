@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import httpx
@@ -201,6 +201,18 @@ class TodoistClient:
             else {"id": task_id, "project_id": project_id}
         )
         await self._command("item_move", args)
+
+    async def reorder_items(self, items: Sequence[tuple[str, int]]) -> None:
+        """Set each task's place among its siblings. Todoist takes a partial set,
+        so a plain swap sends just the two tasks that traded places."""
+        await self._command(
+            "item_reorder",
+            {
+                "items": [
+                    {"id": task_id, "child_order": order} for task_id, order in items
+                ]
+            },
+        )
 
     async def move_item_under(self, task_id: str, parent_id: str) -> None:
         # Todoist takes exactly one of parent_id/section_id/project_id; the task

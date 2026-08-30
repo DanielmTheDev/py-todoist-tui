@@ -51,6 +51,8 @@ class ArrangeRow(Protocol):
     def section_name(self) -> str | None: ...
     @property
     def section_order(self) -> int: ...
+    @property
+    def child_order(self) -> int: ...
 
 
 # A group bucket's sort position. `present` (0) always orders before "missing"
@@ -436,7 +438,9 @@ def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[
         for sort_key in sort_by:
             present, value = _sort_order(sort_key.field, row)
             parts.append((present, value if sort_key.ascending else _Rev(value)))
-        # Deterministic tie-break so equal keys never order flakily.
+        # Todoist's own manual order decides what no sort key does; content and
+        # id follow only so equal orders never sort flakily.
+        parts.append((0, row.child_order))
         parts.append((0, row.content.lower()))
         parts.append((0, str(row.id)))
         return tuple(parts)

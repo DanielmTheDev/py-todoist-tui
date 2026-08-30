@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 from typing import cast
@@ -127,6 +128,7 @@ class FakeRepository:
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
+        self.reorders: list[list[tuple[TaskId, int]]] = []
         self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
         self._removed_pool: dict[TaskId, Task] = {}
@@ -282,6 +284,15 @@ class FakeRepository:
             self._inbox = [nested(t) if t.id == task_id else t for t in self._inbox]
         else:  # followed the parent out of the inbox, which no longer lists it
             self._inbox = [t for t in self._inbox if t.id != task_id]
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        self.reorders.append(list(items))
+        orders = dict(items)
+        reordered = [
+            replace(t, child_order=orders[t.id]) if t.id in orders else t
+            for t in self._tasks
+        ]
+        self._tasks = reordered
 
     async def reminders(self) -> list[Reminder]:
         return list(self._reminders)
@@ -3964,6 +3975,7 @@ def _row(
     project_id: str = "220",
     parent_id: str | None = None,
     section_id: str | None = None,
+    child_order: int = 0,
 ) -> Task:
     return Task(
         id=TaskId(content),
@@ -3973,6 +3985,7 @@ def _row(
         project_id=project_id,
         parent_id=parent_id,
         section_id=section_id,
+        child_order=child_order,
     )
 
 
@@ -7766,3 +7779,151 @@ async def test_the_feed_can_be_reopened_after_it_was_closed() -> None:
         await pilot.pause()
 
         assert isinstance(app.screen, ActivityScreen)
+
+
+# --- manual reordering ---
+
+
+def _ordered_repo() -> FakeRepository:
+    """A Work project whose section holds three tasks in a deliberate order."""
+    return FakeRepository(
+        [
+            _row("first", "9", section_id="s1", child_order=1),
+            _row("second", "9", section_id="s1", child_order=2),
+            _row("third", "9", section_id="s1", child_order=3),
+        ],
+        [Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+
+
+async def _open_planning(app: TodoistApp, pilot: Pilot[None]) -> DataTable[object]:
+    await pilot.pause()
+    await open_view(pilot, "Work")
+    await settled(app)
+    await pilot.press("L")  # unfold the section so its tasks are on screen
+    await pilot.pause()
+    return app.query_one(TaskTable)
+
+
+def _notifications(app: TodoistApp) -> list[str]:
+    """Messages the app has raised. Toasts never mount headless, so read the
+    collection they would render."""
+    return [note.message for note in app._notifications]  # pyright: ignore[reportPrivateUsage]
+
+
+def _section_titles(table: DataTable[object]) -> list[str]:
+    """The section's task titles, past the group header and the nesting indent."""
+    return [title.strip() for title in _content_col(table)[1:]]
+
+
+async def _sorted_by_content() -> InMemoryArrangements:
+    store = InMemoryArrangements()
+    await store.save(
+        "project:9",
+        Arrangement(group_by=(Field.SECTION,), sort_by=(SortKey(Field.CONTENT),)),
+    )
+    return store
+
+
+@pytest.mark.anyio
+async def test_shift_j_swaps_the_task_with_the_one_below() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j")  # off the section header, onto "first"
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _section_titles(table) == ["second", "first", "third"]
+        # one command, so the two never trade places by halves
+        assert repo.reorders == [[(TaskId("first"), 2), (TaskId("second"), 1)]]
+
+
+@pytest.mark.anyio
+async def test_shift_k_swaps_the_task_with_the_one_above() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j", "j")  # onto "second"
+        await pilot.press("K")
+        await pilot.pause()
+
+        assert _section_titles(table) == ["second", "first", "third"]
+
+
+@pytest.mark.anyio
+async def test_the_cursor_follows_the_moved_task() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _title(table, table.cursor_row).strip() == "first"
+
+
+@pytest.mark.anyio
+async def test_the_last_task_of_a_section_does_not_leave_it() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j", "j", "j")  # onto "third", the last one
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _section_titles(table) == ["first", "second", "third"]
+        assert repo.reorders == []
+
+
+@pytest.mark.anyio
+async def test_reordering_under_a_sort_says_to_clear_it() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo, arrangements=await _sorted_by_content())
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _section_titles(table) == ["first", "second", "third"]
+        assert repo.reorders == []
+        assert any("sort" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_undo_puts_the_moved_task_back() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+        await pilot.press("z")
+        await pilot.pause()
+
+        assert _section_titles(table) == ["first", "second", "third"]
+
+
+@pytest.mark.anyio
+async def test_a_move_survives_the_next_sync() -> None:
+    """The swap is retired against the server's own order, not reverted by it."""
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_planning(app, pilot)
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("r")
+        await settled(app)
+        await pilot.pause()
+
+        assert _section_titles(table) == ["second", "first", "third"]

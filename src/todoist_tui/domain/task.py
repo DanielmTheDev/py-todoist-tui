@@ -20,3 +20,4 @@ class Task:
     description: str = ""
     deadline: Deadline | None = None
     parent_id: str | None = None
+    child_order: int = 0  # place among its siblings; Todoist's own manual order

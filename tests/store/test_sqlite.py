@@ -60,6 +60,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 labels=("home", "urgent"),
                 description="water them all",
                 deadline=Deadline(date=datetime.date(2026, 8, 15)),
+                child_order=3,
             ),
             Task(
                 id=TaskId("b"),
@@ -68,6 +69,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 due=None,
                 project_id="9",
                 parent_id="a",
+                child_order=7,
             ),
         ],
         reminders=[
@@ -134,6 +136,34 @@ async def test_load_returns_none_when_filters_table_missing(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_load_returns_none_when_tasks_lack_child_order(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # cache written before manual ordering
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "CREATE TABLE meta (sync_token TEXT NOT NULL);"
+            "CREATE TABLE projects (id TEXT, name TEXT, is_inbox INTEGER,"
+            " child_order INTEGER);"
+            "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
+            " due_date TEXT, due_time TEXT, due_recurring INTEGER, due_string TEXT,"
+            " due_lang TEXT, project_id TEXT, section_id TEXT, labels TEXT,"
+            " description TEXT, deadline_date TEXT, parent_id TEXT);"
+            "CREATE TABLE filters (id TEXT, name TEXT, query TEXT, item_order INTEGER);"
+            "CREATE TABLE sections (id TEXT, project_id TEXT, name TEXT,"
+            " section_order INTEGER);"
+            "CREATE TABLE labels (id TEXT, name TEXT, item_order INTEGER);"
+            "CREATE TABLE reminders (id TEXT, item_id TEXT, type TEXT, due_date TEXT,"
+            " due_time TEXT, minute_offset INTEGER, notify_uid TEXT);"
+            "INSERT INTO meta (sync_token) VALUES ('tok');"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await SqliteSnapshotCache(path).load() is None
+
+
+@pytest.mark.anyio
 async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     cache = SqliteSnapshotCache(tmp_path / "cache.sqlite3")
     original = _snapshot()
@@ -151,6 +181,7 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded.tasks[1].section_id is None
     assert loaded.tasks[1].deadline is None
     assert loaded.tasks[1].parent_id == "a"
+    assert [task.child_order for task in loaded.tasks] == [3, 7]
     assert [(s.id, s.name, s.order) for s in loaded.sections] == [
         ("s1", "Planning", 1),
         ("s2", "In progress", 2),

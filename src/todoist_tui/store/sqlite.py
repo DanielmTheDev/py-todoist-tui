@@ -54,7 +54,7 @@ CREATE TABLE tasks (
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
     section_id TEXT, labels TEXT, description TEXT, deadline_date TEXT,
-    parent_id TEXT
+    parent_id TEXT, child_order INTEGER
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -111,7 +111,8 @@ class SqliteSnapshotCache:
                     for row in conn.execute(
                         "SELECT id, content, priority, due_date, due_time,"
                         " due_recurring, due_string, due_lang, project_id, section_id,"
-                        " labels, description, deadline_date, parent_id FROM tasks"
+                        " labels, description, deadline_date, parent_id,"
+                        " child_order FROM tasks"
                     )
                 ]
                 filters = [
@@ -170,7 +171,8 @@ class SqliteSnapshotCache:
                 [(p.id, p.name, int(p.is_inbox), p.order) for p in snapshot.projects],
             )
             conn.executemany(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES"
+                " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -426,6 +428,7 @@ def _task_to_row(
     str,
     str | None,
     str | None,
+    int,
 ]:
     due = task.due
     deadline = task.deadline
@@ -444,6 +447,7 @@ def _task_to_row(
         task.description,
         deadline.date.isoformat() if deadline else None,
         task.parent_id,
+        task.child_order,
     )
 
 
@@ -463,6 +467,7 @@ def _row_to_task(
         str | None,
         str | None,
         str | None,
+        int | None,
     ],
 ) -> Task:
     (
@@ -480,6 +485,7 @@ def _row_to_task(
         description,
         deadline_date,
         parent_id,
+        child_order,
     ) = row
     due = None
     if due_date is not None:
@@ -503,4 +509,5 @@ def _row_to_task(
         if deadline_date
         else None,
         parent_id=parent_id,
+        child_order=child_order or 0,
     )

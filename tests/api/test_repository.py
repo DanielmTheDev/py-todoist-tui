@@ -193,6 +193,35 @@ async def test_today_defaults_missing_parent_id_to_none() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_today_maps_child_order() -> None:
+    """The task's place among its siblings — what manual reordering moves."""
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Second",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                        "child_order": 2,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.child_order == 2
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_today_maps_labels() -> None:
     respx.get(f"{BASE_URL}/tasks/filter").mock(
         return_value=httpx.Response(
@@ -1061,6 +1090,25 @@ async def test_set_project_moves_the_task() -> None:
     )
     assert commands[0]["type"] == "item_move"
     assert commands[0]["args"] == {"id": "6X4", "project_id": "220"}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_reorder_sends_the_new_child_orders() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.reorder([(TaskId("6X4"), 2), (TaskId("6X5"), 1)])
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_reorder"
+    assert commands[0]["args"] == {
+        "items": [{"id": "6X4", "child_order": 2}, {"id": "6X5", "child_order": 1}]
+    }
 
 
 @pytest.mark.anyio

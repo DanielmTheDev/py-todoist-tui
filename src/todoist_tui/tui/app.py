@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import datetime
 import uuid
-from collections.abc import Callable, Coroutine, Iterable, Mapping
+from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -37,6 +37,7 @@ from todoist_tui.application.mutation import (
     touched,
 )
 from todoist_tui.application.outbox import Command, Outbox
+from todoist_tui.application.reorder import reorder
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_labels import set_labels
@@ -81,6 +82,7 @@ from todoist_tui.domain.reminder import (
     default_reminder,
     wants_default_reminder,
 )
+from todoist_tui.domain.reorder import swap_with_neighbour
 from todoist_tui.domain.repository import (
     ArrangementStore,
     FoldStore,
@@ -187,7 +189,9 @@ class Step:
     """One change on its way to Todoist: what it does to the open view, the
     command that carries it, and how a rejection is reported."""
 
-    mutation: Mutation | None  # None when nothing on screen changes yet
+    # None when nothing on screen changes yet; several where one command patches
+    # several rows in different ways, as a swap does
+    mutation: Mutation | Sequence[Mutation] | None
     command: Command
     label: str
 
@@ -321,6 +325,8 @@ class TaskTable(DataTable[object]):
         Binding("l,right", "expand", "Expand task/group", show=False),
         Binding("H", "collapse_all", "Fold every group and subtask", show=False),
         Binding("L", "expand_all", "Unfold every group and subtask", show=False),
+        Binding("J", "move_down", "Move task down", show=False),
+        Binding("K", "move_up", "Move task up", show=False),
     ]
 
     class Expand(Message):
@@ -334,6 +340,12 @@ class TaskTable(DataTable[object]):
 
     class CollapseAll(Message):
         """Fold every group and subtask tree in the list."""
+
+    class MoveDown(Message):
+        """Trade the task under the cursor with the sibling below it."""
+
+    class MoveUp(Message):
+        """Trade the task under the cursor with the sibling above it."""
 
     class Resized(Message):
         """The table got wider or narrower, so the column stretch needs redoing."""
@@ -352,6 +364,12 @@ class TaskTable(DataTable[object]):
 
     def action_collapse_all(self) -> None:
         self.post_message(self.CollapseAll())
+
+    def action_move_down(self) -> None:
+        self.post_message(self.MoveDown())
+
+    def action_move_up(self) -> None:
+        self.post_message(self.MoveUp())
 
 
 class TodoistApp(App[None]):
@@ -1984,6 +2002,54 @@ class TodoistApp(App[None]):
         parent_id = self._parent_of(task_id)  # a leaf/child: step out to the parent
         if parent_id is not None:
             self._move_cursor_to_task(table, parent_id)
+
+    def on_task_table_move_down(self, _message: TaskTable.MoveDown) -> None:
+        self._move_task(down=True)
+
+    def on_task_table_move_up(self, _message: TaskTable.MoveUp) -> None:
+        self._move_task(down=False)
+
+    def _move_task(self, *, down: bool) -> None:
+        """Trade the cursor's task with the sibling one step away, if there is one."""
+        if self._arrangement.sort_by:
+            # a sort decides the order, so a reordered task would snap straight back
+            self.notify("Clear the sort (s) to reorder by hand")
+            return
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # empty table or cursor on a group header
+            return
+        pair = swap_with_neighbour(self._arrange(self._visible), task_id, down=down)
+        if pair is None:  # already at the edge of its sibling set
+            return
+        moved, neighbour = pair
+        self._queue(
+            [
+                (
+                    self._order_step(
+                        [
+                            (moved.id, neighbour.child_order),
+                            (neighbour.id, moved.child_order),
+                        ]
+                    ),
+                    self._order_step(  # each back where it started
+                        [
+                            (moved.id, moved.child_order),
+                            (neighbour.id, neighbour.child_order),
+                        ]
+                    ),
+                )
+            ]
+        )
+
+    def _order_step(self, orders: Sequence[tuple[TaskId, int]]) -> Step:
+        """One command placing every task in `orders`, so a swap never lands by
+        halves and leaves two siblings sharing a `child_order`."""
+        return Step(
+            [edit([str(task_id)], child_order=order) for task_id, order in orders],
+            partial(reorder, self._repo, list(orders)),
+            "Failed to reorder",
+        )
 
     def on_task_table_expand_all(self, _message: TaskTable.ExpandAll) -> None:
         self._open_groups = group_paths(self._visible, self._arrangement)

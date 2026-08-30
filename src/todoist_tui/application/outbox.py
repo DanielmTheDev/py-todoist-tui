@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -11,7 +11,9 @@ type Spawn = Callable[[Coroutine[object, object, None]], None]
 
 @dataclass(slots=True, eq=False)  # identity, so two like-for-like edits stay apart
 class _Entry:
-    mutation: Mutation | None  # None for a command with no effect on the rows
+    # empty for a command with no effect on the rows; several where one command
+    # patches several rows differently, as a swap does — they retire together
+    mutations: tuple[Mutation, ...]
     command: Command
     label: str  # leads the message a rejection reports, e.g. "Failed to complete"
     on_reject: Callable[[], None] | None
@@ -59,21 +61,23 @@ class Outbox:
     @property
     def pending(self) -> tuple[Mutation, ...]:
         """The unconfirmed mutations, oldest first — replay them over a reload."""
-        return tuple(e.mutation for e in self._entries if e.mutation is not None)
+        return tuple(m for e in self._entries for m in e.mutations)
 
     def queue(
         self,
-        mutation: Mutation | None,
+        mutation: Mutation | Sequence[Mutation] | None,
         command: Command,
         label: str = "",
         on_reject: Callable[[], None] | None = None,
     ) -> None:
         """Take `mutation` as fact locally and send `command` behind it.
 
+        Several mutations ride one command where it patches several rows in
+        different ways; the command's verdict then settles all of them at once.
         `on_reject` runs if the server refuses the command — the caller's cue to
         forget whatever it staked on the change going through, such as its undo.
         """
-        self._entries.append(_Entry(mutation, command, label, on_reject))
+        self._entries.append(_Entry(_as_tuple(mutation), command, label, on_reject))
         self._on_change()
         if not self._dispatching:
             self._dispatching = True
@@ -139,6 +143,12 @@ class Outbox:
 
     def _spawn_task(self, coroutine: Coroutine[object, object, None]) -> None:
         self._task = asyncio.create_task(coroutine)
+
+
+def _as_tuple(mutation: Mutation | Sequence[Mutation] | None) -> tuple[Mutation, ...]:
+    if mutation is None:
+        return ()
+    return (mutation,) if isinstance(mutation, Mutation) else tuple(mutation)
 
 
 def _confirmed_by(entry: _Entry, token: int) -> bool:

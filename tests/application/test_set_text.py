@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import pytest
 
 from todoist_tui.application.set_text import set_text
@@ -74,6 +76,8 @@ class FakeRepository:
     ) -> None: ...
 
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
+
+    async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()

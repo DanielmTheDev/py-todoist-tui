@@ -31,6 +31,7 @@ class Row:
     section_name: str | None = None
     section_order: int = 0
     deadline: Deadline | None = None
+    child_order: int = 0
 
 
 def _date(y: int, m: int, d: int) -> Due:
@@ -63,6 +64,31 @@ def test_empty_arrangement_returns_tasks_in_stable_order() -> None:
     # ties on content broken deterministically by id → alpha#1, alpha#3, beta#2
     assert _shape(result) == [("T", 0, "alpha"), ("T", 0, "alpha"), ("T", 0, "beta")]
     assert isinstance(result[0], TaskLine) and result[0].row.id == "1"
+
+
+def test_empty_arrangement_follows_child_order_not_the_alphabet() -> None:
+    """With no sort chain the list is Todoist's own manual order."""
+    rows = [
+        Row("1", "alpha", child_order=3),
+        Row("2", "beta", child_order=1),
+        Row("3", "gamma", child_order=2),
+    ]
+
+    result = arrange(rows, Arrangement())
+
+    assert [c for _, _, c in _shape(result)] == ["beta", "gamma", "alpha"]
+
+
+def test_child_order_orders_subtasks_under_their_parent() -> None:
+    rows = [
+        Row("p", "parent"),
+        Row("1", "alpha", parent_id="p", child_order=2),
+        Row("2", "beta", parent_id="p", child_order=1),
+    ]
+
+    result = arrange(rows, Arrangement(), expanded=frozenset({"p"}))
+
+    assert [c for _, _, c in _shape(result)] == ["parent", "beta", "alpha"]
 
 
 # --- sorting ---
