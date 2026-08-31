@@ -2006,9 +2006,16 @@ class TodoistApp(App[None]):
             self._expanded.discard(TaskId(task_id))
             self._repaint()  # cursor stays on it
             return
-        parent_id = self._parent_of(task_id)  # a leaf/child: step out to the parent
+        parent_id = self._parent_of(task_id)  # a child: step out to the parent
         if parent_id is not None:
             self._move_cursor_to_task(table, parent_id)
+            return
+        path = group_path_of(self._visible, self._arrangement, task_id)
+        if not path:  # nothing groups it: no header to fold onto
+            return
+        self._open_groups.discard(path)  # a root task: fold its group away
+        self._fold_changed()
+        self._move_cursor_to_group(table, path)
 
     def on_task_table_move_down(self, _message: TaskTable.MoveDown) -> None:
         self._move_task(down=True)

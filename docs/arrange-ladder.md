@@ -56,7 +56,9 @@ One rung per context; check off as landed. Full design:
   header's `GroupPath` (its label chain), persisted per view through
   `FoldStore.save(view.key)`, and cleared when the arrangement changes since
   those paths go stale. A change that moves a task into a folded group unfolds
-  it, so the task never vanishes under the cursor.
+  it, so the task never vanishes under the cursor. From a task row `h` climbs
+  the same ladder outwards — parent task, then the innermost group holding it
+  (`group_path_of()`), landing the cursor on the header it just folded.
 - Fold-all/unfold-all: `H` folds every group and subtask tree, `L` unfolds them
   (`group_paths()` names the paths to open).
 - Arrange transient: key hints render literal (markup off); all keys consumed

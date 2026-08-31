@@ -53,7 +53,7 @@ uv run todoist-tui # from a checkout
 | `z` | Undo the last complete |
 | `r` | Force a resync |
 | `j`/`↓` `k`/`↑` | Move the cursor down / up |
-| `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor |
+| `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor; `h` keeps climbing out — to the parent task, then to the group holding it |
 | `?` | Every shortcut, including the keys you bound |
 
 Inside the Views screen (`p`): `ctrl+b` binds the highlighted view to a key you
