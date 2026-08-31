@@ -2020,7 +2020,11 @@ class TodoistApp(App[None]):
         if task_id is None:  # empty table or cursor on a group header
             return
         pair = swap_with_neighbour(self._arrange(self._visible), task_id, down=down)
-        if pair is None:  # already at the edge of its sibling set
+        if pair is None:
+            # Order runs within a sibling set, so the row next to this one is
+            # often not a sibling at all — silence would just read as a dead key.
+            where = "below" if down else "above"
+            self.notify(f"No sibling {where} to swap with")
             return
         moved, neighbour = pair
         self._queue(

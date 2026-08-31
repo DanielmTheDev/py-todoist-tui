@@ -7882,6 +7882,47 @@ async def test_the_last_task_of_a_section_does_not_leave_it() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_refused_move_says_there_is_no_sibling() -> None:
+    """Silence reads as a broken key — most of all in a filter view, where a
+    task's siblings are rarely the rows next to it."""
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_planning(app, pilot)
+        await pilot.press("j", "j", "j")  # onto "third", the last one
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert any("sibling" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_refused_move_up_says_so_too() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_planning(app, pilot)
+        await pilot.press("j")  # onto "first"
+        await pilot.press("K")
+        await pilot.pause()
+
+        assert any("sibling" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_move_that_lands_says_nothing() -> None:
+    repo = _ordered_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_planning(app, pilot)
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _notifications(app) == []
+
+
+@pytest.mark.anyio
 async def test_reordering_under_a_sort_says_to_clear_it() -> None:
     repo = _ordered_repo()
     app = TodoistApp(repo, arrangements=await _sorted_by_content())
