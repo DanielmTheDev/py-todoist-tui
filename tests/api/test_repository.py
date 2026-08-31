@@ -13,7 +13,7 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
-from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.task import UNSET_DAY_ORDER, TaskId
 
 
 @pytest.mark.anyio
@@ -218,6 +218,63 @@ async def test_today_maps_child_order() -> None:
     (task,) = await repo.today()
 
     assert task.child_order == 2
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_maps_day_order() -> None:
+    """The task's place in a day-scoped list, which spans projects."""
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Third today",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                        "day_order": 3,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.day_order == 3
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_today_defaults_a_missing_day_order_to_unset() -> None:
+    """Todoist reports -1 until something orders the task; absent means the same."""
+    respx.get(f"{BASE_URL}/tasks/filter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "6X4",
+                        "content": "Unplaced",
+                        "priority": 1,
+                        "project_id": "220",
+                        "due": None,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (task,) = await repo.today()
+
+    assert task.day_order == UNSET_DAY_ORDER
 
 
 @pytest.mark.anyio
@@ -1090,6 +1147,23 @@ async def test_set_project_moves_the_task() -> None:
     )
     assert commands[0]["type"] == "item_move"
     assert commands[0]["args"] == {"id": "6X4", "project_id": "220"}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_day_orders_sends_the_new_day_orders() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.set_day_orders([(TaskId("6X4"), 2), (TaskId("6X5"), 1)])
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "item_update_day_orders"
+    assert commands[0]["args"] == {"ids_to_orders": {"6X4": 2, "6X5": 1}}
 
 
 @pytest.mark.anyio

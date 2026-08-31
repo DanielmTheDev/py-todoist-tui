@@ -84,6 +84,10 @@ class TaskRepository(Protocol):
         """Set each task's `child_order` — its place among its siblings."""
         ...
 
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        """Set each task's `day_order` — its place in a day-scoped list."""
+        ...
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...

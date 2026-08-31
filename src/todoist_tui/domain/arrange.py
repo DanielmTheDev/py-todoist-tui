@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.task import UNSET_DAY_ORDER
 
 MAX_LEVELS = 3
 
@@ -53,11 +54,25 @@ class ArrangeRow(Protocol):
     def section_order(self) -> int: ...
     @property
     def child_order(self) -> int: ...
+    @property
+    def day_order(self) -> int: ...
 
 
 # A group bucket's sort position. `present` (0) always orders before "missing"
 # (1), so no-value buckets land last under ascending order.
 _OrderKey = tuple[int, Any]
+
+
+class ManualOrder(Enum):
+    """Which of Todoist's two hand-set orders a view is arranged by.
+
+    CHILD is a task's place among its siblings, so it only orders a list that
+    is one sibling set. DAY is its place in a day-scoped list, which is what a
+    view spanning projects has to use.
+    """
+
+    CHILD = "child"
+    DAY = "day"
 
 
 class Field(Enum):
@@ -251,6 +266,7 @@ class _Ctx[T: ArrangeRow]:
     """The state every emit level carries: the arrangement plus the fold sets."""
 
     arrangement: Arrangement
+    manual: ManualOrder
     children: dict[Any, list[T]]
     expanded: frozenset[Any]
     open_groups: frozenset[GroupPath]
@@ -261,6 +277,7 @@ def arrange[T: ArrangeRow](
     arrangement: Arrangement,
     expanded: frozenset[Any] = frozenset(),
     open_groups: frozenset[GroupPath] = frozenset(),
+    manual: ManualOrder = ManualOrder.CHILD,
 ) -> list[RenderRow[T]]:
     """Group/sort the *root* tasks; nest each task's subtasks directly beneath it.
 
@@ -274,7 +291,7 @@ def arrange[T: ArrangeRow](
     """
     roots, children = _partition(rows)
     out: list[RenderRow[T]] = []
-    _emit(roots, 0, (), out, _Ctx(arrangement, children, expanded, open_groups))
+    _emit(roots, 0, (), out, _Ctx(arrangement, manual, children, expanded, open_groups))
     return out
 
 
@@ -391,7 +408,7 @@ def _emit[T: ArrangeRow](
     group_by = arrangement.group_by[level:]
     if not group_by:
         total = 0
-        for row in _sorted(rows, arrangement.sort_by):
+        for row in _sorted(rows, arrangement.sort_by, ctx.manual):
             total += _emit_subtree(row, level, out, ctx)
         return total
     field = group_by[0]
@@ -401,7 +418,7 @@ def _emit[T: ArrangeRow](
             # A headerless bucket (section-less tasks) is a flat loose list at this
             # level: no header, and no further subgrouping — mirroring how Todoist
             # shows a project's un-sectioned tasks above the first section.
-            for row in _sorted(members, arrangement.sort_by):
+            for row in _sorted(members, arrangement.sort_by, ctx.manual):
                 total += _emit_subtree(row, level, out, ctx)
             continue
         group_path = (*path, label)
@@ -427,12 +444,26 @@ def _emit_subtree[T: ArrangeRow](
     out.append(TaskLine(level, row, has_children=bool(kids), expanded=is_expanded))
     count = 1
     if is_expanded:
-        for child in _sorted(kids, ctx.arrangement.sort_by):
+        for child in _sorted(kids, ctx.arrangement.sort_by, ctx.manual):
             count += _emit_subtree(child, level + 1, out, ctx)
     return count
 
 
-def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[T]:
+def _manual_key(row: ArrangeRow, manual: ManualOrder) -> list[_OrderKey]:
+    """The hand-set order's contribution to a row's sort key.
+
+    A day order of `UNSET_DAY_ORDER` means Todoist has never placed the task, so
+    it sorts after every placed one and falls back to its sibling order.
+    """
+    if manual is ManualOrder.DAY:
+        placed = row.day_order > UNSET_DAY_ORDER
+        return [(0, row.day_order) if placed else (1, 0), (0, row.child_order)]
+    return [(0, row.child_order)]
+
+
+def _sorted[T: ArrangeRow](
+    rows: list[T], sort_by: tuple[SortKey, ...], manual: ManualOrder
+) -> list[T]:
     def key(row: T) -> tuple[tuple[int, Any], ...]:
         parts: list[tuple[int, Any]] = []
         for sort_key in sort_by:
@@ -440,7 +471,7 @@ def _sorted[T: ArrangeRow](rows: list[T], sort_by: tuple[SortKey, ...]) -> list[
             parts.append((present, value if sort_key.ascending else _Rev(value)))
         # Todoist's own manual order decides what no sort key does; content and
         # id follow only so equal orders never sort flakily.
-        parts.append((0, row.child_order))
+        parts += _manual_key(row, manual)
         parts.append((0, row.content.lower()))
         parts.append((0, str(row.id)))
         return tuple(parts)

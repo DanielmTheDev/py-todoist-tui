@@ -7,6 +7,7 @@ from todoist_tui.domain.arrange import (
     Arrangement,
     Field,
     GroupHeader,
+    ManualOrder,
     RenderRow,
     SortKey,
     TaskLine,
@@ -32,6 +33,7 @@ class Row:
     section_order: int = 0
     deadline: Deadline | None = None
     child_order: int = 0
+    day_order: int = -1
 
 
 def _date(y: int, m: int, d: int) -> Due:
@@ -89,6 +91,53 @@ def test_child_order_orders_subtasks_under_their_parent() -> None:
     result = arrange(rows, Arrangement(), expanded=frozenset({"p"}))
 
     assert [c for _, _, c in _shape(result)] == ["parent", "beta", "alpha"]
+
+
+def test_day_ordering_follows_day_order_across_projects() -> None:
+    """A day-scoped view spans projects, where child_order means nothing."""
+    rows = [
+        Row("1", "alpha", child_order=1, day_order=3, project_name="A"),
+        Row("2", "beta", child_order=1, day_order=1, project_name="B"),
+        Row("3", "gamma", child_order=2, day_order=2, project_name="A"),
+    ]
+
+    result = arrange(rows, Arrangement(), manual=ManualOrder.DAY)
+
+    assert [c for _, _, c in _shape(result)] == ["beta", "gamma", "alpha"]
+
+
+def test_a_task_with_no_day_order_sorts_after_the_placed_ones() -> None:
+    """Todoist reports -1 until something places a task; a newcomer joins the end."""
+    rows = [
+        Row("1", "placed", day_order=5),
+        Row("2", "newcomer", day_order=-1),
+    ]
+
+    result = arrange(rows, Arrangement(), manual=ManualOrder.DAY)
+
+    assert [c for _, _, c in _shape(result)] == ["placed", "newcomer"]
+
+
+def test_day_ordering_falls_back_to_child_order_for_unplaced_tasks() -> None:
+    rows = [
+        Row("1", "beta", child_order=2, day_order=-1),
+        Row("2", "alpha", child_order=1, day_order=-1),
+    ]
+
+    result = arrange(rows, Arrangement(), manual=ManualOrder.DAY)
+
+    assert [c for _, _, c in _shape(result)] == ["alpha", "beta"]
+
+
+def test_child_ordering_ignores_day_order() -> None:
+    rows = [
+        Row("1", "alpha", child_order=1, day_order=9),
+        Row("2", "beta", child_order=2, day_order=0),
+    ]
+
+    result = arrange(rows, Arrangement())
+
+    assert [c for _, _, c in _shape(result)] == ["alpha", "beta"]
 
 
 # --- sorting ---

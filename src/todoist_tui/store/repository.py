@@ -185,6 +185,10 @@ class SnapshotTaskRepository:
         await self._inner.reorder(items)
         self._mark_stale()
 
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        await self._inner.set_day_orders(items)
+        self._mark_stale()
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:

@@ -30,7 +30,7 @@ from todoist_tui.domain.label import Label
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
-from todoist_tui.domain.search import SearchTerm
+from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
 
@@ -110,6 +110,8 @@ class FakeRepository:
     async def set_parent(self, task_id: TaskId, parent_id: str) -> None: ...
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
+
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -269,6 +271,24 @@ async def test_load_view_carries_child_order() -> None:
     rows = await load_view(repo, TODAY)
 
     assert rows[0].child_order == 3
+
+
+@pytest.mark.anyio
+async def test_load_view_carries_day_order() -> None:
+    """A day-scoped view orders across projects, so the row needs day_order too."""
+    task = Task(
+        id=TaskId("x"),
+        content="Second today",
+        priority=Priority.P2,
+        due=None,
+        project_id="9",
+        day_order=2,
+    )
+    repo = FakeRepository([task], [], [Project(id="9", name="Work")])
+
+    rows = await load_view(repo, TODAY)
+
+    assert rows[0].day_order == 2
 
 
 @pytest.mark.anyio
@@ -727,6 +747,8 @@ class BarrierRepository:
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...
@@ -847,3 +869,18 @@ def test_a_section_row_rebuilds_as_its_project_view() -> None:
     assert rebuilt is not None
     assert rebuilt.title == "Work"
     assert rebuilt.land_section is None
+
+
+def test_views_that_span_projects_are_day_ordered() -> None:
+    """child_order only orders one sibling set, so a mixed view cannot use it."""
+    assert TODAY.day_ordered
+    assert filter_view(Filter(id="f1", name="GTD", query="today", order=1)).day_ordered
+    term = parse_search("milk")
+    assert isinstance(term, SearchTerm)
+    assert search_view(term).day_ordered
+
+
+def test_views_that_are_one_project_keep_the_sibling_order() -> None:
+    assert not INBOX.day_ordered
+    assert not ALL.day_ordered
+    assert not project_view(Project(id="9", name="Work")).day_ordered

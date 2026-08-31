@@ -16,7 +16,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder, ReminderType
 from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
-from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.task import UNSET_DAY_ORDER, Task, TaskId
 from todoist_tui.domain.view_slots import ViewSlots
 
 
@@ -54,7 +54,7 @@ CREATE TABLE tasks (
     due_date TEXT, due_time TEXT, due_recurring INTEGER,
     due_string TEXT, due_lang TEXT, project_id TEXT,
     section_id TEXT, labels TEXT, description TEXT, deadline_date TEXT,
-    parent_id TEXT, child_order INTEGER
+    parent_id TEXT, child_order INTEGER, day_order INTEGER
 );
 CREATE TABLE filters (
     id TEXT, name TEXT, query TEXT, item_order INTEGER
@@ -112,7 +112,7 @@ class SqliteSnapshotCache:
                         "SELECT id, content, priority, due_date, due_time,"
                         " due_recurring, due_string, due_lang, project_id, section_id,"
                         " labels, description, deadline_date, parent_id,"
-                        " child_order FROM tasks"
+                        " child_order, day_order FROM tasks"
                     )
                 ]
                 filters = [
@@ -172,7 +172,7 @@ class SqliteSnapshotCache:
             )
             conn.executemany(
                 "INSERT INTO tasks VALUES"
-                " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_task_to_row(task) for task in snapshot.tasks],
             )
             conn.executemany(
@@ -429,6 +429,7 @@ def _task_to_row(
     str | None,
     str | None,
     int,
+    int,
 ]:
     due = task.due
     deadline = task.deadline
@@ -448,6 +449,7 @@ def _task_to_row(
         deadline.date.isoformat() if deadline else None,
         task.parent_id,
         task.child_order,
+        task.day_order,
     )
 
 
@@ -468,6 +470,7 @@ def _row_to_task(
         str | None,
         str | None,
         int | None,
+        int | None,
     ],
 ) -> Task:
     (
@@ -486,6 +489,7 @@ def _row_to_task(
         deadline_date,
         parent_id,
         child_order,
+        day_order,
     ) = row
     due = None
     if due_date is not None:
@@ -510,4 +514,5 @@ def _row_to_task(
         else None,
         parent_id=parent_id,
         child_order=child_order or 0,
+        day_order=UNSET_DAY_ORDER if day_order is None else day_order,
     )

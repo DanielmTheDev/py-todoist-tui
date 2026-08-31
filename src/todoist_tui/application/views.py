@@ -13,7 +13,7 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.repository import TaskRepository
 from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.section import Section, sections_by_project
-from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.task import UNSET_DAY_ORDER, Task, TaskId
 from todoist_tui.domain.tree import with_descendants
 
 
@@ -40,6 +40,7 @@ class TaskRow:
     deadline: Deadline | None = None
     parent_id: str | None = None
     child_order: int = 0
+    day_order: int = UNSET_DAY_ORDER
     reminders: tuple[Reminder, ...] = ()
     matched: bool = True
 
@@ -63,6 +64,9 @@ class View:
     # the project every task here belongs to, when the view has one — where a
     # task added to an empty view lands. None means "no one project".
     project_id: str | None = None
+    # True where the view mixes projects, so `child_order` — a place among
+    # siblings — cannot order it and Todoist's day order does instead.
+    day_ordered: bool = False
     # the section group the cursor opens on when this view was reached by picking
     # a section. The key stays the project's, so arrangement, folds and jump
     # slots are shared with it — a section is a place, not a view of its own.
@@ -76,7 +80,9 @@ def _due_today(row: TaskRow, today: datetime.date) -> bool:
 
 _SEARCH_PREFIX = "search:"
 
-TODAY = View("Today", "today", lambda repo: repo.today(), keeps=_due_today)
+TODAY = View(
+    "Today", "today", lambda repo: repo.today(), keeps=_due_today, day_ordered=True
+)
 INBOX = View("Inbox", "inbox", lambda repo: repo.inbox())
 # not a browsable view: the pool a picker chooses from, straight off the snapshot
 ALL = View("All", "all", lambda repo: repo.all_tasks())
@@ -84,7 +90,12 @@ ALL = View("All", "all", lambda repo: repo.all_tasks())
 
 def filter_view(f: Filter) -> View:
     """A view backed by a saved filter, evaluated server-side by its query."""
-    return View(f.name, f"filter:{f.id}", lambda repo: repo.filtered(f.query))
+    return View(
+        f.name,
+        f"filter:{f.id}",
+        lambda repo: repo.filtered(f.query),
+        day_ordered=True,
+    )
 
 
 def search_view(term: SearchTerm) -> View:
@@ -98,6 +109,7 @@ def search_view(term: SearchTerm) -> View:
         f"{_SEARCH_PREFIX}{term.text}",
         lambda repo: repo.filtered(term.query),
         keeps=lambda row, _today: term.matches(row.content, row.description),
+        day_ordered=True,
     )
 
 
@@ -258,6 +270,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             deadline=task.deadline,
             parent_id=task.parent_id,
             child_order=task.child_order,
+            day_order=task.day_order,
             reminders=tuple(reminders_by_item.get(str(task.id), ())),
             matched=task.id not in pulled_in,
         )

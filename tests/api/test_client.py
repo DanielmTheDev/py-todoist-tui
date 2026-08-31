@@ -411,6 +411,29 @@ async def test_move_item_posts_item_move_command_with_project() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_update_day_orders_posts_one_command_keyed_by_id() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.update_day_orders([("6X4", 2), ("6X5", 1)])
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "item_update_day_orders",
+            "uuid": "u-1",
+            "args": {"ids_to_orders": {"6X4": 2, "6X5": 1}},
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reorder_items_posts_one_item_reorder_command() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

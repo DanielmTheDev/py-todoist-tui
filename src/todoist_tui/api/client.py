@@ -214,6 +214,13 @@ class TodoistClient:
             },
         )
 
+    async def update_day_orders(self, items: Sequence[tuple[str, int]]) -> None:
+        """Set each task's place in the day list Todoist orders Today by."""
+        await self._command(
+            "item_update_day_orders",
+            {"ids_to_orders": {task_id: order for task_id, order in items}},
+        )
+
     async def move_item_under(self, task_id: str, parent_id: str) -> None:
         # Todoist takes exactly one of parent_id/section_id/project_id; the task
         # and its own subtree inherit the parent's project and section.

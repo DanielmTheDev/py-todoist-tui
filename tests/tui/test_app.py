@@ -129,6 +129,7 @@ class FakeRepository:
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
         self.reorders: list[list[tuple[TaskId, int]]] = []
+        self.day_orders: list[list[tuple[TaskId, int]]] = []
         self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
         self._removed_pool: dict[TaskId, Task] = {}
@@ -293,6 +294,14 @@ class FakeRepository:
             for t in self._tasks
         ]
         self._tasks = reordered
+
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        self.day_orders.append(list(items))
+        orders = dict(items)
+        self._tasks = [
+            replace(t, day_order=orders[t.id]) if t.id in orders else t
+            for t in self._tasks
+        ]
 
     async def reminders(self) -> list[Reminder]:
         return list(self._reminders)
@@ -3976,6 +3985,7 @@ def _row(
     parent_id: str | None = None,
     section_id: str | None = None,
     child_order: int = 0,
+    day_order: int = -1,
 ) -> Task:
     return Task(
         id=TaskId(content),
@@ -3986,6 +3996,7 @@ def _row(
         parent_id=parent_id,
         section_id=section_id,
         child_order=child_order,
+        day_order=day_order,
     )
 
 
@@ -7882,9 +7893,8 @@ async def test_the_last_task_of_a_section_does_not_leave_it() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_refused_move_says_there_is_no_sibling() -> None:
-    """Silence reads as a broken key — most of all in a filter view, where a
-    task's siblings are rarely the rows next to it."""
+async def test_a_refused_move_says_there_is_nothing_to_swap_with() -> None:
+    """Silence reads as a broken key."""
     repo = _ordered_repo()
     app = TodoistApp(repo)
     async with app.run_test() as pilot:
@@ -7893,7 +7903,7 @@ async def test_a_refused_move_says_there_is_no_sibling() -> None:
         await pilot.press("J")
         await pilot.pause()
 
-        assert any("sibling" in note.lower() for note in _notifications(app))
+        assert any("below" in note.lower() for note in _notifications(app))
 
 
 @pytest.mark.anyio
@@ -7906,7 +7916,7 @@ async def test_a_refused_move_up_says_so_too() -> None:
         await pilot.press("K")
         await pilot.pause()
 
-        assert any("sibling" in note.lower() for note in _notifications(app))
+        assert any("above" in note.lower() for note in _notifications(app))
 
 
 @pytest.mark.anyio
@@ -7968,3 +7978,122 @@ async def test_a_move_survives_the_next_sync() -> None:
         await pilot.pause()
 
         assert _section_titles(table) == ["second", "first", "third"]
+
+
+# --- manual reordering in a view that spans projects ---
+
+
+def _cross_project_repo(day_orders: tuple[int, int, int] = (-1, -1, -1)):
+    """Three tasks due today in three different projects — no two are siblings."""
+    a, b, c = day_orders
+    return FakeRepository(
+        [
+            _row("alpha", "9", day_order=a),
+            _row("beta", "10", day_order=b),
+            _row("gamma", "11", day_order=c),
+        ],
+        [
+            Project(id="9", name="Work"),
+            Project(id="10", name="Home"),
+            Project(id="11", name="Errands"),
+        ],
+    )
+
+
+def _titles(table: DataTable[object]) -> list[str]:
+    return [title.strip() for title in _content_col(table)]
+
+
+@pytest.mark.anyio
+async def test_the_first_move_in_a_day_view_numbers_the_whole_list() -> None:
+    """Every task starts unplaced, so trading two values would move nothing."""
+    repo = _cross_project_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        table = app.query_one(TaskTable)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _titles(table) == ["beta", "alpha", "gamma"]
+        assert repo.day_orders == [
+            [(TaskId("beta"), 1), (TaskId("alpha"), 2), (TaskId("gamma"), 3)]
+        ]
+
+
+@pytest.mark.anyio
+async def test_a_placed_day_list_only_trades_the_two() -> None:
+    repo = _cross_project_repo((1, 2, 3))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        table = app.query_one(TaskTable)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _titles(table) == ["beta", "alpha", "gamma"]
+        assert repo.day_orders == [[(TaskId("alpha"), 2), (TaskId("beta"), 1)]]
+
+
+@pytest.mark.anyio
+async def test_a_day_move_never_touches_child_order() -> None:
+    repo = _cross_project_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert repo.reorders == []
+
+
+@pytest.mark.anyio
+async def test_a_day_move_survives_the_next_sync() -> None:
+    repo = _cross_project_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        table = app.query_one(TaskTable)
+        await pilot.press("J")
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("r")
+        await settled(app)
+        await pilot.pause()
+
+        assert _titles(table) == ["beta", "alpha", "gamma"]
+
+
+@pytest.mark.anyio
+async def test_undo_puts_a_day_move_back() -> None:
+    repo = _cross_project_repo((1, 2, 3))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        table = app.query_one(TaskTable)
+        await pilot.press("J")
+        await pilot.pause()
+        await pilot.press("z")
+        await pilot.pause()
+
+        assert _titles(table) == ["alpha", "beta", "gamma"]
+
+
+@pytest.mark.anyio
+async def test_the_last_task_in_a_day_view_says_it_cannot_move() -> None:
+    repo = _cross_project_repo((1, 2, 3))
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("j", "j")  # onto "gamma", the last one
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert repo.day_orders == []
+        assert any("below" in note.lower() for note in _notifications(app))

@@ -61,6 +61,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 description="water them all",
                 deadline=Deadline(date=datetime.date(2026, 8, 15)),
                 child_order=3,
+                day_order=2,
             ),
             Task(
                 id=TaskId("b"),
@@ -70,6 +71,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 project_id="9",
                 parent_id="a",
                 child_order=7,
+                day_order=-1,
             ),
         ],
         reminders=[
@@ -136,8 +138,8 @@ async def test_load_returns_none_when_filters_table_missing(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
-async def test_load_returns_none_when_tasks_lack_child_order(tmp_path: Path) -> None:
-    path = tmp_path / "cache.sqlite3"  # cache written before manual ordering
+async def test_load_returns_none_when_tasks_lack_day_order(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite3"  # cache written before day ordering
     conn = sqlite3.connect(path)
     try:
         conn.executescript(
@@ -147,7 +149,8 @@ async def test_load_returns_none_when_tasks_lack_child_order(tmp_path: Path) -> 
             "CREATE TABLE tasks (id TEXT, content TEXT, priority INTEGER,"
             " due_date TEXT, due_time TEXT, due_recurring INTEGER, due_string TEXT,"
             " due_lang TEXT, project_id TEXT, section_id TEXT, labels TEXT,"
-            " description TEXT, deadline_date TEXT, parent_id TEXT);"
+            " description TEXT, deadline_date TEXT, parent_id TEXT,"
+            " child_order INTEGER);"
             "CREATE TABLE filters (id TEXT, name TEXT, query TEXT, item_order INTEGER);"
             "CREATE TABLE sections (id TEXT, project_id TEXT, name TEXT,"
             " section_order INTEGER);"
@@ -182,6 +185,7 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded.tasks[1].deadline is None
     assert loaded.tasks[1].parent_id == "a"
     assert [task.child_order for task in loaded.tasks] == [3, 7]
+    assert [task.day_order for task in loaded.tasks] == [2, -1]
     assert [(s.id, s.name, s.order) for s in loaded.sections] == [
         ("s1", "Planning", 1),
         ("s2", "In progress", 2),

@@ -79,6 +79,8 @@ class FakeRepository:
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None:

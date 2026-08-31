@@ -14,7 +14,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
-from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.task import UNSET_DAY_ORDER, Task, TaskId
 
 
 class ApiTaskRepository:
@@ -128,6 +128,11 @@ class ApiTaskRepository:
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
         await self._client.reorder_items([(str(tid), order) for tid, order in items])
+
+    async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
+        await self._client.update_day_orders(
+            [(str(tid), order) for tid, order in items]
+        )
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -308,4 +313,5 @@ def _to_task(record: dict[str, Any]) -> Task:
         deadline=Deadline.from_api(deadline) if deadline else None,
         parent_id=str(record["parent_id"]) if record.get("parent_id") else None,
         child_order=int(record.get("child_order") or 0),
+        day_order=int(record.get("day_order", UNSET_DAY_ORDER)),
     )

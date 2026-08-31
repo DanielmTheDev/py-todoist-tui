@@ -37,7 +37,7 @@ from todoist_tui.application.mutation import (
     touched,
 )
 from todoist_tui.application.outbox import Command, Outbox
-from todoist_tui.application.reorder import reorder
+from todoist_tui.application.reorder import reorder, set_day_orders
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import set_due
 from todoist_tui.application.set_labels import set_labels
@@ -63,6 +63,7 @@ from todoist_tui.domain.arrange import (
     Field,
     GroupHeader,
     GroupPath,
+    ManualOrder,
     RenderRow,
     TaskLine,
     arrange,
@@ -82,7 +83,7 @@ from todoist_tui.domain.reminder import (
     default_reminder,
     wants_default_reminder,
 )
-from todoist_tui.domain.reorder import swap_with_neighbour
+from todoist_tui.domain.reorder import day_order_plan, swap_with_neighbour
 from todoist_tui.domain.repository import (
     ArrangementStore,
     FoldStore,
@@ -1964,7 +1965,13 @@ class TodoistApp(App[None]):
             self._arrangement,
             frozenset(self._expanded),
             frozenset(self._open_groups),
+            manual=self._manual_order,
         )
+
+    @property
+    def _manual_order(self) -> ManualOrder:
+        """A view spanning projects has no one sibling set, so it orders by day."""
+        return ManualOrder.DAY if self._view.day_ordered else ManualOrder.CHILD
 
     def on_task_table_expand(self, _message: TaskTable.Expand) -> None:
         table = self.query_one(TaskTable)
@@ -2019,31 +2026,59 @@ class TodoistApp(App[None]):
         task_id = self._cursor_task_id(table)
         if task_id is None:  # empty table or cursor on a group header
             return
-        pair = swap_with_neighbour(self._arrange(self._visible), task_id, down=down)
-        if pair is None:
-            # Order runs within a sibling set, so the row next to this one is
-            # often not a sibling at all — silence would just read as a dead key.
+        rendered = self._arrange(self._visible)
+        work = self._day_move(rendered, task_id, down=down) or self._sibling_move(
+            rendered, task_id, down=down
+        )
+        if work is None:
             where = "below" if down else "above"
-            self.notify(f"No sibling {where} to swap with")
+            self.notify(f"Nothing {where} to swap with")
             return
+        self._queue([work])
+
+    def _day_move(
+        self, rendered: list[RenderRow[TaskRow]], task_id: str, *, down: bool
+    ) -> tuple[Step, Step] | None:
+        """The step trading places in a day-scoped list, if this view keeps one."""
+        if self._manual_order is not ManualOrder.DAY:
+            return None
+        plan = day_order_plan(rendered, task_id, down=down)
+        if plan is None:
+            return None
+        return (
+            self._day_order_step([(row.id, order) for row, order in plan]),
+            self._day_order_step([(row.id, row.day_order) for row, _ in plan]),
+        )
+
+    def _sibling_move(
+        self, rendered: list[RenderRow[TaskRow]], task_id: str, *, down: bool
+    ) -> tuple[Step, Step] | None:
+        """The step trading two siblings' places among the tasks they share a
+        parent, project and section with."""
+        pair = swap_with_neighbour(rendered, task_id, down=down)
+        if pair is None:
+            return None
         moved, neighbour = pair
-        self._queue(
-            [
-                (
-                    self._order_step(
-                        [
-                            (moved.id, neighbour.child_order),
-                            (neighbour.id, moved.child_order),
-                        ]
-                    ),
-                    self._order_step(  # each back where it started
-                        [
-                            (moved.id, moved.child_order),
-                            (neighbour.id, neighbour.child_order),
-                        ]
-                    ),
-                )
-            ]
+        return (
+            self._order_step(
+                [
+                    (moved.id, neighbour.child_order),
+                    (neighbour.id, moved.child_order),
+                ]
+            ),
+            self._order_step(  # each back where it started
+                [
+                    (moved.id, moved.child_order),
+                    (neighbour.id, neighbour.child_order),
+                ]
+            ),
+        )
+
+    def _day_order_step(self, orders: Sequence[tuple[TaskId, int]]) -> Step:
+        return Step(
+            [edit([str(task_id)], day_order=order) for task_id, order in orders],
+            partial(set_day_orders, self._repo, list(orders)),
+            "Failed to reorder",
         )
 
     def _order_step(self, orders: Sequence[tuple[TaskId, int]]) -> Step:

@@ -7,6 +7,9 @@ from todoist_tui.domain.priority import Priority
 
 TaskId = NewType("TaskId", str)
 
+UNSET_DAY_ORDER = -1
+"""What Todoist reports until something places a task in a day-scoped list."""
+
 
 @dataclass(frozen=True, slots=True)
 class Task:
@@ -21,3 +24,4 @@ class Task:
     deadline: Deadline | None = None
     parent_id: str | None = None
     child_order: int = 0  # place among its siblings; Todoist's own manual order
+    day_order: int = UNSET_DAY_ORDER  # place in a day list, across projects
