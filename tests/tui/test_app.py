@@ -5964,6 +5964,172 @@ async def test_a_startup_filter_view_refreshes_live() -> None:
         assert "p1" in repo.refresh_filtered_queries
 
 
+def _trail_repo(projects: list[Project] | None = None) -> FakeRepository:
+    """Two tasks in Today, a Work project of its own, and an Inbox task."""
+    return FakeRepository(
+        [_row("t1", "220"), _row("t2", "220"), _row("w1", "9")],
+        [Project(id="9", name="Work")] if projects is None else projects,
+        inbox=[_row("i1", "220")],
+    )
+
+
+@pytest.mark.anyio
+async def test_alt_h_goes_back_to_the_view_before() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "work")
+        await settled(app)
+        assert "Work" in _status(app)
+
+        await pilot.press("alt+h")
+        await settled(app)
+        await pilot.pause()
+        assert "Today" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_alt_l_walks_the_trail_forward_again() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "work")
+        await settled(app)
+        await pilot.press("alt+h")
+        await settled(app)
+
+        await pilot.press("alt+l")
+        await settled(app)
+        await pilot.pause()
+        assert "Work" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_going_back_puts_the_cursor_where_it_was_left() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("j")  # leave Today with the cursor on its second task
+        await open_view(pilot, "work")
+        await settled(app)
+
+        await pilot.press("alt+h")
+        await settled(app)
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        assert _title(table, table.cursor_row) == "t2"
+
+
+@pytest.mark.anyio
+async def test_the_first_view_has_nothing_behind_it() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+h")
+        await settled(app)
+        await pilot.pause()
+        assert "nothing to go back to" in _status(app)
+        assert _titles(app.query_one(TaskTable)) == ["t1", "t2", "w1"]
+
+
+@pytest.mark.anyio
+async def test_the_newest_view_has_nothing_ahead_of_it() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+l")
+        await settled(app)
+        await pilot.pause()
+        assert "nothing to go forward to" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_opening_a_view_after_going_back_drops_the_way_forward() -> None:
+    app = TodoistApp(_trail_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "work")
+        await settled(app)
+        await pilot.press("alt+h")  # back to Today
+        await settled(app)
+
+        await pilot.press("i")  # a new branch: Work is no longer ahead
+        await settled(app)
+        await pilot.press("alt+l")
+        await settled(app)
+        await pilot.pause()
+        assert "nothing to go forward to" in _status(app)
+        assert _titles(app.query_one(TaskTable)) == ["i1"]  # still on Inbox
+
+
+@pytest.mark.anyio
+async def test_a_view_whose_project_is_gone_is_skipped_on_the_way_back() -> None:
+    projects = [Project(id="9", name="Work")]
+    app = TodoistApp(_trail_repo(projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "work")
+        await settled(app)
+        await pilot.press("i")
+        await settled(app)
+        projects.clear()  # Work is deleted while the trail still names it
+
+        await pilot.press("alt+h")
+        await settled(app)
+        await pilot.pause()
+        assert "Today" in _status(app)
+
+
+class HeldProjects(FakeRepository):
+    """Holds project lookups open until both navigations are waiting on one."""
+
+    def __init__(self, tasks: list[Task], projects: list[Project]) -> None:
+        super().__init__(tasks, projects, inbox=[_row("i1", "220")])
+        self.held = asyncio.Event()
+        self.both_waiting = asyncio.Event()
+        self.hold = False
+        self.waiting = 0
+
+    async def projects(self) -> list[Project]:
+        if self.hold:
+            self.waiting += 1
+            if self.waiting == 2:
+                self.both_waiting.set()
+            await self.held.wait()
+        return await super().projects()
+
+
+@pytest.mark.anyio
+async def test_a_jump_that_overtakes_a_step_back_keeps_the_view_it_opened() -> None:
+    """Both resolve against the repository, so the one that lands second must not
+    paint over the view the other opened, nor drop its visit from the trail."""
+    repo = HeldProjects(
+        [_row("t1", "220"), _row("w1", "9")], [Project(id="9", name="Work")]
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("i")  # trail: Today, Inbox
+        await settled(app)
+
+        repo.hold = True
+        jumping = asyncio.create_task(app._go_to("project:9"))  # pyright: ignore[reportPrivateUsage]
+        stepping = asyncio.create_task(app.action_back())
+        await repo.both_waiting.wait()
+        repo.hold = False
+        repo.held.set()
+        await jumping
+        await stepping
+        await settled(app)
+        await pilot.pause()
+        assert _titles(app.query_one(TaskTable)) == ["w1"]  # the jump won
+
+        await pilot.press("alt+h")  # and its visit is the one the trail steps off
+        await settled(app)
+        await pilot.pause()
+        assert _titles(app.query_one(TaskTable)) == ["i1"]
+
+
 @pytest.mark.anyio
 async def test_the_help_screen_lists_the_bound_keys() -> None:
     slots = InMemoryViewSlots()

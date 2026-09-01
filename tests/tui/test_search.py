@@ -264,3 +264,21 @@ async def test_the_preview_searches_through_the_repository(
         await settled(app)
         await pilot.pause()
         assert repo.filtered_queries == ["search: mi"]
+
+
+@pytest.mark.anyio
+async def test_a_promoted_search_is_part_of_the_trail() -> None:
+    repo = SearchingRepository([_task("Buy milk")])
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press("m", "i", "l", "k")
+        await pilot.press("enter")
+        await settled(app)
+
+        await pilot.press("alt+h")
+        await settled(app)
+        await pilot.pause()
+        assert "Today" in _status(app)

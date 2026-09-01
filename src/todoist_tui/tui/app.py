@@ -93,6 +93,7 @@ from todoist_tui.domain.repository import (
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.view_history import ViewHistory, Visit
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.columns import (
     GUTTER,
@@ -388,6 +389,8 @@ class TodoistApp(App[None]):
         Binding("delete", "delete", "Delete", show=False),
         Binding("z", "undo", "Undo", show=False),
         Binding("i", "view_inbox", "Inbox", show=False),
+        Binding("alt+h", "back", "Previous view", show=False),
+        Binding("alt+l", "forward", "Next view", show=False),
         Binding("slash", "search", "Search", show=False),
         Binding("p", "views", "Views", show=False),
         Binding("c", "activity", "Activity", show=False),
@@ -445,6 +448,9 @@ class TodoistApp(App[None]):
         # the view key + group the next load of that view opens at, from a picked
         # section — keyed so an interleaved reload of another view drops it
         self._pending_land: tuple[str, GroupPath] | None = None
+        # likewise for the task the next load of that view puts the cursor back on
+        self._pending_cursor: tuple[str, str] | None = None
+        self._history = ViewHistory()  # the trail alt+h / alt+l walk
         self._selected: set[str] = set()  # tasks marked for the next bulk action
         self._view = TODAY
         self._syncing = False
@@ -510,6 +516,7 @@ class TodoistApp(App[None]):
         table.cell_padding = 0  # so a group divider runs unbroken across columns
         self._bound = await self._slots.get()
         self._view, self._active_server_query = await self._resolve_startup()
+        self._history = self._history.visit(Visit(self._view.key))
         await self._reload(self._view)  # instant: served from cache when present
         self._sync_now()  # for a filter home, this also refreshes it live
         self.set_interval(self.SYNC_INTERVAL, self._sync_now)
@@ -614,8 +621,8 @@ class TodoistApp(App[None]):
         return view, query_for_key(key, filters)
 
     def action_view_inbox(self) -> None:
-        self._active_server_query = None
-        self._switch_to(INBOX)
+        self._land_next(INBOX, None, None)
+        self._navigate(INBOX, None)
 
     async def action_views(self) -> None:
         if self._picking_views:  # already loading or the screen is already open
@@ -697,9 +704,9 @@ class TodoistApp(App[None]):
     def _on_search_term(self, term: SearchTerm | None) -> None:
         if term is None:  # search was cancelled
             return
-        self._active_server_query = term.query
-        self._view = search_view(term)
-        self._open_filter(self._view, term.query)
+        view = search_view(term)
+        self._land_next(view, None, None)
+        self._navigate(view, term.query)
 
     def on_key(self, event: events.Key) -> None:
         """Jump keys are bound at runtime rather than declared, so they are matched
@@ -721,26 +728,85 @@ class TodoistApp(App[None]):
 
     async def _go_to(self, view_key: str, land_section: str | None = None) -> bool:
         """Open the view a stored key names; False when its target is gone."""
+        resolved = await self._resolve(view_key)
+        if resolved is None:
+            return False
+        view, query = resolved
+        self._land_next(view, land_section, cursor_id=None)
+        self._navigate(view, query)
+        return True
+
+    async def _resolve(self, view_key: str) -> tuple[View, str | None] | None:
+        """The view a stored key names and the server query it re-runs, or None
+        when the project or filter it named is gone (or we are offline)."""
         try:
             projects = await self._repo.projects()
             filters = await self._repo.filters()
         except Exception:  # offline before the first sync
-            return False
+            return None
         view = view_from_key(view_key, projects, filters)
         if view is None:  # the project or filter it named was deleted
-            return False
-        # unconditionally, so a plain jump clears the pending of an earlier one
+            return None
+        return view, query_for_key(view_key, filters)
+
+    def _land_next(
+        self, view: View, land_section: str | None, cursor_id: str | None
+    ) -> None:
+        """Where the next load of `view` puts the cursor. Set unconditionally, so
+        a plain jump clears what an earlier one left pending."""
         self._pending_land = (
             None if land_section is None else (view.key, (land_section,))
         )
-        query = query_for_key(view_key, filters)
+        self._pending_cursor = None if cursor_id is None else (view.key, cursor_id)
+
+    def _navigate(self, view: View, query: str | None) -> None:
+        """Open `view` and add it to the trail, noting where we leave the cursor."""
+        self._history = self._history.with_cursor(self._left_cursor_at()).visit(
+            Visit(view.key, view.land_section)
+        )
+        self._show(view, query)
+
+    def _show(self, view: View, query: str | None) -> None:
         self._active_server_query = query
         if query is None:
             self._switch_to(view)
         else:  # a filter or search: revalidate it live
             self._view = view
             self._open_filter(view, query)
-        return True
+
+    def _left_cursor_at(self) -> str | None:
+        try:
+            return self._cursor_task_id(self.query_one(TaskTable))
+        except NoMatches:  # nothing painted yet: nothing to come back to
+            return None
+
+    async def action_back(self) -> None:
+        await self._travel(ViewHistory.back, "nothing to go back to")
+
+    async def action_forward(self) -> None:
+        await self._travel(ViewHistory.forward, "nothing to go forward to")
+
+    async def _travel(
+        self, step: Callable[[ViewHistory], ViewHistory | None], nothing: str
+    ) -> None:
+        """Walk the trail one step, skipping views whose target has been deleted."""
+        trail = self._history
+        history = trail.with_cursor(self._left_cursor_at())
+        while (moved := step(history)) is not None:
+            visit = moved.current
+            assert visit is not None  # a step always lands on a visit
+            resolved = await self._resolve(visit.view_key)
+            if self._history is not trail:  # a jump overtook us: the trail is its
+                return  # own now, and the view it opened is the one on screen
+            if resolved is not None:
+                view, query = resolved
+                self._land_next(view, visit.land_section, visit.cursor_id)
+                self._history = moved
+                self._show(view, query)
+                return
+            history = history.without(visit.view_key)  # gone for good
+        self._history = history
+        self._set_status(nothing)
 
     @work(exclusive=True, group="reload")
     async def _open_filter(self, view: View, query: str) -> None:
@@ -1881,19 +1947,22 @@ class TodoistApp(App[None]):
             self._land(view)
 
     def _land(self, view: View) -> None:
-        """Put the cursor on the group a picked section named, once its view has
-        painted. A missing header (empty section, regrouped view) lands nowhere."""
-        if self._pending_land is None:
+        """Put the cursor where this view was entered to be, once it has painted:
+        on the group a picked section named, then on the task the trail left it on.
+        Whatever is no longer there — an empty section, a regrouped view, a task
+        inside a folded group — simply lands nowhere."""
+        if self._pending_land is None and self._pending_cursor is None:
             return
-        key, path = self._pending_land
-        if key != view.key:
-            return
-        self._pending_land = None
         try:
             table = self.query_one(TaskTable)
         except NoMatches:  # reload landed mid-teardown: nothing to move
             return
-        self._move_cursor_to_group(table, path)
+        if self._pending_land is not None and self._pending_land[0] == view.key:
+            self._move_cursor_to_group(table, self._pending_land[1])
+            self._pending_land = None
+        if self._pending_cursor is not None and self._pending_cursor[0] == view.key:
+            self._move_cursor_to_task(table, self._pending_cursor[1])
+            self._pending_cursor = None
 
     async def _load_rows(self, view: View) -> bool:
         """Take `view`'s rows and arrangement in without drawing them, so a caller
