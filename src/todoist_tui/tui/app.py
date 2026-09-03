@@ -409,6 +409,7 @@ class TodoistApp(App[None]):
         Binding("enter", "open_detail", "Detail", show=False),
         Binding("ctrl+e", "edit_task", "Edit title + description", show=False),
         Binding("a", "add_task", "Add task", show=False),
+        Binding("q", "add_inbox_task", "Capture task in Inbox", show=False),
         Binding("A", "add_subtask", "Add subtask", show=False),
         Binding("x", "toggle_select", "Select", show=False),
         Binding("asterisk", "select_all", "Select all", show=False),
@@ -1095,6 +1096,14 @@ class TodoistApp(App[None]):
             ),
         )
 
+    def action_add_inbox_task(self) -> None:
+        """A capture: the editor opens on nothing the cursor stands in, so the
+        task lands in the Inbox undated, to be sorted out later."""
+        self._open_add(
+            "New Inbox task",
+            TaskDraft("", "", project_id=self._inbox_id, project_name=INBOX.title),
+        )
+
     def action_add_subtask(self) -> None:
         row = self._named_cursor_row()
         if row is None:  # empty table, a group header, or a task not yet named
@@ -1169,6 +1178,10 @@ class TodoistApp(App[None]):
         if draft.subtasks:  # same again, one level down
             self._expanded.add(row.id)
         self._queue([(self._add_step(draft, row), None)])
+        if all(r.id != row.id for r in self._visible):
+            # the view turned the new task away, so the band is the only word
+            # that it was saved at all — a capture into the Inbox from Today
+            self._set_status(f"Added to {draft.project_name or INBOX.title}")
 
     def _add_step(self, draft: TaskDraft, row: TaskRow) -> Step:
         children = tuple(s.draft for s in draft.subtasks if s.row is None)
@@ -2002,6 +2015,13 @@ class TodoistApp(App[None]):
         A saved filter's membership only the server can decide, so a row changed
         there keeps its place until the next refresh answers — it must never blink
         out and back in.
+
+        A row this client invented has no "before" to judge against, so the rule
+        decides it outright: a task captured into the Inbox must not flash into
+        Today only for the next sync to take it away. A new subtask is its
+        parent's business, though — it shows nested wherever the parent shows.
+        A row undo puts back keeps the server's id, and with it the server's say
+        on where it belongs.
         """
         changed = touched(self._outbox.pending)
         belongs = self._membership()
@@ -2010,9 +2030,15 @@ class TodoistApp(App[None]):
         before = {str(row.id): row for row in self._rows}
 
         def departed(row: TaskRow) -> bool:
-            was = before.get(str(row.id))
-            if str(row.id) not in changed or was is None:
+            if str(row.id) not in changed:
                 return False
+            was = before.get(str(row.id))
+            if was is None:
+                return (
+                    _is_provisional(str(row.id))
+                    and row.parent_id is None
+                    and not belongs(row)
+                )
             return belongs(was) and not belongs(row)
 
         return prune(rows, departed)

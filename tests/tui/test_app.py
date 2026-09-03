@@ -2579,6 +2579,40 @@ async def test_a_completed_task_stays_gone_while_its_close_is_in_flight() -> Non
         assert app.query_one(DataTable[object]).row_count == 0
 
 
+class HeldUncompleteRepository(FakeRepository):
+    """The reopen is held in flight, so what undo puts back stands on its own."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        self.hold = asyncio.Event()
+
+    async def uncomplete(self, task_id: TaskId) -> None:
+        await self.hold.wait()
+        await super().uncomplete(task_id)
+
+
+@pytest.mark.anyio
+async def test_undo_puts_back_a_row_the_views_own_rule_would_turn_away() -> None:
+    """Todoist's "today" is wider than the rule reproducible here — it hands back
+    everything overdue — so a row undo restores is the server's to place, not the
+    rule's, even while the reopen is in flight."""
+    repo = HeldUncompleteRepository([_row("A")], [])  # due 21 Jul: overdue, not today
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("e")  # complete A
+        await settled(app)
+        await pilot.press("z")  # undo, the reopen still in flight
+        await _settle(pilot)
+
+        assert _content_col(app.query_one(TaskTable)) == ["A" + PENDING_MARK]
+
+        repo.hold.set()
+        await settled(app)
+
+
 @pytest.mark.anyio
 async def test_rapid_completes_do_not_reappear() -> None:
     repo = HeldCloseRepository(
@@ -6272,6 +6306,24 @@ async def test_a_seeds_the_strip_with_where_the_new_task_would_land() -> None:
         )
 
 
+@pytest.mark.anyio
+async def test_q_seeds_a_blank_draft_bound_for_the_inbox() -> None:
+    """The capture key takes nothing from where the cursor stands."""
+    repo = FakeRepository(
+        [_sectioned("t1", section_id="s1")],
+        [Project(id="220", name="Inbox", is_inbox=True), Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Now", order=1)],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert _attribute_strip(app) == f"{PROJECT_ICON} Inbox · P4"
+
+
 class HeldCreationRepository(FakeRepository):
     """The create is held in flight, so what the list shows meanwhile is visible."""
 
@@ -6318,6 +6370,83 @@ async def test_a_new_task_shows_before_the_server_has_it() -> None:
         assert _content_col(app.query_one(TaskTable)) == ["Buy milk"]
         # and never alongside it — the snapshot and the retirement share a frame
         assert max(len(ids) for ids in app.paints) == 1
+
+
+class HeldCaptureRepository(HeldCreationRepository):
+    """A capture goes to the Inbox, so Today answers with Today's tasks alone —
+    the created task is never handed back here."""
+
+    async def today(self) -> list[Task]:
+        return await FakeRepository.today(self)
+
+
+@pytest.mark.anyio
+async def test_a_task_captured_into_the_inbox_stays_out_of_todays_list() -> None:
+    """It belongs to the Inbox, not to the view it was written from, so it must
+    not flash in here only for the next sync to take it away again."""
+    repo = HeldCaptureRepository(
+        [_row("t1")], [Project(id="220", name="Inbox", is_inbox=True)]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert _content_col(app.query_one(TaskTable)) == ["t1"]
+
+        repo.hold.set()
+        await settled(app)
+        await pilot.pause()
+
+        assert _content_col(app.query_one(TaskTable)) == ["t1"]  # nor once it lands
+
+
+@pytest.mark.anyio
+async def test_the_band_says_where_a_captured_task_went() -> None:
+    """The list can't show it, so the band is the only word that it was saved."""
+    repo = HeldCaptureRepository(
+        [_row("t1")], [Project(id="220", name="Inbox", is_inbox=True)]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert "Added to Inbox" in _status(app)
+
+        repo.hold.set()
+        await settled(app)
+
+
+@pytest.mark.anyio
+async def test_an_added_task_the_view_shows_needs_no_word_from_the_band() -> None:
+    repo = HeldCreationRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(
+            "a"
+        )  # dated today: it lands in view, where it is its own word
+        await pilot.pause()
+        await _type(pilot, "Buy milk")
+        await pilot.press("ctrl+s")
+        await _settle(pilot)
+
+        assert "Added to" not in _status(app)
+
+        repo.hold.set()
+        await settled(app)
 
 
 @pytest.mark.anyio
