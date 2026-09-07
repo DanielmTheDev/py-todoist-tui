@@ -163,9 +163,10 @@ class SnapshotTaskRepository:
         await self._inner.set_priority(task_id, priority)
         self._mark_stale()
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
-        await self._inner.set_due(task_id, due)
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
+        landed = await self._inner.set_due(task_id, due)
         self._mark_stale()
+        return landed
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
         await self._inner.set_deadline(task_id, deadline)

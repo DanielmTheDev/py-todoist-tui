@@ -3,7 +3,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from todoist_tui.application.set_due import set_due
+from todoist_tui.application.set_due import schedule, set_due
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
@@ -20,6 +20,9 @@ from todoist_tui.domain.task import Task, TaskId
 class FakeRepository:
     def __init__(self) -> None:
         self.dues: list[tuple[TaskId, Due | DueText | None]] = []
+        self.added: list[Reminder] = []
+        self.calls: list[str] = []
+        self.landed_due: Due | None = None
 
     async def today(self) -> list[Task]:
         return []
@@ -66,8 +69,10 @@ class FakeRepository:
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
         self.dues.append((task_id, due))
+        self.calls.append("set_due")
+        return self.landed_due
 
     async def set_deadline(
         self, task_id: TaskId, deadline: Deadline | None
@@ -98,7 +103,9 @@ class FakeRepository:
     async def reminders(self) -> list[Reminder]:
         return []
 
-    async def add_reminder(self, reminder: Reminder) -> None: ...
+    async def add_reminder(self, reminder: Reminder) -> None:
+        self.added.append(reminder)
+        self.calls.append("add_reminder")
 
     async def delete_reminder(self, reminder_id: str) -> None: ...
 
@@ -130,3 +137,61 @@ async def test_set_due_passes_natural_language_through() -> None:
     await set_due(repo, TaskId("6X4"), text)
 
     assert repo.dues == [(TaskId("6X4"), text)]
+
+
+@pytest.mark.anyio
+async def test_schedule_gives_a_timed_task_the_default_reminder() -> None:
+    """Todoist's Sync API never makes one, so a task scheduled here would stay
+    silent at its due time."""
+    repo = FakeRepository()
+    repo.landed_due = Due(date=datetime.date(2026, 9, 7), time=datetime.time(10, 0))
+
+    await schedule(repo, TaskId("6X4"), DueText("tod 10:00"))
+
+    assert repo.added == [
+        Reminder(id="", item_id="6X4", type="relative", minute_offset=0)
+    ]
+
+
+@pytest.mark.anyio
+async def test_schedule_leaves_an_all_day_task_without_a_reminder() -> None:
+    repo = FakeRepository()
+    repo.landed_due = Due(date=datetime.date(2026, 9, 7))
+
+    await schedule(repo, TaskId("6X4"), DueText("today"))
+
+    assert repo.added == []
+
+
+@pytest.mark.anyio
+async def test_schedule_adds_no_reminder_when_the_task_already_has_one() -> None:
+    repo = FakeRepository()
+    repo.landed_due = Due(date=datetime.date(2026, 9, 7), time=datetime.time(10, 0))
+    own = Reminder(id="r1", item_id="6X4", type="relative", minute_offset=30)
+
+    await schedule(repo, TaskId("6X4"), DueText("tod 10:00"), (own,))
+
+    assert repo.added == []
+
+
+@pytest.mark.anyio
+async def test_schedule_adds_the_reminder_after_the_due_it_needs() -> None:
+    """Todoist refuses a relative reminder on a task with no due time, so the
+    order of the two commands is the behaviour, not an implementation detail."""
+    repo = FakeRepository()
+    repo.landed_due = Due(date=datetime.date(2026, 9, 7), time=datetime.time(10, 0))
+
+    await schedule(repo, TaskId("6X4"), DueText("tod 10:00"))
+
+    assert repo.calls == ["set_due", "add_reminder"]
+
+
+@pytest.mark.anyio
+async def test_set_due_alone_adds_no_reminder() -> None:
+    """The plain write is what an undo restores; it must create nothing."""
+    repo = FakeRepository()
+    repo.landed_due = Due(date=datetime.date(2026, 9, 7), time=datetime.time(10, 0))
+
+    await set_due(repo, TaskId("6X4"), DueText("tod 10:00"))
+
+    assert repo.added == []

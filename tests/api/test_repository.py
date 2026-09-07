@@ -1058,6 +1058,64 @@ async def test_set_due_updates_the_task() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_set_due_returns_the_due_it_wrote() -> None:
+    """A date needs no read-back: what was sent is what landed."""
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    read = respx.get(f"{BASE_URL}/tasks/6X4")
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+    due = Due(date=datetime.date(2026, 7, 29), time=datetime.time(10, 0))
+
+    assert await repo.set_due(TaskId("6X4"), due) == due
+    assert not read.called
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_due_phrase_reads_back_what_todoist_parsed() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    respx.get(f"{BASE_URL}/tasks/6X4").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "6X4",
+                "content": "call",
+                "due": {"date": "2026-09-07T10:00:00", "string": "tod 10:00"},
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    landed = await repo.set_due(TaskId("6X4"), DueText("tod 10:00"))
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["args"] == {"id": "6X4", "due": {"string": "tod 10:00"}}
+    assert landed == Due(
+        date=datetime.date(2026, 9, 7), time=datetime.time(10, 0), string="tod 10:00"
+    )
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_set_due_phrase_that_lands_no_due_reads_back_none() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    respx.get(f"{BASE_URL}/tasks/6X4").mock(
+        return_value=httpx.Response(200, json={"id": "6X4", "content": "call"})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    assert await repo.set_due(TaskId("6X4"), DueText("no date")) is None
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_set_due_recurring_sends_string_to_preserve_the_rule() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
@@ -1428,25 +1486,6 @@ async def test_apply_creation_omits_child_order_when_unset() -> None:
         "content": "new",
         "project_id": "P",
         "priority": 1,
-    }
-
-
-@pytest.mark.anyio
-@respx.mock
-async def test_set_due_text_sends_the_string_alone_for_the_server_to_parse() -> None:
-    route = respx.post(f"{BASE_URL}/sync").mock(
-        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
-    )
-    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
-
-    await repo.set_due(TaskId("6X4"), DueText("every mon until Dec 31"))
-
-    commands = json.loads(
-        parse_qs(route.calls.last.request.content.decode())["commands"][0]
-    )
-    assert commands[0]["args"] == {
-        "id": "6X4",
-        "due": {"string": "every mon until Dec 31"},
     }
 
 

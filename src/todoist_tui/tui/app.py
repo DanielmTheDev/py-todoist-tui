@@ -39,7 +39,7 @@ from todoist_tui.application.mutation import (
 from todoist_tui.application.outbox import Command, Outbox
 from todoist_tui.application.reorder import reorder, set_day_orders
 from todoist_tui.application.set_deadline import set_deadline
-from todoist_tui.application.set_due import set_due
+from todoist_tui.application.set_due import schedule, set_due
 from todoist_tui.application.set_labels import set_labels
 from todoist_tui.application.set_priority import set_priority
 from todoist_tui.application.set_text import set_text
@@ -78,11 +78,7 @@ from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
-from todoist_tui.domain.reminder import (
-    Reminder,
-    default_reminder,
-    wants_default_reminder,
-)
+from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.reorder import day_order_plan, swap_with_neighbour
 from todoist_tui.domain.repository import (
     ArrangementStore,
@@ -1366,8 +1362,6 @@ class TodoistApp(App[None]):
             self._delete_reminder(gone.id)
         for added in (r for r in draft.reminders if not r.id):  # no id: never sent
             self._add_reminders([str(row.id)], added)
-        if wants_default_reminder(row.due, draft.due, draft.reminders):
-            self._add_reminders([str(row.id)], default_reminder())
 
     def _draft_steps(
         self, row: TaskRow, draft: TaskDraft
@@ -1388,7 +1382,7 @@ class TodoistApp(App[None]):
         if draft.due != was.due:
             work.append(
                 (
-                    self._due_change_step(task_id, draft.due),
+                    self._due_change_step(task_id, draft.due, draft.reminders),
                     self._due_step(task_id, row.due),
                 )
             )
@@ -1492,40 +1486,31 @@ class TodoistApp(App[None]):
         self._queue(
             [
                 (
-                    self._due_change_step(str(row.id), due),
+                    self._due_change_step(str(row.id), due, row.reminders),
                     self._due_step(str(row.id), row.due),
                 )
                 for row, due in moved
             ]
         )
-        # queued second, and the outbox keeps issue order all the way to Todoist,
-        # so the due time is set by the time its relative reminder is added
-        gained = [
-            str(row.id)
-            for row, due in moved
-            if wants_default_reminder(row.due, due, row.reminders)
-        ]
-        if gained:
-            self._add_reminders(gained, default_reminder())
 
-    def _due_change_step(self, task_id: str, due: Due | DueText | None) -> Step:
-        if isinstance(due, DueText):
-            return self._due_text_step(task_id, due.text)
-        return self._due_step(task_id, due)
-
-    def _due_step(self, task_id: str, due: Due | None) -> Step:
+    def _due_change_step(
+        self, task_id: str, due: Due | DueText | None, reminders: Sequence[Reminder]
+    ) -> Step:
+        """The user's own scheduling, which also earns the task the default
+        reminder a due time comes with."""
         return Step(
-            edit([task_id], due=due),
-            partial(set_due, self._repo, TaskId(task_id), due),
+            # Todoist parses a phrase, so the date it lands on is unknowable here:
+            # the empty patch changes nothing and only marks the row unconfirmed.
+            edit([task_id]) if isinstance(due, DueText) else edit([task_id], due=due),
+            partial(schedule, self._repo, TaskId(task_id), due, tuple(reminders)),
             "Failed to set due",
         )
 
-    def _due_text_step(self, task_id: str, text: str) -> Step:
-        # Todoist parses the phrase, so the resulting date is unknowable here: the
-        # empty patch changes nothing and only marks the row as unconfirmed.
+    def _due_step(self, task_id: str, due: Due | None) -> Step:
+        """A bare due write — what an undo restores, so it adds no reminder."""
         return Step(
-            edit([task_id]),
-            partial(set_due, self._repo, TaskId(task_id), DueText(text)),
+            edit([task_id], due=due),
+            partial(set_due, self._repo, TaskId(task_id), due),
             "Failed to set due",
         )
 

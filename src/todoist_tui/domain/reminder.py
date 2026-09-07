@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from todoist_tui.domain.due import Due, DueText
+from todoist_tui.domain.due import Due
 
 ReminderType = Literal["absolute", "relative"]
 
@@ -54,29 +54,19 @@ class Reminder:
 
 
 def default_reminder() -> Reminder:
-    """The reminder Todoist's own clients hang on a task that gains a due time.
-    The Sync API leaves it to the client, so a task added here would otherwise
-    never notify."""
+    """The reminder Todoist's own clients hang on a task due at a time. The Sync
+    API leaves it to the client, so a task scheduled here would otherwise never
+    notify."""
     return Reminder(
         id="", item_id="", type="relative", minute_offset=DEFAULT_REMINDER_OFFSET
     )
 
 
-def wants_default_reminder(
-    before: Due | None,
-    after: Due | DueText | None,
-    reminders: Sequence[Reminder],
-) -> bool:
-    """Whether `after` gives a task a due time it did not have while nothing
-    reminds about it yet.
+def wants_default_reminder(due: Due | None, reminders: Sequence[Reminder]) -> bool:
+    """Whether a task due at a time has nothing to remind about it yet.
 
-    Only a *gained* time counts, so a reminder the user deleted on purpose stays
-    deleted across a later reschedule. A `DueText` is resolved server-side, so
-    whether it carries a time is unknowable here and never triggers the default.
+    A due written as a phrase is parsed server-side, so pass the due as it
+    landed — not the phrase. Todoist refuses a relative reminder on an all-day
+    task, which is why only a due time earns one.
     """
-    return (
-        isinstance(after, Due)
-        and after.time is not None
-        and (before is None or before.time is None)
-        and not reminders
-    )
+    return due is not None and due.time is not None and not reminders

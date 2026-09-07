@@ -53,7 +53,7 @@ async def add_task(
     parent has no id yet, so each points at its temp_id instead.
     """
     ids = temp_ids or _uuid_temp_ids()
-    if wants_default_reminder(None, due, reminders):
+    if wants_default_reminder(_known(due), reminders):
         reminders = (default_reminder(),)
     task = NewTask(
         temp_id=next(ids),
@@ -81,8 +81,14 @@ async def add_task(
     await repo.apply_creation(CreationPlan((), (), (task, *children), tuple(alerts)))
 
 
+def _known(due: Due | DueText | None) -> Due | None:
+    """The due as far as the create can tell: a phrase is parsed server-side, so
+    nothing about it is known until the task exists."""
+    return due if isinstance(due, Due) else None
+
+
 def _wanted(child: NewChild) -> tuple[Reminder, ...]:
-    if wants_default_reminder(None, child.due, child.reminders):
+    if wants_default_reminder(_known(child.due), child.reminders):
         return (default_reminder(),)
     return child.reminders
 

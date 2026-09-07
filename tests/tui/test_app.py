@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import re
 from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
@@ -239,13 +240,14 @@ class FakeRepository:
             replace(t, priority=priority) if t.id == task_id else t for t in self._tasks
         ]
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
         self.dues.append((task_id, due))
         self.log.append("due")
         stored = _parsed(due) if isinstance(due, DueText) else due
         self._tasks = [
             replace(t, due=stored) if t.id == task_id else t for t in self._tasks
         ]
+        return stored
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
         self.deadlines.append((task_id, deadline))
@@ -4009,8 +4011,15 @@ def _typing(text: str) -> list[str]:
 
 
 def _parsed(due: DueText) -> Due:
-    """Todoist's answer to a typed phrase: it resolves the date server-side."""
-    return Due(date=_PARSED_DATE, is_recurring=True, string=due.text)
+    """Todoist's answer to a typed phrase: it resolves the date server-side, and
+    a phrase naming a clock time resolves to a timed due."""
+    named = re.search(r"(\d{1,2}):(\d{2})$", due.text)
+    return Due(
+        date=_PARSED_DATE,
+        time=datetime.time(int(named[1]), int(named[2])) if named else None,
+        is_recurring=True,
+        string=due.text,
+    )
 
 
 def _row(
@@ -7781,8 +7790,9 @@ async def test_scheduling_a_task_that_already_reminds_adds_no_default() -> None:
 
 
 @pytest.mark.anyio
-async def test_rescheduling_a_timed_task_does_not_resurrect_its_reminder() -> None:
-    """The user deleted it on purpose; only a *gained* time earns the default."""
+async def test_moving_a_timed_task_to_another_time_still_earns_the_default() -> None:
+    """What counts is that the task now has a time and nothing reminds about it —
+    a task walked from one time to the next would otherwise stay silent."""
     repo = FakeRepository([_timed("A")], [])
     app = TodoistApp(repo, clock=FakeClock(_TODAY))
 
@@ -7795,7 +7805,9 @@ async def test_rescheduling_a_timed_task_does_not_resurrect_its_reminder() -> No
         await settled(app)
         await pilot.pause()
 
-        assert repo.added_reminders == []
+        assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
+            ("A", "relative", 0)
+        ]
 
 
 @pytest.mark.anyio
@@ -7816,6 +7828,50 @@ async def test_an_all_day_reschedule_adds_no_reminder() -> None:
         await pilot.press("t")
         await pilot.pause()
         await pilot.press("m")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.added_reminders == []
+
+
+@pytest.mark.anyio
+async def test_a_typed_due_phrase_naming_a_time_earns_the_default_reminder() -> None:
+    """Todoist parses the phrase, so only the due it lands on says whether a
+    reminder is due — the phrase itself never did."""
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("s")  # type the due instead of picking it
+        await pilot.pause()
+        await pilot.press("1", "0", "colon", "0", "0", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.dues == [(TaskId("Buy milk"), DueText("10:00"))]
+        assert [(r.item_id, r.type, r.minute_offset) for r in repo.added_reminders] == [
+            ("Buy milk", "relative", 0)
+        ]
+        assert repo.log == ["due", "reminder"]
+
+
+@pytest.mark.anyio
+async def test_a_typed_due_phrase_landing_all_day_earns_no_reminder() -> None:
+    repo = FakeRepository([_row("Buy milk")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press(*"tomorrow", "enter")
         await settled(app)
         await pilot.pause()
 

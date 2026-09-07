@@ -110,8 +110,12 @@ class ApiTaskRepository:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         await self._client.update_item(str(task_id), priority.to_api)
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
         await self._client.update_item_due(str(task_id), due.to_api if due else None)
+        if not isinstance(due, DueText):  # a date lands as it was sent
+            return due
+        landed = (await self._client.task(str(task_id))).get("due")
+        return Due.from_api(landed) if landed else None
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
         await self._client.update_item_deadline(

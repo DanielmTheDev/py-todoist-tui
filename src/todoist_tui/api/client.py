@@ -81,6 +81,12 @@ class TodoistClient:
                 raise InvalidSearchQuery(query) from error
             raise
 
+    async def task(self, task_id: str) -> dict[str, Any]:
+        """One task, straight from the server — no cache stands between."""
+        response = await self._http.get(f"/tasks/{task_id}")
+        response.raise_for_status()
+        return cast("dict[str, Any]", response.json())
+
     async def tasks_in_project(self, project_id: str) -> list[dict[str, Any]]:
         return await self._paginate("/tasks", {"project_id": project_id})
 

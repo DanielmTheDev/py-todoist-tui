@@ -66,8 +66,13 @@ class TaskRepository(Protocol):
 
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None: ...
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
-        """A `DueText` hands Todoist the phrase to parse instead of a date."""
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
+        """A `DueText` hands Todoist the phrase to parse instead of a date.
+
+        Answers with the due as it landed — for a phrase, only the server knows
+        what it became, and a caller acting on the result (a reminder needs a due
+        time) cannot read it off the phrase.
+        """
         ...
 
     async def set_deadline(

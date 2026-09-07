@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, time
 
 import pytest
 
@@ -66,6 +66,7 @@ class FakeInner:
         self.deleted_sections: list[str] = []
         self.priorities: list[tuple[TaskId, Priority]] = []
         self.dues: list[tuple[TaskId, Due | DueText | None]] = []
+        self.landed_due: Due | None = None
         self.deadlines: list[tuple[TaskId, Deadline | None]] = []
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
@@ -135,8 +136,9 @@ class FakeInner:
     async def set_priority(self, task_id: TaskId, priority: Priority) -> None:
         self.priorities.append((task_id, priority))
 
-    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> None:
+    async def set_due(self, task_id: TaskId, due: Due | DueText | None) -> Due | None:
         self.dues.append((task_id, due))
+        return self.landed_due
 
     async def set_deadline(self, task_id: TaskId, deadline: Deadline | None) -> None:
         self.deadlines.append((task_id, deadline))
@@ -387,13 +389,15 @@ async def test_set_priority_delegates_to_the_api() -> None:
 
 
 @pytest.mark.anyio
-async def test_set_due_delegates_to_the_api() -> None:
+async def test_set_due_delegates_to_the_api_and_answers_with_what_landed() -> None:
     inner = FakeInner()
+    inner.landed_due = Due(date=_TODAY, time=time(10, 0))
     repo = _delegating_repo(inner)
 
-    await repo.set_due(TaskId("x"), Due(date=_TODAY))
+    landed = await repo.set_due(TaskId("x"), DueText("tod 10:00"))
 
-    assert inner.dues == [(TaskId("x"), Due(date=_TODAY))]
+    assert inner.dues == [(TaskId("x"), DueText("tod 10:00"))]
+    assert landed == Due(date=_TODAY, time=time(10, 0))
 
 
 @pytest.mark.anyio
