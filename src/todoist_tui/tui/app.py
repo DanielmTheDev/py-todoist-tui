@@ -394,7 +394,7 @@ class TodoistApp(App[None]):
         # f1 too: inside the editor `?` is a character the fields take
         Binding("question_mark,f1", "help", "Help"),  # the only footer entry
         Binding("e", "complete", "Complete", show=False),
-        Binding("delete", "delete", "Delete", show=False),
+        Binding("delete", "delete", "Delete task or section", show=False),
         Binding("z", "undo", "Undo", show=False),
         Binding("i", "view_inbox", "Inbox", show=False),
         Binding("alt+h", "back", "Previous view", show=False),
@@ -884,7 +884,10 @@ class TodoistApp(App[None]):
             if (row := next((r for r in self._visible if str(r.id) == task_id), None))
             is not None
         ]
-        if not pairs:  # empty table or cursor on a group header
+        if not pairs:  # empty table, or a group header the section delete may claim
+            group = self._cursor_group_path(table)
+            if group is not None:
+                self._delete_section_at(group)
             return
         cursor_row = table.cursor_row  # follow the highlight down after the delete
         prompt = (
@@ -1791,7 +1794,18 @@ class TodoistApp(App[None]):
         if target is None or target.section_id is None:  # picker cancelled
             self._picking_delete_section = False
             return
-        section_id, name = target.section_id, target.section_name
+        self._confirm_delete_section(target.section_id, target.section_name)
+
+    def _delete_section_at(self, path: GroupPath) -> None:
+        """Delete the section whose header the cursor sits on."""
+        if not self._sections_addressable("delete"):
+            return
+        section = next((s for s in self._current_sections() if s.name == path[0]), None)
+        if section is None:  # a header the sync has already taken the section from
+            return
+        self._confirm_delete_section(section.id, section.name)
+
+    def _confirm_delete_section(self, section_id: str, name: str | None) -> None:
         self.push_screen(
             ConfirmScreen(f"Delete section “{name}” and its tasks?"),
             lambda confirmed: self._on_delete_section_confirmed(
@@ -2150,22 +2164,29 @@ class TodoistApp(App[None]):
             return
         self._queue([work])
 
+    def _sections_addressable(self, verb: str) -> bool:
+        """Whether a header on screen names one section of one project — the only
+        arrangement in which a section command knows what it is aimed at."""
+        if self._view.project_id is None:
+            # a view spanning projects groups two projects' like-named sections
+            # into a single header, and section_order is one order per project
+            self.notify(f"Open the project to {verb} its sections")
+            return False
+        group_by = self._arrangement.group_by
+        if not group_by or group_by[0] is not Field.SECTION:
+            # nested, one header repeats under every other group; unnested, the
+            # header is not a section at all
+            self.notify(f"Group by section first to {verb} sections")
+            return False
+        return True
+
     def _move_section(self, path: GroupPath, *, down: bool) -> None:
         """Trade the cursor's section with the one a step away on screen.
 
         No sort guard: a sort orders the rows inside a group and never decides
         where the headers sit, so it leaves a section move alone.
         """
-        if self._view.project_id is None:
-            # section_order is one order per project, and a view spanning them
-            # groups two projects' like-named sections into a single header
-            self.notify("Open the project to reorder its sections")
-            return
-        group_by = self._arrangement.group_by
-        if not group_by or group_by[0] is not Field.SECTION:
-            # nested, a section carries one order per project and would move under
-            # every other parent header at once; unnested, this is not a section
-            self.notify("Group by section first to reorder sections")
+        if not self._sections_addressable("reorder"):
             return
         pair = swap_section_with_neighbour(
             self._arrange(self._visible), path, down=down

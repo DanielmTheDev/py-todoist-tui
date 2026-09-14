@@ -8661,6 +8661,99 @@ async def test_a_section_move_survives_the_next_sync() -> None:
         assert _headers(table) == ["Waiting", "Planning", "Backlog"]
 
 
+# --- deleting a section from its header ---
+
+
+@pytest.mark.anyio
+async def test_delete_on_a_section_header_removes_that_section() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("j")  # onto the Waiting header
+        await pilot.press("delete")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted_sections == ["s2"]
+
+
+@pytest.mark.anyio
+async def test_delete_on_a_section_header_cancelled_deletes_nothing() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("delete")
+        await pilot.pause()
+        await pilot.press("n")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted_sections == []
+
+
+@pytest.mark.anyio
+async def test_a_selection_outranks_the_section_header_the_cursor_sits_on() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("l")  # unfold Planning
+        await pilot.press("j")  # onto "planned", the task it holds
+        await pilot.press("x")  # select it
+        await pilot.press("k")  # back onto the Planning header
+        await pilot.press("delete")
+        await pilot.pause()
+        await pilot.press("y")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted_sections == []
+        assert [str(task_id) for task_id in repo.deleted] == ["planned"]
+
+
+@pytest.mark.anyio
+async def test_a_section_header_in_a_view_spanning_projects_will_not_delete() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("s", "enter")  # Today, grouped by section
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+
+        # the same name in two projects is one header, naming no single section
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert repo.deleted_sections == []
+        assert any("project" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_group_that_is_not_a_section_will_not_delete() -> None:
+    repo = _three_section_repo()
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement(group_by=(Field.PRIORITY,)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("delete")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert repo.deleted_sections == []
+        assert any("section" in note.lower() for note in _notifications(app))
+
+
 # --- manual reordering in a view that spans projects ---
 
 
