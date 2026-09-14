@@ -220,6 +220,19 @@ class TodoistClient:
             },
         )
 
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        """Set each section's place in its project. Todoist rewrites the sections'
+        fractional `order_key` to match, so the client never sends one."""
+        await self._command(
+            "section_reorder",
+            {
+                "sections": [
+                    {"id": section_id, "section_order": order}
+                    for section_id, order in sections
+                ]
+            },
+        )
+
     async def update_day_orders(self, items: Sequence[tuple[str, int]]) -> None:
         """Set each task's place in the day list Todoist orders Today by."""
         await self._command(

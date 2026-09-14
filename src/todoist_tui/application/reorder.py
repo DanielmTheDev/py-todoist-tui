@@ -12,3 +12,9 @@ async def set_day_orders(
     repo: TaskRepository, items: Sequence[tuple[TaskId, int]]
 ) -> None:
     await repo.set_day_orders(items)
+
+
+async def reorder_sections(
+    repo: TaskRepository, sections: Sequence[tuple[str, int]]
+) -> None:
+    await repo.reorder_sections(sections)

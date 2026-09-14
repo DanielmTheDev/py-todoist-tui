@@ -130,6 +130,7 @@ class FakeRepository:
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
         self.reorders: list[list[tuple[TaskId, int]]] = []
+        self.section_reorders: list[list[tuple[str, int]]] = []
         self.day_orders: list[list[tuple[TaskId, int]]] = []
         self.applied: list[CreationPlan] = []
         self._removed: dict[TaskId, Task] = {}
@@ -303,6 +304,14 @@ class FakeRepository:
         self._tasks = [
             replace(t, day_order=orders[t.id]) if t.id in orders else t
             for t in self._tasks
+        ]
+
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        self.section_reorders.append(list(sections))
+        orders = dict(sections)
+        self._sections = [
+            replace(s, order=orders[s.id]) if s.id in orders else s
+            for s in self._sections
         ]
 
     async def reminders(self) -> list[Reminder]:
@@ -5835,7 +5844,11 @@ async def test_a_cross_project_view_shows_no_empty_section_headers() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await settled(app)
-        await pilot.press("g", "s")  # Today, grouped by section
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("s", "enter")  # Today, grouped by section
+        await pilot.pause()
+        await settled(app)
         await pilot.pause()
         # section_order is per project, so a view spanning them seeds nothing
         assert not any("Someday" in c for c in _content_col(app.query_one(TaskTable)))
@@ -8434,6 +8447,218 @@ async def test_a_move_survives_the_next_sync() -> None:
         await pilot.pause()
 
         assert _section_titles(table) == ["second", "first", "third"]
+
+
+# --- moving a section ---
+
+
+def _three_section_repo() -> FakeRepository:
+    """A Work project with three sections, the middle one holding no task."""
+    return FakeRepository(
+        [_row("planned", "9", section_id="s1"), _row("later", "9", section_id="s3")],
+        [Project(id="9", name="Work")],
+        sections=[
+            Section(id="s1", project_id="9", name="Planning", order=1),
+            Section(id="s2", project_id="9", name="Waiting", order=2),
+            Section(id="s3", project_id="9", name="Backlog", order=3),
+        ],
+    )
+
+
+def _headers(table: DataTable[object]) -> list[str]:
+    """The section names, in the order their headers sit on screen."""
+    return [
+        name
+        for cell in _content_col(table)
+        for name in ("Planning", "Waiting", "Backlog")
+        if name in cell
+    ]
+
+
+async def _open_work(app: TodoistApp, pilot: Pilot[None]) -> DataTable[object]:
+    await pilot.pause()
+    await open_view(pilot, "Work")
+    await settled(app)
+    await pilot.pause()
+    return app.query_one(TaskTable)
+
+
+@pytest.mark.anyio
+async def test_shift_j_swaps_the_section_with_the_one_below() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")  # the cursor opens on the first header
+        await pilot.pause()
+
+        assert _headers(table) == ["Waiting", "Planning", "Backlog"]
+        # one command, so the two never trade places by halves
+        assert repo.section_reorders == [[("s1", 2), ("s2", 1)]]
+
+
+@pytest.mark.anyio
+async def test_shift_k_swaps_the_section_with_the_one_above() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("j")  # onto the Waiting header
+        await pilot.press("K")
+        await pilot.pause()
+
+        assert _headers(table) == ["Waiting", "Planning", "Backlog"]
+
+
+@pytest.mark.anyio
+async def test_a_section_holding_no_task_moves_like_any_other() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("j")  # onto Waiting, which holds nothing
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _headers(table) == ["Planning", "Backlog", "Waiting"]
+
+
+@pytest.mark.anyio
+async def test_the_cursor_follows_the_moved_section() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert "Planning" in _content_col(table)[table.cursor_row]
+
+
+@pytest.mark.anyio
+async def test_the_last_section_says_there_is_nothing_below_it() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("j", "j")  # onto Backlog, the last section
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _headers(table) == ["Planning", "Waiting", "Backlog"]
+        assert repo.section_reorders == []
+        assert any("below" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_the_first_section_says_there_is_nothing_above_it() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        app_pilot = await _open_work(app, pilot)
+        assert app_pilot is not None
+        await pilot.press("K")
+        await pilot.pause()
+
+        assert any("above" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_section_move_under_a_sort_still_lands() -> None:
+    """A sort orders the rows inside a group; it never decides where the headers
+    sit, so it must not refuse the move the way a task reorder does."""
+    repo = _three_section_repo()
+    app = TodoistApp(repo, arrangements=await _sorted_by_content())
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _headers(table) == ["Waiting", "Planning", "Backlog"]
+        assert not any("sort" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_section_will_not_move_in_a_view_spanning_projects() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("g")
+        await pilot.pause()
+        await pilot.press("s", "enter")  # Today, grouped by section
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+        await pilot.press("J")
+        await pilot.pause()
+
+        # section_order is per project; the same name in two projects is one group
+        assert repo.section_reorders == []
+        assert any("project" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_section_nested_under_another_group_will_not_move() -> None:
+    repo = _three_section_repo()
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement(group_by=(Field.PRIORITY, Field.SECTION)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("l")  # unfold the priority group to reach a section header
+        await pilot.press("j")
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert repo.section_reorders == []
+        assert any("section" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_a_group_that_is_not_a_section_will_not_move() -> None:
+    repo = _three_section_repo()
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement(group_by=(Field.PRIORITY,)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert repo.section_reorders == []
+        assert any("section" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_undo_puts_the_moved_section_back() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+        await pilot.press("z")
+        await pilot.pause()
+
+        assert _headers(table) == ["Planning", "Waiting", "Backlog"]
+
+
+@pytest.mark.anyio
+async def test_a_section_move_survives_the_next_sync() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("r")
+        await settled(app)
+        await pilot.pause()
+
+        assert _headers(table) == ["Waiting", "Planning", "Backlog"]
 
 
 # --- manual reordering in a view that spans projects ---

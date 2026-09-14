@@ -13,9 +13,16 @@ the assignments that place a whole day run.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
-from todoist_tui.domain.arrange import ArrangeRow, RenderRow, TaskLine
+from todoist_tui.domain.arrange import (
+    ArrangeRow,
+    Field,
+    GroupHeader,
+    GroupPath,
+    RenderRow,
+    TaskLine,
+)
 from todoist_tui.domain.task import UNSET_DAY_ORDER
 
 
@@ -44,6 +51,40 @@ def swap_with_neighbour[T: OrderedRow](
     if neighbour is None or not _siblings(line.row, neighbour.row):
         return None
     return line.row, neighbour.row
+
+
+def swap_section_with_neighbour(
+    rendered: Sequence[RenderRow[Any]], path: GroupPath, *, down: bool
+) -> tuple[str, str] | None:
+    """The section at `path` and the one a step `down` (or up) from it on screen.
+
+    Both are named by their group label, which is the section's name.
+
+    None where the move has no meaning: no header at `path`, a group that is not
+    a section, or the end of the list. A section nested under another group is
+    refused too — `section_order` is one order per project, so moving it there
+    would reorder it under every other parent header at the same time.
+    """
+    found = next(
+        (
+            (i, entry)
+            for i, entry in enumerate(rendered)
+            if isinstance(entry, GroupHeader) and entry.path == path
+        ),
+        None,
+    )
+    if found is None:
+        return None
+    index, header = found
+    if header.field is not Field.SECTION or header.level != 0:
+        return None
+    beside = rendered[index + 1 :] if down else rendered[:index][::-1]
+    neighbour = next(
+        (e for e in beside if isinstance(e, GroupHeader) and e.level == 0), None
+    )
+    if neighbour is None or neighbour.field is not Field.SECTION:
+        return None
+    return header.label, neighbour.label
 
 
 def day_order_plan[T: OrderedRow](

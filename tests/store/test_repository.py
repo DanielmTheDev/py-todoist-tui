@@ -71,6 +71,7 @@ class FakeInner:
         self.moves: list[tuple[TaskId, str, str | None]] = []
         self.parents: list[tuple[TaskId, str]] = []
         self.reorders: list[list[tuple[TaskId, int]]] = []
+        self.section_reorders: list[list[tuple[str, int]]] = []
         self.day_orders: list[list[tuple[TaskId, int]]] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
         self.text_edits: list[tuple[TaskId, str, str]] = []
@@ -153,6 +154,9 @@ class FakeInner:
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
         self.reorders.append(list(items))
+
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        self.section_reorders.append(list(sections))
 
     async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
         self.day_orders.append(list(items))
@@ -428,6 +432,16 @@ async def test_set_day_orders_delegates_to_the_api() -> None:
     await repo.set_day_orders([(TaskId("x"), 2), (TaskId("y"), 1)])
 
     assert inner.day_orders == [[(TaskId("x"), 2), (TaskId("y"), 1)]]
+
+
+@pytest.mark.anyio
+async def test_reorder_sections_delegates_to_the_api() -> None:
+    inner = FakeInner()
+    repo = _delegating_repo(inner)
+
+    await repo.reorder_sections([("s1", 2), ("s2", 1)])
+
+    assert inner.section_reorders == [[("s1", 2), ("s2", 1)]]
 
 
 @pytest.mark.anyio

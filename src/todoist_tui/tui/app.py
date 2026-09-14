@@ -31,13 +31,21 @@ from todoist_tui.application.move_task import move_task, move_to_parent
 from todoist_tui.application.mutation import (
     Mutation,
     apply,
+    apply_sections,
     edit,
     hide,
     restore,
     touched,
 )
+from todoist_tui.application.mutation import (
+    reorder_sections as reorder_sections_mutation,
+)
 from todoist_tui.application.outbox import Command, Outbox
-from todoist_tui.application.reorder import reorder, set_day_orders
+from todoist_tui.application.reorder import (
+    reorder,
+    reorder_sections,
+    set_day_orders,
+)
 from todoist_tui.application.set_deadline import set_deadline
 from todoist_tui.application.set_due import schedule, set_due
 from todoist_tui.application.set_labels import set_labels
@@ -79,7 +87,11 @@ from todoist_tui.domain.links import LinkOpener, XdgOpenLinkOpener
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
-from todoist_tui.domain.reorder import day_order_plan, swap_with_neighbour
+from todoist_tui.domain.reorder import (
+    day_order_plan,
+    swap_section_with_neighbour,
+    swap_with_neighbour,
+)
 from todoist_tui.domain.repository import (
     ArrangementStore,
     FoldStore,
@@ -323,8 +335,8 @@ class TaskTable(DataTable[object]):
         Binding("l,right", "expand", "Expand task/group", show=False),
         Binding("H", "collapse_all", "Fold every group and subtask", show=False),
         Binding("L", "expand_all", "Unfold every group and subtask", show=False),
-        Binding("J", "move_down", "Move task down", show=False),
-        Binding("K", "move_up", "Move task up", show=False),
+        Binding("J", "move_down", "Move task or section down", show=False),
+        Binding("K", "move_up", "Move task or section up", show=False),
     ]
 
     class Expand(Message):
@@ -2044,6 +2056,11 @@ class TodoistApp(App[None]):
             return lambda row: row.project_id == inbox_id
         return None
 
+    def _current_sections(self) -> list[Section]:
+        """The project's sections with the outbox replayed, so a header a move is
+        still waiting on sits where the user just put it."""
+        return apply_sections(self._sections, self._outbox.pending)
+
     def _arrange(self, rows: list[TaskRow]) -> list[RenderRow[TaskRow]]:
         return arrange(
             rows,
@@ -2051,7 +2068,7 @@ class TodoistApp(App[None]):
             frozenset(self._expanded),
             frozenset(self._open_groups),
             manual=self._manual_order,
-            sections=self._sections,
+            sections=self._current_sections(),
         )
 
     @property
@@ -2110,14 +2127,18 @@ class TodoistApp(App[None]):
         self._move_task(down=False)
 
     def _move_task(self, *, down: bool) -> None:
-        """Trade the cursor's task with the sibling one step away, if there is one."""
+        """Trade what the cursor is on with the thing one step away: a task with
+        its sibling, a section header with the section beside it."""
+        table = self.query_one(TaskTable)
+        task_id = self._cursor_task_id(table)
+        if task_id is None:  # a group header, or nothing at all
+            group = self._cursor_group_path(table)
+            if group is not None:
+                self._move_section(group, down=down)
+            return
         if self._arrangement.sort_by:
             # a sort decides the order, so a reordered task would snap straight back
             self.notify("Clear the sort (s) to reorder by hand")
-            return
-        table = self.query_one(TaskTable)
-        task_id = self._cursor_task_id(table)
-        if task_id is None:  # empty table or cursor on a group header
             return
         rendered = self._arrange(self._visible)
         work = self._day_move(rendered, task_id, down=down) or self._sibling_move(
@@ -2128,6 +2149,54 @@ class TodoistApp(App[None]):
             self.notify(f"Nothing {where} to swap with")
             return
         self._queue([work])
+
+    def _move_section(self, path: GroupPath, *, down: bool) -> None:
+        """Trade the cursor's section with the one a step away on screen.
+
+        No sort guard: a sort orders the rows inside a group and never decides
+        where the headers sit, so it leaves a section move alone.
+        """
+        if self._view.project_id is None:
+            # section_order is one order per project, and a view spanning them
+            # groups two projects' like-named sections into a single header
+            self.notify("Open the project to reorder its sections")
+            return
+        group_by = self._arrangement.group_by
+        if not group_by or group_by[0] is not Field.SECTION:
+            # nested, a section carries one order per project and would move under
+            # every other parent header at once; unnested, this is not a section
+            self.notify("Group by section first to reorder sections")
+            return
+        pair = swap_section_with_neighbour(
+            self._arrange(self._visible), path, down=down
+        )
+        if pair is None:
+            where = "below" if down else "above"
+            self.notify(f"Nothing {where} to swap with")
+            return
+        by_name = {section.name: section for section in self._current_sections()}
+        moved, neighbour = (by_name[label] for label in pair)
+        self._queue(
+            [
+                (
+                    self._section_step(
+                        {moved.id: neighbour.order, neighbour.id: moved.order}
+                    ),
+                    self._section_step(
+                        {moved.id: moved.order, neighbour.id: neighbour.order}
+                    ),
+                )
+            ]
+        )
+
+    def _section_step(self, orders: dict[str, int]) -> Step:
+        """One command placing every section in `orders`, so a swap never lands by
+        halves and leaves two sections sharing a `section_order`."""
+        return Step(
+            reorder_sections_mutation(orders),
+            partial(reorder_sections, self._repo, list(orders.items())),
+            "Failed to reorder",
+        )
 
     def _day_move(
         self, rendered: list[RenderRow[TaskRow]], task_id: str, *, down: bool
@@ -2185,7 +2254,7 @@ class TodoistApp(App[None]):
 
     def on_task_table_expand_all(self, _message: TaskTable.ExpandAll) -> None:
         self._open_groups = group_paths(
-            self._visible, self._arrangement, self._sections
+            self._visible, self._arrangement, self._current_sections()
         )
         # every id that parents a visible row; arrange ignores the childless ones
         self._expanded = {

@@ -434,6 +434,34 @@ async def test_update_day_orders_posts_one_command_keyed_by_id() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_reorder_sections_posts_one_section_reorder_command() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: "u-1")
+
+    await client.reorder_sections([("s1", 2), ("s2", 1)])
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands == [
+        {
+            "type": "section_reorder",
+            "uuid": "u-1",
+            "args": {
+                "sections": [
+                    {"id": "s1", "section_order": 2},
+                    {"id": "s2", "section_order": 1},
+                ]
+            },
+        }
+    ]
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reorder_items_posts_one_item_reorder_command() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

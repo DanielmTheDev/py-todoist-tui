@@ -1226,6 +1226,25 @@ async def test_set_day_orders_sends_the_new_day_orders() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_reorder_sections_sends_the_new_section_orders() -> None:
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok", uuid_factory=lambda: "u-1"))
+
+    await repo.reorder_sections([("s1", 2), ("s2", 1)])
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[0]["type"] == "section_reorder"
+    assert commands[0]["args"] == {
+        "sections": [{"id": "s1", "section_order": 2}, {"id": "s2", "section_order": 1}]
+    }
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_reorder_sends_the_new_child_orders() -> None:
     route = respx.post(f"{BASE_URL}/sync").mock(
         return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})

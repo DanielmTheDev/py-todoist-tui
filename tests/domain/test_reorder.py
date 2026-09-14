@@ -11,7 +11,12 @@ from todoist_tui.domain.arrange import (
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
-from todoist_tui.domain.reorder import day_order_plan, swap_with_neighbour
+from todoist_tui.domain.reorder import (
+    day_order_plan,
+    swap_section_with_neighbour,
+    swap_with_neighbour,
+)
+from todoist_tui.domain.section import Section
 
 
 @dataclass(frozen=True)
@@ -324,3 +329,131 @@ def test_a_parent_moves_over_its_own_subtree_in_the_day_run() -> None:
 
 def test_day_plan_returns_none_for_an_unknown_task() -> None:
     assert day_order_plan(_rendered_day(_run("a")), "nope", down=True) is None
+
+
+# --- moving a section ---
+
+
+_BY_SECTION = Arrangement(group_by=(Field.SECTION,))
+
+
+def _sectioned(*sections: Section) -> list[RenderRow[Row]]:
+    """A project view of `sections`, each holding one task, all unfolded."""
+    rows = [
+        Row(s.id, s.id, section_id=s.id, section_name=s.name, section_order=s.order)
+        for s in sections
+    ]
+    return arrange(
+        rows,
+        _BY_SECTION,
+        open_groups=frozenset({(s.name,) for s in sections}),
+        sections=list(sections),
+    )
+
+
+_PLANNING = Section("s1", "9", "Planning", 1)
+_WAITING = Section("s2", "9", "Waiting", 2)
+_BACKLOG = Section("s3", "9", "Backlog", 3)
+
+
+def test_a_section_trades_with_the_one_below() -> None:
+    rendered = _sectioned(_PLANNING, _WAITING, _BACKLOG)
+
+    assert swap_section_with_neighbour(rendered, ("Waiting",), down=True) == (
+        "Waiting",
+        "Backlog",
+    )
+
+
+def test_a_section_trades_with_the_one_above() -> None:
+    rendered = _sectioned(_PLANNING, _WAITING, _BACKLOG)
+
+    assert swap_section_with_neighbour(rendered, ("Waiting",), down=False) == (
+        "Waiting",
+        "Planning",
+    )
+
+
+def test_the_last_section_has_nothing_below_it() -> None:
+    rendered = _sectioned(_PLANNING, _WAITING)
+
+    assert swap_section_with_neighbour(rendered, ("Waiting",), down=True) is None
+
+
+def test_the_first_section_has_nothing_above_it() -> None:
+    rendered = _sectioned(_PLANNING, _WAITING)
+
+    assert swap_section_with_neighbour(rendered, ("Planning",), down=False) is None
+
+
+def test_a_section_holding_no_task_moves_like_any_other() -> None:
+    rows = [
+        Row("t", "t", section_id="s1", section_name="Planning", section_order=1),
+    ]
+    rendered = arrange(
+        rows,
+        _BY_SECTION,
+        open_groups=frozenset({("Planning",), ("Waiting",)}),
+        sections=[_PLANNING, _WAITING],
+    )
+
+    assert swap_section_with_neighbour(rendered, ("Planning",), down=True) == (
+        "Planning",
+        "Waiting",
+    )
+
+
+def test_a_folded_section_still_moves() -> None:
+    rows = [
+        Row(s.id, s.id, section_id=s.id, section_name=s.name, section_order=s.order)
+        for s in (_PLANNING, _WAITING)
+    ]
+    rendered = arrange(rows, _BY_SECTION, sections=[_PLANNING, _WAITING])
+
+    # a folded header hides its tasks but is still the row the cursor sits on
+    assert swap_section_with_neighbour(rendered, ("Planning",), down=True) == (
+        "Planning",
+        "Waiting",
+    )
+
+
+def test_an_unknown_path_moves_nothing() -> None:
+    rendered = _sectioned(_PLANNING, _WAITING)
+
+    assert swap_section_with_neighbour(rendered, ("Nowhere",), down=True) is None
+
+
+def test_a_group_that_is_not_a_section_does_not_move() -> None:
+    rows = [
+        Row("a", "a", priority=Priority.P1),
+        Row("b", "b", priority=Priority.P2),
+    ]
+    rendered = arrange(rows, Arrangement(group_by=(Field.PRIORITY,)))
+
+    assert (
+        swap_section_with_neighbour(rendered, (Priority.P1.label,), down=True) is None
+    )
+
+
+def test_a_section_nested_under_another_group_does_not_move() -> None:
+    rows = [
+        Row("a", "a", section_id="s1", section_name="Planning", section_order=1),
+        Row("b", "b", section_id="s2", section_name="Waiting", section_order=2),
+    ]
+    paths = frozenset(
+        {
+            (Priority.P4.label,),
+            (Priority.P4.label, "Planning"),
+            (Priority.P4.label, "Waiting"),
+        }
+    )
+    rendered = arrange(
+        rows, Arrangement(group_by=(Field.PRIORITY, Field.SECTION)), open_groups=paths
+    )
+
+    # section_order is one order per project; a move here would reorder the
+    # section under every other parent header too
+    result = swap_section_with_neighbour(
+        rendered, (Priority.P4.label, "Planning"), down=True
+    )
+    assert result is None

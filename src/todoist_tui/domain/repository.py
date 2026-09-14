@@ -93,6 +93,10 @@ class TaskRepository(Protocol):
         """Set each task's `day_order` — its place in a day-scoped list."""
         ...
 
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        """Set each section's `section_order` — its place in its project."""
+        ...
+
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
     ) -> None: ...

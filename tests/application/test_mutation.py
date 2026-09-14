@@ -1,9 +1,18 @@
 import datetime
 
-from todoist_tui.application.mutation import apply, edit, hide, restore, touched
+from todoist_tui.application.mutation import (
+    apply,
+    apply_sections,
+    edit,
+    hide,
+    reorder_sections,
+    restore,
+    touched,
+)
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
 
 
@@ -119,3 +128,47 @@ def test_the_input_rows_are_left_untouched() -> None:
 
     assert _ids(rows) == ["a", "b"]
     assert rows[1].priority is Priority.P4
+
+
+# --- section order ---
+
+
+_PLANNING = Section("s1", "9", "Planning", 1)
+_WAITING = Section("s2", "9", "Waiting", 2)
+
+
+def test_a_section_order_mutation_replays_the_new_orders() -> None:
+    log = [reorder_sections({"s1": 2, "s2": 1})]
+
+    assert apply_sections([_PLANNING, _WAITING], log) == [
+        Section("s1", "9", "Planning", 2),
+        Section("s2", "9", "Waiting", 1),
+    ]
+
+
+def test_a_later_section_order_wins_over_an_earlier_one() -> None:
+    log = [reorder_sections({"s1": 2}), reorder_sections({"s1": 3})]
+
+    assert apply_sections([_PLANNING], log)[0].order == 3
+
+
+def test_a_section_the_log_never_names_is_left_alone() -> None:
+    assert apply_sections([_PLANNING], [reorder_sections({"s2": 1})]) == [_PLANNING]
+
+
+def test_apply_sections_leaves_the_input_untouched() -> None:
+    sections = [_PLANNING]
+
+    apply_sections(sections, [reorder_sections({"s1": 9})])
+
+    assert sections[0].order == 1
+
+
+def test_the_row_log_ignores_a_section_order_mutation() -> None:
+    rows = [_row("a")]
+
+    assert apply(rows, [reorder_sections({"s1": 2})]) == rows
+
+
+def test_a_section_order_mutation_touches_no_task() -> None:
+    assert touched([reorder_sections({"s1": 2})]) == frozenset()

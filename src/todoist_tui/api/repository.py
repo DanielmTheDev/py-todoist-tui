@@ -133,6 +133,9 @@ class ApiTaskRepository:
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None:
         await self._client.reorder_items([(str(tid), order) for tid, order in items])
 
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        await self._client.reorder_sections(sections)
+
     async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None:
         await self._client.update_day_orders(
             [(str(tid), order) for tid, order in items]
