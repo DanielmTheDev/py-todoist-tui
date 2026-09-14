@@ -5805,7 +5805,7 @@ async def test_opening_a_section_that_is_not_grouped_lands_nowhere() -> None:
 
 
 @pytest.mark.anyio
-async def test_opening_an_empty_section_lands_nowhere() -> None:
+async def test_opening_an_empty_section_lands_on_its_header() -> None:
     app = TodoistApp(_section_jump_repo())
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -5813,7 +5813,32 @@ async def test_opening_an_empty_section_lands_nowhere() -> None:
         await settled(app)
         await pilot.pause()
         assert "Work" in _status(app)
-        assert app.query_one(TaskTable).cursor_row == 0
+        table = app.query_one(TaskTable)
+        assert "Someday" in _content_col(table)[table.cursor_row]
+
+
+@pytest.mark.anyio
+async def test_a_project_shows_a_header_for_a_section_holding_no_tasks() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "work")
+        await settled(app)
+        await pilot.pause()
+        content = _content_col(app.query_one(TaskTable))
+        assert any("Someday" in c and "(0)" in c for c in content)
+
+
+@pytest.mark.anyio
+async def test_a_cross_project_view_shows_no_empty_section_headers() -> None:
+    app = TodoistApp(_section_jump_repo())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("g", "s")  # Today, grouped by section
+        await pilot.pause()
+        # section_order is per project, so a view spanning them seeds nothing
+        assert not any("Someday" in c for c in _content_col(app.query_one(TaskTable)))
 
 
 @pytest.mark.anyio

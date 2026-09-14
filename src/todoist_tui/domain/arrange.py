@@ -7,6 +7,7 @@ chain and a sort-by chain, each capped at three levels). No I/O.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
@@ -14,6 +15,7 @@ from typing import Any, Protocol
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import UNSET_DAY_ORDER
 
 MAX_LEVELS = 3
@@ -270,6 +272,7 @@ class _Ctx[T: ArrangeRow]:
     children: dict[Any, list[T]]
     expanded: frozenset[Any]
     open_groups: frozenset[GroupPath]
+    sections: Sequence[Section]
 
 
 def arrange[T: ArrangeRow](
@@ -278,6 +281,7 @@ def arrange[T: ArrangeRow](
     expanded: frozenset[Any] = frozenset(),
     open_groups: frozenset[GroupPath] = frozenset(),
     manual: ManualOrder = ManualOrder.CHILD,
+    sections: Sequence[Section] = (),
 ) -> list[RenderRow[T]]:
     """Group/sort the *root* tasks; nest each task's subtasks directly beneath it.
 
@@ -288,15 +292,20 @@ def arrange[T: ArrangeRow](
 
     A group renders as its header alone unless its path is in `open_groups`; a
     folded header still reports the count it would have shown open.
+
+    `sections` are the sections the rows could fall into — a project's own. Each
+    gets a header at the outermost level even when it holds no row, so a project
+    shows every section it has rather than only the occupied ones.
     """
     roots, children = _partition(rows)
     out: list[RenderRow[T]] = []
-    _emit(roots, 0, (), out, _Ctx(arrangement, manual, children, expanded, open_groups))
+    ctx = _Ctx(arrangement, manual, children, expanded, open_groups, sections)
+    _emit(roots, 0, (), out, ctx)
     return out
 
 
 def group_paths[T: ArrangeRow](
-    rows: list[T], arrangement: Arrangement
+    rows: list[T], arrangement: Arrangement, sections: Sequence[Section] = ()
 ) -> set[GroupPath]:
     """Every group path `arrange` would render for these rows, at every level.
 
@@ -305,7 +314,7 @@ def group_paths[T: ArrangeRow](
     """
     roots, _ = _partition(rows)
     out: set[GroupPath] = set()
-    _collect_paths(roots, 0, (), out, arrangement)
+    _collect_paths(roots, 0, (), out, arrangement, sections)
     return out
 
 
@@ -315,17 +324,18 @@ def _collect_paths[T: ArrangeRow](
     path: GroupPath,
     out: set[GroupPath],
     arrangement: Arrangement,
+    sections: Sequence[Section],
 ) -> None:
     if level >= len(arrangement.group_by):
         return
     for label, members, headerless in _bucketed(
-        arrangement.group_by[level], rows, arrangement
+        arrangement.group_by[level], rows, arrangement, _seed(level, sections)
     ):
         if headerless:  # no header, so nothing to fold or unfold
             continue
         group_path = (*path, label)
         out.add(group_path)
-        _collect_paths(members, level + 1, group_path, out, arrangement)
+        _collect_paths(members, level + 1, group_path, out, arrangement, sections)
 
 
 def group_path_of[T: ArrangeRow](
@@ -348,7 +358,8 @@ def group_path_of[T: ArrangeRow](
         bucket = next(
             (
                 b
-                for b in _bucketed(field, members, arrangement)
+                # no seeding: an empty section bucket can never hold this row
+                for b in _bucketed(field, members, arrangement, ())
                 if any(m.id == row.id for m in b[1])
             ),
             None,
@@ -374,17 +385,36 @@ def _partition[T: ArrangeRow](rows: list[T]) -> tuple[list[T], dict[Any, list[T]
     return roots, children
 
 
+def _seed(level: int, sections: Sequence[Section]) -> Sequence[Section]:
+    """Sections only seed the outermost level: one holding no task of a nested
+    group's kind must not sprout an empty header inside that group."""
+    return sections if level == 0 else ()
+
+
 def _bucketed[T: ArrangeRow](
-    field: Field, rows: list[T], arrangement: Arrangement
+    field: Field,
+    rows: list[T],
+    arrangement: Arrangement,
+    sections: Sequence[Section],
 ) -> list[tuple[str, list[T], bool]]:
-    """This level's buckets in render order: (label, members, headerless)."""
+    """This level's buckets in render order: (label, members, headerless).
+
+    `sections` open a bucket each up front, so a section holding no row still
+    renders; every other bucket is discovered from the rows themselves. A seeded
+    bucket also keeps its own order, making the section list the one authority
+    on where the headers sit — a row can join a bucket but not move it.
+    """
     members: dict[str, list[T]] = {}
     order: dict[str, _OrderKey] = {}
     headerless: set[str] = set()
+    if field is Field.SECTION:
+        for section in sections:
+            members.setdefault(section.name, [])
+            order[section.name] = (0, section.order)
     for row in rows:
         for bucket in _buckets(field, row):
             members.setdefault(bucket.label, []).append(row)
-            order[bucket.label] = bucket.order
+            order.setdefault(bucket.label, bucket.order)
             if bucket.headerless:
                 headerless.add(bucket.label)
     ascending = arrangement.group_ascending(field)
@@ -413,7 +443,8 @@ def _emit[T: ArrangeRow](
         return total
     field = group_by[0]
     total = 0
-    for label, members, headerless in _bucketed(field, rows, arrangement):
+    seed = _seed(level, ctx.sections)
+    for label, members, headerless in _bucketed(field, rows, arrangement, seed):
         if headerless:
             # A headerless bucket (section-less tasks) is a flat loose list at this
             # level: no header, and no further subgrouping — mirroring how Todoist

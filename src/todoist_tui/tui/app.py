@@ -438,6 +438,7 @@ class TodoistApp(App[None]):
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, as the server has them
         self._visible: list[TaskRow] = []  # `_rows` with the outbox replayed on top
+        self._sections: list[Section] = []  # the current project's, empty ones included
         self._expanded: set[TaskId] = set()  # tasks whose subtasks are shown
         self._open_groups: set[GroupPath] = set()  # groups unfolded to show members
         self._folds_key: str | None = None  # the view `_open_groups` was loaded for
@@ -1947,8 +1948,8 @@ class TodoistApp(App[None]):
     def _land(self, view: View) -> None:
         """Put the cursor where this view was entered to be, once it has painted:
         on the group a picked section named, then on the task the trail left it on.
-        Whatever is no longer there — an empty section, a regrouped view, a task
-        inside a folded group — simply lands nowhere."""
+        Whatever is no longer there — a regrouped view, a task inside a folded
+        group — simply lands nowhere."""
         if self._pending_land is None and self._pending_cursor is None:
             return
         try:
@@ -1969,10 +1970,14 @@ class TodoistApp(App[None]):
         try:
             rows = await load_view(self._repo, view)
             projects = await self._repo.projects()
+            sections = await self._repo.sections()
         except Exception as error:  # surface any load failure to the user
             self._set_status(f"Failed to load tasks: {error}")
             return False
         self._inbox_id = next((p.id for p in projects if p.is_inbox), None)
+        # section_order is scoped to a project, so only a project view can show
+        # the sections holding nothing — elsewhere the orders would collide
+        self._sections = [s for s in sections if s.project_id == view.project_id]
         arrangement = await self._arrangements.get(view.key, view.default_arrangement)
         if view.key != self._folds_key:  # a new view opens folded as it was left
             self._folds_key = view.key
@@ -2046,6 +2051,7 @@ class TodoistApp(App[None]):
             frozenset(self._expanded),
             frozenset(self._open_groups),
             manual=self._manual_order,
+            sections=self._sections,
         )
 
     @property
@@ -2178,7 +2184,9 @@ class TodoistApp(App[None]):
         )
 
     def on_task_table_expand_all(self, _message: TaskTable.ExpandAll) -> None:
-        self._open_groups = group_paths(self._visible, self._arrangement)
+        self._open_groups = group_paths(
+            self._visible, self._arrangement, self._sections
+        )
         # every id that parents a visible row; arrange ignores the childless ones
         self._expanded = {
             TaskId(row.parent_id) for row in self._visible if row.parent_id is not None

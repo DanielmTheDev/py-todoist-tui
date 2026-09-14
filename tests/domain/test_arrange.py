@@ -18,6 +18,7 @@ from todoist_tui.domain.arrange import (
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
+from todoist_tui.domain.section import Section
 
 
 @dataclass(frozen=True)
@@ -436,6 +437,116 @@ def test_group_by_section_renders_no_section_tasks_loose_at_top() -> None:
         ("H", 0, "Planning"),
         ("T", 1, "in-sec"),
     ]
+
+
+def test_a_section_holding_no_tasks_still_gets_a_header() -> None:
+    rows = [Row("1", "p1", section_name="Planning", section_order=1)]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        open_groups=frozenset({("Planning",), ("Someday",)}),
+        sections=[
+            Section("s1", "proj", "Planning", 1),
+            Section("s2", "proj", "Someday", 2),
+        ],
+    )
+
+    assert _shape(result) == [
+        ("H", 0, "Planning"),
+        ("T", 1, "p1"),
+        ("H", 0, "Someday"),
+    ]
+    empty = next(
+        r for r in result if isinstance(r, GroupHeader) and r.label == "Someday"
+    )
+    assert empty.count == 0
+
+
+def test_an_empty_section_takes_its_place_in_the_section_order() -> None:
+    rows = [
+        Row("1", "b1", section_name="Backlog", section_order=3),
+        Row("2", "p1", section_name="Planning", section_order=1),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        open_groups=frozenset({("Planning",), ("Waiting",), ("Backlog",)}),
+        sections=[
+            Section("s1", "proj", "Planning", 1),
+            Section("s2", "proj", "Waiting", 2),
+            Section("s3", "proj", "Backlog", 3),
+        ],
+    )
+
+    # the empty section sits between the two that hold tasks, by section_order
+    assert _shape(result) == [
+        ("H", 0, "Planning"),
+        ("T", 1, "p1"),
+        ("H", 0, "Waiting"),
+        ("H", 0, "Backlog"),
+        ("T", 1, "b1"),
+    ]
+
+
+def test_an_empty_section_subgroups_into_nothing() -> None:
+    rows = [Row("1", "p1", Priority.P1, section_name="Planning", section_order=1)]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.SECTION, Field.PRIORITY)),
+        open_groups=frozenset(
+            {("Planning",), ("Planning", Priority.P1.label), ("Someday",)}
+        ),
+        sections=[
+            Section("s1", "proj", "Planning", 1),
+            Section("s2", "proj", "Someday", 2),
+        ],
+    )
+
+    assert _shape(result) == [
+        ("H", 0, "Planning"),
+        ("H", 1, Priority.P1.label),
+        ("T", 2, "p1"),
+        ("H", 0, "Someday"),
+    ]
+
+
+def test_an_empty_section_gets_no_header_below_the_outermost_level() -> None:
+    rows = [Row("1", "p1", Priority.P1, section_name="Planning", section_order=1)]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.PRIORITY, Field.SECTION)),
+        open_groups=frozenset({(Priority.P1.label,), (Priority.P1.label, "Planning")}),
+        sections=[
+            Section("s1", "proj", "Planning", 1),
+            Section("s2", "proj", "Someday", 2),
+        ],
+    )
+
+    # a section with no P1 task must not sprout an empty header under P1
+    assert _shape(result) == [
+        ("H", 0, Priority.P1.label),
+        ("H", 1, "Planning"),
+        ("T", 2, "p1"),
+    ]
+
+
+def test_group_paths_names_an_empty_section() -> None:
+    rows = [Row("1", "p1", section_name="Planning", section_order=1)]
+
+    paths = group_paths(
+        rows,
+        Arrangement(group_by=(Field.SECTION,)),
+        sections=[
+            Section("s1", "proj", "Planning", 1),
+            Section("s2", "proj", "Someday", 2),
+        ],
+    )
+
+    assert paths == {("Planning",), ("Someday",)}
 
 
 def test_group_by_section_then_priority_keeps_loose_tasks_flat() -> None:
