@@ -18,6 +18,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
+from todoist_tui.tui.screens.description import VIM_KEYS, DescriptionArea
 from todoist_tui.tui.screens.draft import Subtask, TaskDraft, attribute_strip
 from todoist_tui.tui.screens.help import HelpScreen, shortcut_rows
 from todoist_tui.tui.screens.labels import LabelsScreen
@@ -34,7 +35,7 @@ from todoist_tui.tui.theme import (
     tier_styles,
 )
 
-_HELP_HINT = "f1 help"  # `?` is a character here: the fields take it
+_HELP_HINT = "f1 help · esc: normal mode"  # `?` is a character: the fields take it
 # Declared, not bound: Textual moves the focus on tab itself, but help should
 # still name the key that carries it between the fields.
 _UNBOUND: list[BindingType] = [Binding("tab", "focus_next", "Editor: switch field")]
@@ -78,14 +79,6 @@ class TitleInput(Input):
             self.cursor_position = len(self.value)
         else:
             self.post_message(self.LinkPasted(url))
-
-
-class DescriptionArea(TextArea):
-    """Select-all on the same key as the title field, not only TextArea's f7."""
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+shift+a", "select_all", show=False),
-    ]
 
 
 class TaskEditScreen(ModalScreen["TaskDraft | None"]):
@@ -202,7 +195,8 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         self.dismiss(None)
 
     def action_shortcuts(self) -> None:
-        self._app.push_screen(HelpScreen(shortcut_rows(self.BINDINGS, _UNBOUND)))
+        rows = shortcut_rows(self.BINDINGS, _UNBOUND, VIM_KEYS)
+        self._app.push_screen(HelpScreen(rows))
 
     def action_set_due(self) -> None:
         due = self._draft.due if isinstance(self._draft.due, Due) else None

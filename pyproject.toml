@@ -62,6 +62,12 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Vim editing logic is pure text, not Textual"
+type = "forbidden"
+source_modules = ["todoist_tui.tui.vim"]
+forbidden_modules = ["textual", "rich"]
+
+[[tool.importlinter.contracts]]
 name = "TUI has no direct I/O (must go through application)"
 type = "forbidden"
 source_modules = ["todoist_tui.tui"]

@@ -73,6 +73,26 @@ is a title and the link waits for the one you type. A title that already carries
 a link takes the URL bare instead of nesting, and the description takes every
 paste verbatim.
 
+The editor's description field takes vim keys. It opens in insert mode, so
+tabbing in and typing works as it always did; `Esc` leaves insert (the border
+says which mode you are in), and `Esc` again closes the editor without saving.
+
+| Key | Action |
+|-----|--------|
+| `i` `a` `I` `A` `o` `O` | Start typing — here, after, at the line start/end, on a new line below/above |
+| `h` `j` `k` `l` | Move a character or a line (the arrows do the same) |
+| `w` `b` `e` | Next word, previous word, end of word |
+| `0` `^` `$` | Line start, first word, line end |
+| `gg` `G` | First line, last line (`3gg` and `3G` name a line) |
+| `x` `dd` `D` | Delete a character, a line, to the line end |
+| `cw` `cc` `C` | Change a word, a line, to the line end |
+| `d`/`c` + motion | Delete or change what the motion covers (`d2w`, `dG`) |
+| `diw` `daw` `ciw` `caw` | The whole word under the cursor, alone or with its space |
+| `u` `ctrl+r` | Undo, redo |
+
+A count prefixes any of them (`3j`, `d2w`). There is no yank or paste: `u` is
+what brings a deletion back.
+
 ## Development
 ```sh
 uv run pytest          # unit tests (live-API tests excluded)

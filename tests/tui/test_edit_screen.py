@@ -784,6 +784,7 @@ async def test_f1_lays_the_editors_shortcuts_over_it() -> None:
 
         assert "alt+t" in shown
         assert "tab" in shown  # Textual owns the key; help still names it
+        assert "gg / G" in shown  # nor is a vim key bound; the field reads it
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(host.screen, TaskEditScreen)
@@ -796,7 +797,7 @@ async def test_the_editor_carries_no_key_strip_of_its_own() -> None:
         await pilot.pause()
 
         assert not host.screen.query("#chords")
-        assert _hint(host) == "f1 help"
+        assert _hint(host) == "f1 help · esc: normal mode"
 
 
 @pytest.mark.anyio
