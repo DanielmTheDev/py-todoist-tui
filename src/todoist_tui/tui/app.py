@@ -89,7 +89,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.reorder import (
     day_order_plan,
-    swap_section_with_neighbour,
+    section_order_plan,
     swap_with_neighbour,
 )
 from todoist_tui.domain.repository import (
@@ -2188,31 +2188,27 @@ class TodoistApp(App[None]):
         """
         if not self._sections_addressable("reorder"):
             return
-        pair = swap_section_with_neighbour(
-            self._arrange(self._visible), path, down=down
-        )
-        if pair is None:
+        plan = section_order_plan(self._arrange(self._visible), path, down=down)
+        if plan is None:
             where = "below" if down else "above"
             self.notify(f"Nothing {where} to swap with")
             return
         by_name = {section.name: section for section in self._current_sections()}
-        moved, neighbour = (by_name[label] for label in pair)
+        moved = [by_name[label] for label in plan]
         self._queue(
             [
                 (
                     self._section_step(
-                        {moved.id: neighbour.order, neighbour.id: moved.order}
+                        {s.id: order for order, s in enumerate(moved, start=1)}
                     ),
-                    self._section_step(
-                        {moved.id: moved.order, neighbour.id: neighbour.order}
-                    ),
+                    self._section_step({s.id: s.order for s in moved}),
                 )
             ]
         )
 
     def _section_step(self, orders: dict[str, int]) -> Step:
-        """One command placing every section in `orders`, so a swap never lands by
-        halves and leaves two sections sharing a `section_order`."""
+        """One command placing every section in `orders`, so a move never lands by
+        halves and never leaves two sections sharing a `section_order`."""
         return Step(
             reorder_sections_mutation(orders),
             partial(reorder_sections, self._repo, list(orders.items())),

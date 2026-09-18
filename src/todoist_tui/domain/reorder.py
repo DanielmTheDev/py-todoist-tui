@@ -53,38 +53,32 @@ def swap_with_neighbour[T: OrderedRow](
     return line.row, neighbour.row
 
 
-def swap_section_with_neighbour(
+def section_order_plan(
     rendered: Sequence[RenderRow[Any]], path: GroupPath, *, down: bool
-) -> tuple[str, str] | None:
-    """The section at `path` and the one a step `down` (or up) from it on screen.
+) -> list[str] | None:
+    """Every section on screen, by name, in the order a move of `path` leaves them.
 
-    Both are named by their group label, which is the section's name.
+    The whole run rather than the pair traded: Todoist will happily report two
+    sections at the same `section_order`, and trading two equal values writes
+    nothing, so the caller renumbers from 1 instead.
 
     None where the move has no meaning: no header at `path`, a group that is not
     a section, or the end of the list. A section nested under another group is
     refused too — `section_order` is one order per project, so moving it there
     would reorder it under every other parent header at the same time.
     """
-    found = next(
-        (
-            (i, entry)
-            for i, entry in enumerate(rendered)
-            if isinstance(entry, GroupHeader) and entry.path == path
-        ),
-        None,
-    )
-    if found is None:
+    headers = [e for e in rendered if isinstance(e, GroupHeader) and e.level == 0]
+    if any(header.field is not Field.SECTION for header in headers):
         return None
-    index, header = found
-    if header.field is not Field.SECTION or header.level != 0:
+    at = next((i for i, header in enumerate(headers) if header.path == path), None)
+    if at is None:
         return None
-    beside = rendered[index + 1 :] if down else rendered[:index][::-1]
-    neighbour = next(
-        (e for e in beside if isinstance(e, GroupHeader) and e.level == 0), None
-    )
-    if neighbour is None or neighbour.field is not Field.SECTION:
+    to = at + (1 if down else -1)
+    if not 0 <= to < len(headers):
         return None
-    return header.label, neighbour.label
+    labels = [header.label for header in headers]
+    labels[at], labels[to] = labels[to], labels[at]
+    return labels
 
 
 def day_order_plan[T: OrderedRow](

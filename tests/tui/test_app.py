@@ -8493,8 +8493,31 @@ async def test_shift_j_swaps_the_section_with_the_one_below() -> None:
         await pilot.pause()
 
         assert _headers(table) == ["Waiting", "Planning", "Backlog"]
-        # one command, so the two never trade places by halves
-        assert repo.section_reorders == [[("s1", 2), ("s2", 1)]]
+        # one command renumbering the whole run, so the sections never trade
+        # places by halves and never come out sharing an order
+        assert repo.section_reorders == [[("s2", 1), ("s1", 2), ("s3", 3)]]
+
+
+@pytest.mark.anyio
+async def test_a_section_sharing_its_order_with_another_still_moves() -> None:
+    """Todoist hands back duplicate `section_order`s; trading two equal values
+    would write nothing, so the move renumbers the run from 1."""
+    repo = FakeRepository(
+        [_row("planned", "9", section_id="s1")],
+        [Project(id="9", name="Work")],
+        sections=[
+            Section(id="s1", project_id="9", name="Planning", order=9),
+            Section(id="s2", project_id="9", name="Waiting", order=9),
+        ],
+    )
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert _headers(table) == ["Waiting", "Planning"]
+        assert repo.section_reorders == [[("s2", 1), ("s1", 2)]]
 
 
 @pytest.mark.anyio

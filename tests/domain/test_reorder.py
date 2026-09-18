@@ -13,7 +13,7 @@ from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reorder import (
     day_order_plan,
-    swap_section_with_neighbour,
+    section_order_plan,
     swap_with_neighbour,
 )
 from todoist_tui.domain.section import Section
@@ -356,34 +356,50 @@ _WAITING = Section("s2", "9", "Waiting", 2)
 _BACKLOG = Section("s3", "9", "Backlog", 3)
 
 
-def test_a_section_trades_with_the_one_below() -> None:
+def test_a_section_moves_below_the_one_under_it() -> None:
     rendered = _sectioned(_PLANNING, _WAITING, _BACKLOG)
 
-    assert swap_section_with_neighbour(rendered, ("Waiting",), down=True) == (
-        "Waiting",
+    assert section_order_plan(rendered, ("Waiting",), down=True) == [
+        "Planning",
         "Backlog",
-    )
+        "Waiting",
+    ]
 
 
-def test_a_section_trades_with_the_one_above() -> None:
+def test_a_section_moves_above_the_one_over_it() -> None:
     rendered = _sectioned(_PLANNING, _WAITING, _BACKLOG)
 
-    assert swap_section_with_neighbour(rendered, ("Waiting",), down=False) == (
+    assert section_order_plan(rendered, ("Waiting",), down=False) == [
         "Waiting",
         "Planning",
-    )
+        "Backlog",
+    ]
+
+
+def test_sections_sharing_an_order_still_move() -> None:
+    """Todoist hands back duplicate `section_order`s, and trading two equal
+    values moves nothing — the plan names the whole run instead."""
+    tied = Section("s2", "9", "Waiting", 9)
+    also_tied = Section("s3", "9", "Zebra", 9)
+    rendered = _sectioned(_PLANNING, tied, also_tied)
+
+    assert section_order_plan(rendered, ("Waiting",), down=True) == [
+        "Planning",
+        "Zebra",
+        "Waiting",
+    ]
 
 
 def test_the_last_section_has_nothing_below_it() -> None:
     rendered = _sectioned(_PLANNING, _WAITING)
 
-    assert swap_section_with_neighbour(rendered, ("Waiting",), down=True) is None
+    assert section_order_plan(rendered, ("Waiting",), down=True) is None
 
 
 def test_the_first_section_has_nothing_above_it() -> None:
     rendered = _sectioned(_PLANNING, _WAITING)
 
-    assert swap_section_with_neighbour(rendered, ("Planning",), down=False) is None
+    assert section_order_plan(rendered, ("Planning",), down=False) is None
 
 
 def test_a_section_holding_no_task_moves_like_any_other() -> None:
@@ -397,10 +413,10 @@ def test_a_section_holding_no_task_moves_like_any_other() -> None:
         sections=[_PLANNING, _WAITING],
     )
 
-    assert swap_section_with_neighbour(rendered, ("Planning",), down=True) == (
-        "Planning",
+    assert section_order_plan(rendered, ("Planning",), down=True) == [
         "Waiting",
-    )
+        "Planning",
+    ]
 
 
 def test_a_folded_section_still_moves() -> None:
@@ -411,16 +427,16 @@ def test_a_folded_section_still_moves() -> None:
     rendered = arrange(rows, _BY_SECTION, sections=[_PLANNING, _WAITING])
 
     # a folded header hides its tasks but is still the row the cursor sits on
-    assert swap_section_with_neighbour(rendered, ("Planning",), down=True) == (
-        "Planning",
+    assert section_order_plan(rendered, ("Planning",), down=True) == [
         "Waiting",
-    )
+        "Planning",
+    ]
 
 
 def test_an_unknown_path_moves_nothing() -> None:
     rendered = _sectioned(_PLANNING, _WAITING)
 
-    assert swap_section_with_neighbour(rendered, ("Nowhere",), down=True) is None
+    assert section_order_plan(rendered, ("Nowhere",), down=True) is None
 
 
 def test_a_group_that_is_not_a_section_does_not_move() -> None:
@@ -430,9 +446,7 @@ def test_a_group_that_is_not_a_section_does_not_move() -> None:
     ]
     rendered = arrange(rows, Arrangement(group_by=(Field.PRIORITY,)))
 
-    assert (
-        swap_section_with_neighbour(rendered, (Priority.P1.label,), down=True) is None
-    )
+    assert section_order_plan(rendered, (Priority.P1.label,), down=True) is None
 
 
 def test_a_section_nested_under_another_group_does_not_move() -> None:
@@ -453,7 +467,5 @@ def test_a_section_nested_under_another_group_does_not_move() -> None:
 
     # section_order is one order per project; a move here would reorder the
     # section under every other parent header too
-    result = swap_section_with_neighbour(
-        rendered, (Priority.P4.label, "Planning"), down=True
-    )
+    result = section_order_plan(rendered, (Priority.P4.label, "Planning"), down=True)
     assert result is None
