@@ -1055,3 +1055,43 @@ async def test_delete_note_removes_one_comment() -> None:
     assert command["type"] == "note_delete"
     assert command["args"] == {"id": "c1"}
     await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_upload_sends_the_file_as_multipart_and_answers_the_attachment() -> None:
+    """Todoist answers /uploads with the very dict a comment carries."""
+    answer = {
+        "file_name": "shot.png",
+        "file_type": "image/png",
+        "file_url": "https://files.todoist.com/x/shot.png",
+        "file_size": 40,
+        "image_width": 4,
+        "image_height": 2,
+        "upload_state": "completed",
+    }
+    route = respx.post(f"{BASE_URL}/uploads").mock(
+        return_value=httpx.Response(200, json=answer)
+    )
+    client = TodoistClient.create("tok")
+
+    assert await client.upload("shot.png", b"\x89PNG data", "image/png") == answer
+
+    request = route.calls.last.request
+    assert request.headers["content-type"].startswith("multipart/form-data")
+    body = request.content
+    assert b'name="file"' in body
+    assert b'filename="shot.png"' in body
+    assert b"\x89PNG data" in body
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_a_refused_upload_surfaces_as_an_http_error() -> None:
+    respx.post(f"{BASE_URL}/uploads").mock(return_value=httpx.Response(413))
+    client = TodoistClient.create("tok")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.upload("shot.png", b"x", "image/png")
+    await client.aclose()

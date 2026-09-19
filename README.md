@@ -53,7 +53,7 @@ uv run todoist-tui # from a checkout
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |
-| `C` | Read the comments on the task under the cursor (`❞` in a row marks a commented task); inside the thread, `j`/`k` move, the image under the cursor previews inline, and `o` opens the file in your usual viewer |
+| `C` | Read the comments on the task under the cursor (`❞` in a row marks a commented task); inside the thread, `j`/`k` move, the image under the cursor previews inline, `o` opens the file, `a` writes a comment, `u` attaches a file by path, `p` attaches the clipboard image, `d` deletes |
 | `j`/`↓` `k`/`↑` | Move the cursor down / up |
 | `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor; `h` keeps climbing out — to the parent task, then to the group holding it |
 | `J`/`K` | Move the task under the cursor down / up among its siblings; on a section header, move the section itself (project views only) |
@@ -65,6 +65,12 @@ cancels. `ctrl+s` marks the view the app opens into (`★`); pressing it again
 clears the mark and startup falls back to Today. Picking a `§` section opens
 its project with the cursor on that section's header — a section takes no jump
 key and no startup mark of its own.
+
+Writing a comment (`a`) opens the same vim-keyed field the description uses;
+`ctrl+s` posts it. `u` takes a path (a file dragged into the terminal pastes
+one) and `p` takes whatever image is on the clipboard — both post the file as a
+comment of its own, which is the screenshot flow: copy, `C`, `p`. `p` needs
+`xclip`, and says so when it is missing.
 
 A comment's image previews inline when the terminal can draw one (ghostty,
 kitty, or anything with Sixel). Set `TODOIST_TUI_IMAGE` to `tgp`, `sixel`,

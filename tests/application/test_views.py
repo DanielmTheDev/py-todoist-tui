@@ -34,6 +34,7 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.search import SearchTerm, parse_search
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 
 class FakeRepository:
@@ -96,6 +97,9 @@ class FakeRepository:
     ) -> None: ...
 
     async def delete_comment(self, comment_id: str) -> None: ...
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        raise AssertionError("this test uploads nothing")
 
     async def complete(self, task_id: TaskId) -> None: ...
 
@@ -743,6 +747,9 @@ class BarrierRepository:
     ) -> None: ...
 
     async def delete_comment(self, comment_id: str) -> None: ...
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        raise AssertionError("this test uploads nothing")
 
     async def complete(self, task_id: TaskId) -> None: ...
 

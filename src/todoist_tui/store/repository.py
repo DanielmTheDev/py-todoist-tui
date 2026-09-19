@@ -22,6 +22,7 @@ from todoist_tui.domain.repository import (
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import merge
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 # Nothing wipes the per-query cache any more, so it keeps only the queries a
 # session is still moving between — enough for the saved filters plus a few
@@ -225,6 +226,10 @@ class SnapshotTaskRepository:
     ) -> None:
         await self._inner.add_comment(task_id, content, attachment)
         self._mark_stale()  # the comment marker counts what the next sync brings
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        # nothing of ours changes until a comment carries it, so nothing goes stale
+        return await self._inner.upload_attachment(upload)
 
     async def delete_comment(self, comment_id: str) -> None:
         await self._inner.delete_comment(comment_id)

@@ -16,6 +16,9 @@ _TIMEOUT_SECONDS = 30.0
 # Todoist takes at most this many commands in one request, so a wave bigger
 # than a batch goes as consecutive batches rather than being refused whole.
 COMMAND_LIMIT = 100
+# an upload is one big body over whatever line the user has; the batched-command
+# timeout is sized for a round trip, not for carrying a file
+_UPLOAD_TIMEOUT_SECONDS = 300.0
 # activity is read a page at a time, on demand: enough to fill a screen and
 # leave scrolling room, small enough that opening the feed feels instant.
 ACTIVITY_PAGE = 50
@@ -204,6 +207,22 @@ class TodoistClient:
                 }
             ]
         )
+
+    async def upload(
+        self, file_name: str, data: bytes, content_type: str
+    ) -> dict[str, Any]:
+        """Send a file up, answering the `file_attachment` a comment carries.
+
+        A plain REST call, not a Sync command: it is one file at a time, and the
+        server may sit on a big one far longer than a batch of commands.
+        """
+        response = await self._http.post(
+            "/uploads",
+            files={"file": (file_name, data, content_type)},
+            timeout=_UPLOAD_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return cast("dict[str, Any]", response.json())
 
     async def add_note(
         self, task_id: str, content: str, file_attachment: dict[str, Any] | None = None

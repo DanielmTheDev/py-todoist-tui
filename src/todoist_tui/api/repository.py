@@ -16,6 +16,7 @@ from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import UNSET_DAY_ORDER, Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 
 class ApiTaskRepository:
@@ -96,6 +97,12 @@ class ApiTaskRepository:
         await self._client.add_note(
             str(task_id), content, attachment.to_api if attachment else None
         )
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        answer = await self._client.upload(
+            upload.file_name, upload.data, upload.content_type
+        )
+        return Attachment.from_api(answer)
 
     async def delete_comment(self, comment_id: str) -> None:
         await self._client.delete_note(comment_id)

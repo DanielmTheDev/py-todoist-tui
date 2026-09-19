@@ -36,6 +36,18 @@ def test_a_missing_renderer_costs_the_preview_not_the_app(
     assert graphics_pane() is text_pane
 
 
+def test_the_drawn_image_keeps_its_shape(tmp_path: Path) -> None:
+    """Filling the width stretches a screenshot: the width follows the height,
+    so the picture keeps the proportions it was taken with."""
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(_PNG)
+
+    pane = graphics_pane()(shot, "shot.png")
+
+    assert pane.styles.width is not None
+    assert pane.styles.width.is_auto
+
+
 def test_the_drawn_image_is_given_a_height_to_fill(tmp_path: Path) -> None:
     """An image widget left on `auto` measures zero rows and draws nothing —
     the one failure that looks exactly like no image at all."""

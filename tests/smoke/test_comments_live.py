@@ -17,6 +17,7 @@ from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.domain.sync_delta import merge
 from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 pytestmark = pytest.mark.smoke
 
@@ -146,4 +147,31 @@ async def test_a_comment_written_here_reads_back_and_can_be_taken_away(
         assert await repo.comments(TaskId(task_id)) == []
     finally:
         await _command(token, "item_delete", {"id": task_id})
+        await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_a_file_uploaded_here_comes_back_on_its_comment(token: str) -> None:
+    """The whole write path through our own client: upload, attach, read back."""
+    mapping = await _command(token, "item_add", {"content": "smoke: attaching"})
+    task_id = str(next(iter(mapping.values())))
+    client = TodoistClient.create(token)
+    repo = ApiTaskRepository(client)
+    attachment = None
+    try:
+        attachment = await repo.upload_attachment(
+            PendingUpload("smoke.png", "image/png", _PNG)
+        )
+        assert attachment.is_image
+
+        await repo.add_comment(TaskId(task_id), "", attachment)
+
+        (comment,) = await repo.comments(TaskId(task_id))
+        assert comment.content == ""  # the image is the whole comment
+        assert comment.attachment is not None
+        assert comment.attachment.file_name == "smoke.png"
+    finally:
+        await _command(token, "item_delete", {"id": task_id})
+        if attachment is not None:
+            await _drop_upload(token, attachment.file_url)
         await client.aclose()

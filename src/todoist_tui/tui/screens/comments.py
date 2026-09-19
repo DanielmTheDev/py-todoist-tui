@@ -2,12 +2,13 @@ import datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from rich.style import Style
 from rich.text import Text
 from textual import events
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
+from textual.binding import Binding, BindingType
 from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -17,6 +18,7 @@ from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.tui.format import format_attachment
 from todoist_tui.tui.imaging import ImagePane, text_pane
+from todoist_tui.tui.screens.help import HelpScreen, shortcut_rows
 from todoist_tui.tui.screens.scrolling import ScrollBody, page_scrolled
 from todoist_tui.tui.theme import PALETTE_CLASSES, PALETTE_CSS, Tier, tier_styles
 
@@ -25,7 +27,19 @@ _CURSOR = "❯ "  # marks the comment the keys act on
 _NO_CURSOR = "  "
 _ATTACHMENT = "\U0001f5bc "  # frames the file a comment carries
 _CLOSE_KEYS = ("escape", "q")
-_HINT = "a add \u00b7 j/k move \u00b7 o open the file \u00b7 d delete \u00b7 esc close"
+_HELP_KEYS = ("f1", "question_mark")
+# Declared, not bound: the thread reads every key itself, so `f1` has to be told
+# what there is. The order is the order help lists them in.
+THREAD_BINDINGS: list[BindingType] = [
+    Binding("a", "", "Write a comment"),
+    Binding("u", "", "Attach a file by its path"),
+    Binding("p", "", "Attach the image on the clipboard"),
+    Binding("o", "", "Open the file this comment carries"),
+    Binding("d", "", "Delete this comment"),
+    Binding("j,k", "", "Move through the thread"),
+    Binding("pageup,pagedown", "", "Scroll a long thread"),
+    Binding("escape,q", "", "Close"),
+]
 _DOWN_KEYS = ("j", "down")
 _UP_KEYS = ("k", "up")
 
@@ -36,6 +50,8 @@ class CommentRequest:
     app owns the screens a comment is written on and the writing itself."""
 
     write: bool = False
+    upload: bool = False
+    paste: bool = False
     delete_id: str | None = None
 
 
@@ -63,7 +79,8 @@ class CommentThread(Static):
 class CommentsScreen(ModalScreen["CommentRequest | None"]):
     """One task's comments, oldest first, with the newest under the cursor —
     that is the one you came to read. `j`/`k` walk the thread, `o` shows the
-    file a comment carries, `a` writes a new one, escape or `q` closes it."""
+    file a comment carries, `a` writes a new one, `f1` lists every key, and
+    escape or `q` closes it."""
 
     DEFAULT_CSS = """
     CommentsScreen {
@@ -86,7 +103,7 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         max-height: 14;
         padding: 0 2;
     }
-    CommentsScreen #comments-hint {
+    CommentsScreen #comments-status {
         width: 70%;
         max-width: 90;
         padding: 0 2;
@@ -121,7 +138,7 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         # image: a graphics-protocol image is re-uploaded on every repaint
         yield Container(id="comments-preview")
         # a hint that scrolls away is a hint nobody reads
-        yield Static(_HINT, id="comments-hint")
+        yield Static(id="comments-status")
 
     def on_mount(self) -> None:
         self._show()
@@ -130,6 +147,8 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
     def on_key(self, event: events.Key) -> None:
         if page_scrolled(self, event.key):
             pass
+        elif event.key in _HELP_KEYS:
+            self._help()
         elif event.key in _CLOSE_KEYS:
             self.dismiss(None)
         elif event.key in _DOWN_KEYS:
@@ -140,6 +159,10 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
             self._open()
         elif event.key == "a":
             self.dismiss(CommentRequest(write=True))
+        elif event.key == "u":
+            self.dismiss(CommentRequest(upload=True))
+        elif event.key == "p":
+            self.dismiss(CommentRequest(paste=True))
         elif event.key == "d":
             self._delete()
         event.stop()  # consume every key so app bindings never fire under the modal
@@ -158,7 +181,13 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         except Exception as error:  # offline, refused, too big: say so, stay open
             self._say(f"Could not open {attachment.file_name}: {error}")
         else:
-            self._say(_HINT)
+            self._say("")
+
+    def _help(self) -> None:
+        # Textual types `self.app` as App[Unknown]; the pushed screen owns its
+        # own result type, so nothing here depends on the app's
+        app = cast("App[object]", self.app)  # pyright: ignore[reportUnknownMemberType]
+        app.push_screen(HelpScreen(shortcut_rows(THREAD_BINDINGS)))
 
     def _delete(self) -> None:
         if self._comments:  # an empty thread has nothing to take back
@@ -207,16 +236,16 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         return self._comments[self._cursor].attachment
 
     def _say(self, message: str) -> None:
-        # a download that lands in the tick the thread closes has no hint left
+        # a download that lands in the tick the thread closes has no line left
         # to write on: closing the screen is the answer, not a crash
         if self.is_attached:
-            self.query_one("#comments-hint", Static).update(message)
+            self.query_one("#comments-status", Static).update(message)
 
     def _move(self, step: int) -> None:
         if not self._comments:
             return
         self._cursor = max(0, min(len(self._comments) - 1, self._cursor + step))
-        self._say(_HINT)  # the last file's news belonged to the comment it named
+        self._say("")  # the last file's news belonged to the comment it named
         self._show()
         self._preview()
 

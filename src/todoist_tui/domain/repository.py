@@ -14,6 +14,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 from todoist_tui.domain.view_slots import ViewSlots
 
 if TYPE_CHECKING:
@@ -116,6 +117,10 @@ class TaskRepository(Protocol):
     ) -> None:
         """Post a comment. An attachment alone is a comment: the text may be
         empty when a file carries the meaning."""
+        ...
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        """Send a file to Todoist, answering the attachment a comment carries."""
         ...
 
     async def delete_comment(self, comment_id: str) -> None: ...

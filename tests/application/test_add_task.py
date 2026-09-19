@@ -21,6 +21,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder, default_reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 
 class FakeRepository:
@@ -74,6 +75,9 @@ class FakeRepository:
     ) -> None: ...
 
     async def delete_comment(self, comment_id: str) -> None: ...
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        raise AssertionError("this test uploads nothing")
 
     async def reminders(self) -> list[Reminder]:
         return []

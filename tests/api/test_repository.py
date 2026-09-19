@@ -15,6 +15,7 @@ from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.task import UNSET_DAY_ORDER, TaskId
+from todoist_tui.domain.upload import PendingUpload
 
 
 @pytest.mark.anyio
@@ -1760,3 +1761,31 @@ async def test_add_comment_sends_the_attachment_as_todoist_gave_it() -> None:
         "image_width": 1200,
         "image_height": 800,
     }
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_upload_attachment_turns_the_answer_into_an_attachment() -> None:
+    respx.post(f"{BASE_URL}/uploads").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "file_name": "shot.png",
+                "file_type": "image/png",
+                "file_url": "https://files.todoist.com/x/shot.png",
+                "file_size": 40,
+                "image_width": 4,
+                "image_height": 2,
+                "upload_state": "completed",
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    attachment = await repo.upload_attachment(
+        PendingUpload("shot.png", "image/png", b"data")
+    )
+
+    assert attachment.file_url == "https://files.todoist.com/x/shot.png"
+    assert attachment.is_image
+    assert attachment.image_width == 4

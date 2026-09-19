@@ -24,6 +24,7 @@ from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.add_task import add_task
 from todoist_tui.application.comments import (
+    attach_file,
     delete_comment,
     load_comments,
     post_comment,
@@ -85,6 +86,7 @@ from todoist_tui.domain.arrange import (
     group_paths,
 )
 from todoist_tui.domain.attachments import AttachmentFiles
+from todoist_tui.domain.clipboard import Clipboard, XclipClipboard
 from todoist_tui.domain.clock import Clock, SystemClock
 from todoist_tui.domain.comment import Attachment
 from todoist_tui.domain.creation import NewChild
@@ -109,6 +111,12 @@ from todoist_tui.domain.repository import (
 from todoist_tui.domain.search import SearchTerm
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.upload import (
+    FileUploads,
+    PendingUpload,
+    UploadRejected,
+    Uploads,
+)
 from todoist_tui.domain.view_history import ViewHistory, Visit
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.columns import (
@@ -452,6 +460,8 @@ class TodoistApp(App[None]):
         folds: FoldStore | None = None,
         files: AttachmentFiles | None = None,
         image_pane: ImagePane = text_pane,
+        uploads: Uploads | None = None,
+        clipboard: Clipboard | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(TODOIST_THEME)
@@ -467,6 +477,9 @@ class TodoistApp(App[None]):
         self._files = files
         # loaded before the app starts, where probing the terminal still works
         self._image_pane = image_pane
+        self._uploads = uploads or FileUploads()
+        # not `_clipboard`: Textual's App keeps its own copied text under that
+        self._clipboard_images = clipboard or XclipClipboard()
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, as the server has them
         self._visible: list[TaskRow] = []  # `_rows` with the outbox replayed on top
@@ -739,8 +752,42 @@ class TodoistApp(App[None]):
             return
         if result.write:
             self._push(ComposeCommentScreen(), self._on_comment_written)
+        elif result.upload:
+            self._push(TextPromptScreen("File to attach"), self._on_upload_path)
+        elif result.paste:
+            self.run_worker(self._pasting())
         elif result.delete_id is not None:
             self._confirm_comment_delete(result.delete_id)
+
+    def _on_upload_path(self, path_text: str | None) -> None:
+        if path_text is None:  # the prompt was cancelled
+            return
+        try:
+            upload = self._uploads.read(path_text)
+        except UploadRejected as rejected:  # nothing has left the machine yet
+            self._set_status(str(rejected))
+            return
+        self.run_worker(self._attaching(upload))
+
+    async def _pasting(self) -> None:
+        try:
+            # reading the selection shells out and can block: off the event loop
+            upload = await asyncio.to_thread(self._clipboard_images.grab)
+        except UploadRejected as rejected:
+            self._set_status(str(rejected))
+            return
+        await self._attaching(upload)
+
+    async def _attaching(self, upload: PendingUpload) -> None:
+        task_id = self._commented_task
+        if task_id is None:  # the thread was closed before this landed
+            return
+        try:
+            await attach_file(self._repo, task_id, upload)
+        except Exception as error:
+            self._set_status(f"Failed to attach {upload.file_name}: {error}")
+            return
+        await self._open_comments(task_id)
 
     def _confirm_comment_delete(self, comment_id: str) -> None:
         self._push(

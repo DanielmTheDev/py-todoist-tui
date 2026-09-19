@@ -15,6 +15,7 @@ from todoist_tui.tui.screens.comments import (
     CommentsScreen,
     OpenFile,
 )
+from todoist_tui.tui.screens.help import HelpScreen
 
 _TODAY = datetime.date(2026, 9, 18)
 _AT = datetime.datetime(2026, 9, 18, 19, 4, tzinfo=datetime.UTC)
@@ -139,7 +140,7 @@ async def _shown(
         await pilot.pause()
         found = host.screen.query("#comments")
         text = str(found.only_one(Static).content) if found else ""
-        for extra in ("#comments-hint", "#comments-preview"):
+        for extra in ("#comments-status", "#comments-preview"):
             found = host.screen.query(extra)
             if found:
                 text += "\n" + _text_of(found.first())
@@ -351,10 +352,26 @@ async def test_a_asks_for_a_comment_to_be_written() -> None:
 
 
 @pytest.mark.anyio
-async def test_the_hint_names_writing_a_comment() -> None:
+async def test_the_keys_are_listed_under_f1_like_every_other_screen() -> None:
+    host = _Host((_PLAIN,))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+
+        assert isinstance(host.screen, HelpScreen)
+        listed = str(host.screen.query_one("#help", Static).content)
+        for key in ("a", "u", "p", "o", "d"):
+            assert key in listed
+        assert "Write a comment" in listed
+
+
+@pytest.mark.anyio
+async def test_the_thread_says_nothing_until_it_has_something_to_say() -> None:
+    """The keys belong in help; the line beneath is for what just happened."""
     text, _ = await _shown((_PLAIN,))
 
-    assert "a add" in text
+    assert "esc close" not in text
 
 
 @pytest.mark.anyio
@@ -369,3 +386,17 @@ async def test_d_on_an_empty_thread_asks_for_nothing() -> None:
     _, host = await _shown((), "d")
 
     assert host.result == "unset"  # still open, nothing to delete
+
+
+@pytest.mark.anyio
+async def test_u_asks_for_a_file_to_be_attached() -> None:
+    _, host = await _shown((_PLAIN,), "u")
+
+    assert host.result == CommentRequest(upload=True)
+
+
+@pytest.mark.anyio
+async def test_p_asks_for_the_clipboard_image() -> None:
+    _, host = await _shown((_PLAIN,), "p")
+
+    assert host.result == CommentRequest(paste=True)

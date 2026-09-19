@@ -63,6 +63,9 @@ def graphics_pane() -> ImagePane:
     def pane(path: Path, _file_name: str) -> Widget:
         image = chosen(path)
         image.styles.height = PREVIEW_ROWS
+        # the width follows from the height and the picture's own proportions;
+        # filling the pane instead would stretch every screenshot
+        image.styles.width = "auto"
         return image
 
     return pane

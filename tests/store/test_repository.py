@@ -19,6 +19,7 @@ from todoist_tui.domain.repository import Snapshot
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload
 from todoist_tui.store.repository import FILTER_CACHE_LIMIT, SnapshotTaskRepository
 
 
@@ -83,6 +84,7 @@ class FakeInner:
         self.comment_calls: list[TaskId] = []
         self.posted_comments: list[tuple[TaskId, str, Attachment | None]] = []
         self.deleted_comments: list[str] = []
+        self.uploads: list[PendingUpload] = []
         self._filtered_result = filtered_result or []
 
     async def today(self) -> list[Task]:
@@ -138,6 +140,14 @@ class FakeInner:
 
     async def delete_comment(self, comment_id: str) -> None:
         self.deleted_comments.append(comment_id)
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        self.uploads.append(upload)
+        return Attachment(
+            file_name=upload.file_name,
+            file_type=upload.content_type,
+            file_url=f"https://files.todoist.com/{upload.file_name}",
+        )
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -753,3 +763,18 @@ async def test_deleting_a_comment_marks_the_snapshot_stale_too() -> None:
 
     assert inner.deleted_comments == ["c1"]
     assert source.snapshot_calls == 1  # the disk copy no longer speaks for the count
+
+
+@pytest.mark.anyio
+async def test_an_upload_alone_leaves_the_snapshot_alone() -> None:
+    """Sending a file up changes nothing of ours until a comment carries it."""
+    inner = FakeInner()
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
+    await repo.projects()
+
+    await repo.upload_attachment(PendingUpload("shot.png", "image/png", b"data"))
+    await repo.projects()
+
+    assert [u.file_name for u in inner.uploads] == ["shot.png"]
+    assert source.snapshot_calls == 1  # no resync earned

@@ -55,6 +55,7 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import Task, TaskId
+from todoist_tui.domain.upload import PendingUpload, UploadRejected
 from todoist_tui.domain.view_slots import ViewSlots
 from todoist_tui.tui.app import (
     MARKER_SLOT,
@@ -122,6 +123,7 @@ class FakeRepository:
         self.comment_reads: list[TaskId] = []
         self.posted: list[tuple[TaskId, str, Attachment | None]] = []
         self.deleted_comments: list[str] = []
+        self.uploaded: list[PendingUpload] = []
         self.added_reminders: list[Reminder] = []
         self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
@@ -189,6 +191,14 @@ class FakeRepository:
     async def comments(self, task_id: TaskId) -> list[Comment]:
         self.comment_reads.append(task_id)
         return list(self._comments)
+
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        self.uploaded.append(upload)
+        return Attachment(
+            file_name=upload.file_name,
+            file_type=upload.content_type,
+            file_url=f"https://files.todoist.com/{upload.file_name}",
+        )
 
     async def delete_comment(self, comment_id: str) -> None:
         self.deleted_comments.append(comment_id)
@@ -9171,3 +9181,123 @@ async def test_a_comment_survives_a_declined_delete() -> None:
         await settled(app)
 
         assert repo.deleted_comments == []
+
+
+class _FakeUploads:
+    """Stands in for reading a file off the disk."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.asked: list[str] = []
+        self._error = error
+
+    def read(self, path_text: str) -> PendingUpload:
+        self.asked.append(path_text)
+        if self._error is not None:
+            raise self._error
+        return PendingUpload("shot.png", "image/png", b"\x89PNG")
+
+
+@pytest.mark.anyio
+async def test_u_uploads_the_named_file_and_hangs_it_on_a_comment() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=())
+    uploads = _FakeUploads()
+    app = TodoistApp(repo, uploads=uploads)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("u")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TextPromptScreen)
+        for key in ("s", "h", "o", "t"):
+            await pilot.press(key)
+        await pilot.press("enter")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert uploads.asked == ["shot"]
+        assert [u.file_name for u in repo.uploaded] == ["shot.png"]
+        (task_id, content, attachment) = repo.posted[0]
+        assert (task_id, content) == (TaskId("t1"), "")  # the image is the comment
+        assert attachment is not None and attachment.file_name == "shot.png"
+
+
+@pytest.mark.anyio
+async def test_a_file_the_guard_refuses_never_reaches_todoist() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=())
+    uploads = _FakeUploads(error=UploadRejected("too big: 99 bytes"))
+    app = TodoistApp(repo, uploads=uploads)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("u")
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.press("enter")
+        await pilot.pause()
+        await settled(app)
+
+        assert repo.uploaded == []
+        assert repo.posted == []
+        assert "too big: 99 bytes" in _status(app)
+
+
+class _FakeClipboard:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.grabs = 0
+        self._error = error
+
+    def grab(self) -> PendingUpload:
+        self.grabs += 1
+        if self._error is not None:
+            raise self._error
+        return PendingUpload("clipboard-2026-09-19-101500.png", "image/png", b"\x89PNG")
+
+
+@pytest.mark.anyio
+async def test_p_hangs_the_clipboard_image_on_a_comment() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=())
+    clipboard = _FakeClipboard()
+    app = TodoistApp(repo, clipboard=clipboard)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert clipboard.grabs == 1
+        assert [u.file_name for u in repo.uploaded] == [
+            "clipboard-2026-09-19-101500.png"
+        ]
+        assert repo.posted[0][1] == ""  # the screenshot is the whole comment
+
+
+@pytest.mark.anyio
+async def test_an_empty_clipboard_is_reported_not_posted() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=())
+    clipboard = _FakeClipboard(error=UploadRejected("no image on the clipboard"))
+    app = TodoistApp(repo, clipboard=clipboard)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await settled(app)
+
+        assert repo.uploaded == []
+        assert "no image on the clipboard" in _status(app)
