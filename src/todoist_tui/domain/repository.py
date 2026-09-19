@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.arrange import Arrangement, GroupPath
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
@@ -110,6 +110,15 @@ class TaskRepository(Protocol):
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         """Replace both prose fields; an empty description clears it."""
         ...
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
+        """Post a comment. An attachment alone is a comment: the text may be
+        empty when a file carries the meaning."""
+        ...
+
+    async def delete_comment(self, comment_id: str) -> None: ...
 
     async def add_reminder(self, reminder: Reminder) -> None: ...
 

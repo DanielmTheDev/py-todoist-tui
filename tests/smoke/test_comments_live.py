@@ -126,3 +126,24 @@ async def test_an_attached_image_comes_back_down_with_the_token(token: str) -> N
         if uploaded:  # the upload outlives the task that pointed at it
             await _drop_upload(token, uploaded["file_url"])
         await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_a_comment_written_here_reads_back_and_can_be_taken_away(
+    token: str,
+) -> None:
+    mapping = await _command(token, "item_add", {"content": "smoke: writing"})
+    task_id = str(next(iter(mapping.values())))
+    client = TodoistClient.create(token)
+    repo = ApiTaskRepository(client)
+    try:
+        await repo.add_comment(TaskId(task_id), "smoke: written here")
+
+        (comment,) = await repo.comments(TaskId(task_id))
+        assert comment.content == "smoke: written here"
+
+        await repo.delete_comment(comment.id)
+        assert await repo.comments(TaskId(task_id)) == []
+    finally:
+        await _command(token, "item_delete", {"id": task_id})
+        await client.aclose()

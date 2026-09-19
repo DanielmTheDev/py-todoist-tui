@@ -9,6 +9,7 @@ import respx
 from todoist_tui.api.client import BASE_URL, TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.domain.activity import ActivityEvent, EventKind
+from todoist_tui.domain.comment import Attachment
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
@@ -1726,3 +1727,36 @@ async def test_delta_tolerates_an_account_without_notes() -> None:
     delta = await source.delta(None)
 
     assert delta.notes == {}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_add_comment_sends_the_attachment_as_todoist_gave_it() -> None:
+    ids = iter(["u-1", "temp-1"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    repo = ApiTaskRepository(
+        TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+    )
+    attachment = Attachment(
+        file_name="shot.png",
+        file_type="image/png",
+        file_url="https://files.todoist.com/x/shot.png",
+        file_size=2048,
+        image_width=1200,
+        image_height=800,
+    )
+
+    await repo.add_comment(TaskId("t1"), "see this", attachment)
+
+    sent = parse_qs(route.calls.last.request.content.decode())
+    (command,) = json.loads(sent["commands"][0])
+    assert command["args"]["file_attachment"] == {
+        "file_name": "shot.png",
+        "file_type": "image/png",
+        "file_url": "https://files.todoist.com/x/shot.png",
+        "file_size": 2048,
+        "image_width": 1200,
+        "image_height": 800,
+    }

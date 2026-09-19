@@ -205,6 +205,28 @@ class TodoistClient:
             ]
         )
 
+    async def add_note(
+        self, task_id: str, content: str, file_attachment: dict[str, Any] | None = None
+    ) -> None:
+        # a new note needs a temp_id like a new reminder; `file_attachment` is
+        # the dict /uploads answered with, and content may be empty beside it
+        args: dict[str, Any] = {"item_id": task_id, "content": content}
+        if file_attachment is not None:
+            args["file_attachment"] = file_attachment
+        await self._run(
+            [
+                {
+                    "type": "note_add",
+                    "uuid": self._uuid(),
+                    "temp_id": self._uuid(),
+                    "args": args,
+                }
+            ]
+        )
+
+    async def delete_note(self, note_id: str) -> None:
+        await self._command("note_delete", {"id": note_id})
+
     async def delete_reminder(self, reminder_id: str) -> None:
         await self._command("reminder_delete", {"id": reminder_id})
 

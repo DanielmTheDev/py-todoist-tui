@@ -999,3 +999,59 @@ async def test_sync_asks_for_the_notes_resource() -> None:
     sent = parse_qs(route.calls.last.request.content.decode())
     assert "notes" in json.loads(sent["resource_types"][0])
     await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_add_note_posts_the_comment_against_its_task() -> None:
+    ids = iter(["u-1", "temp-1"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+
+    await client.add_note("t1", "looks good")
+
+    sent = parse_qs(route.calls.last.request.content.decode())
+    (command,) = json.loads(sent["commands"][0])
+    assert command["type"] == "note_add"
+    assert command["args"] == {"item_id": "t1", "content": "looks good"}
+    assert command["temp_id"]  # a new note needs one, as a new reminder does
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_add_note_carries_the_file_the_comment_is_about() -> None:
+    ids = iter(["u-1", "temp-1"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+    attachment = {"file_name": "shot.png", "file_url": "https://files.todoist.com/x"}
+
+    await client.add_note("t1", "", attachment)
+
+    sent = parse_qs(route.calls.last.request.content.decode())
+    (command,) = json.loads(sent["commands"][0])
+    assert command["args"]["file_attachment"] == attachment
+    assert command["args"]["content"] == ""  # an image needs no words
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delete_note_removes_one_comment() -> None:
+    ids = iter(["u-1"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"u-1": "ok"}})
+    )
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+
+    await client.delete_note("c1")
+
+    sent = parse_qs(route.calls.last.request.content.decode())
+    (command,) = json.loads(sent["commands"][0])
+    assert command["type"] == "note_delete"
+    assert command["args"] == {"id": "c1"}
+    await client.aclose()

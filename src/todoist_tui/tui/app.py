@@ -23,7 +23,11 @@ from textual.widgets import DataTable, Footer, Rule, Static
 from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.add_task import add_task
-from todoist_tui.application.comments import load_comments
+from todoist_tui.application.comments import (
+    delete_comment,
+    load_comments,
+    post_comment,
+)
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
@@ -129,7 +133,8 @@ from todoist_tui.tui.format import (
 from todoist_tui.tui.imaging import ImagePane, text_pane
 from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
-from todoist_tui.tui.screens.comments import CommentsScreen
+from todoist_tui.tui.screens.comments import CommentRequest, CommentsScreen
+from todoist_tui.tui.screens.compose import ComposeCommentScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import (
     CARD_BINDINGS,
@@ -508,6 +513,7 @@ class TodoistApp(App[None]):
         self._picking_labels = False  # guards against stacking the labels editor
         self._reading_activity = False  # guards against stacking the activity feed
         self._reading_comments = False  # the same, for a task's thread
+        self._commented_task: TaskId | None = None  # whose thread is open
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
         self._active_server_query: str | None = None
@@ -694,13 +700,17 @@ class TodoistApp(App[None]):
         ids = self._targets(table)
         if len(ids) != 1:  # nothing under the cursor, or a selection: no one thread
             return
+        await self._open_comments(TaskId(ids[0]))
+
+    async def _open_comments(self, task_id: TaskId) -> None:
         self._reading_comments = True
         try:
-            comments = await load_comments(self._repo, TaskId(ids[0]))
+            comments = await load_comments(self._repo, task_id)
         except Exception as error:  # offline / refused: report, stay put
             self._set_status(f"Failed to load comments: {error}")
             self._reading_comments = False
             return
+        self._commented_task = task_id  # what a comment written next belongs to
         self._push(
             CommentsScreen(
                 comments,
@@ -723,8 +733,53 @@ class TodoistApp(App[None]):
             raise RuntimeError("this build has nowhere to put a downloaded file")
         return self._files
 
-    def _on_comments_closed(self, _result: str | None) -> None:
+    def _on_comments_closed(self, result: CommentRequest | None) -> None:
         self._reading_comments = False
+        if result is None:
+            return
+        if result.write:
+            self._push(ComposeCommentScreen(), self._on_comment_written)
+        elif result.delete_id is not None:
+            self._confirm_comment_delete(result.delete_id)
+
+    def _confirm_comment_delete(self, comment_id: str) -> None:
+        self._push(
+            ConfirmScreen("Delete this comment?"),
+            lambda confirmed: self._on_comment_delete(comment_id, confirmed),
+        )
+
+    def _on_comment_delete(self, comment_id: str, confirmed: bool | None) -> None:
+        if confirmed:
+            self.run_worker(self._deleting(comment_id))
+
+    async def _deleting(self, comment_id: str) -> None:
+        task_id = self._commented_task
+        if task_id is None:  # the thread was closed before this landed
+            return
+        try:
+            await delete_comment(self._repo, comment_id)
+        except Exception as error:
+            self._set_status(f"Failed to delete the comment: {error}")
+            return
+        await self._open_comments(task_id)
+
+    def _on_comment_written(self, written: str | None) -> None:
+        if written is None:  # the writing was abandoned
+            return
+        self.run_worker(self._posting(written))
+
+    async def _posting(
+        self, content: str, attachment: Attachment | None = None
+    ) -> None:
+        task_id = self._commented_task
+        if task_id is None:  # the thread was closed before this landed
+            return
+        try:
+            await post_comment(self._repo, task_id, content, attachment)
+        except Exception as error:
+            self._set_status(f"Failed to post the comment: {error}")
+            return
+        await self._open_comments(task_id)  # reopen on what the server now holds
 
     async def _activity_page(
         self, event_type: EventKind | None, cursor: str | None

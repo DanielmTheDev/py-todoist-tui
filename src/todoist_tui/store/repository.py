@@ -3,7 +3,7 @@ from collections.abc import Sequence
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.clock import Clock
-from todoist_tui.domain.comment import Comment, with_note_counts
+from todoist_tui.domain.comment import Attachment, Comment, with_note_counts
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -219,6 +219,16 @@ class SnapshotTaskRepository:
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         await self._inner.set_text(task_id, content, description)
         self._mark_stale()
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
+        await self._inner.add_comment(task_id, content, attachment)
+        self._mark_stale()  # the comment marker counts what the next sync brings
+
+    async def delete_comment(self, comment_id: str) -> None:
+        await self._inner.delete_comment(comment_id)
+        self._mark_stale()  # one comment fewer for the marker to count
 
     async def add_reminder(self, reminder: Reminder) -> None:
         await self._inner.add_reminder(reminder)

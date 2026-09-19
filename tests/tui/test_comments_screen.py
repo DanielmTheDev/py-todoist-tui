@@ -10,7 +10,11 @@ from textual.worker import WorkerState
 
 from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.tui.imaging import text_pane
-from todoist_tui.tui.screens.comments import CommentsScreen, OpenFile
+from todoist_tui.tui.screens.comments import (
+    CommentRequest,
+    CommentsScreen,
+    OpenFile,
+)
 
 _TODAY = datetime.date(2026, 9, 18)
 _AT = datetime.datetime(2026, 9, 18, 19, 4, tzinfo=datetime.UTC)
@@ -101,7 +105,7 @@ class _Host(App[None]):
         self._opener = opener
         self._files = files
         self._panes = panes
-        self.result: str | None = "unset"
+        self.result: CommentRequest | None | str = "unset"
 
     def on_mount(self) -> None:
         self.push_screen(
@@ -116,7 +120,7 @@ class _Host(App[None]):
             self._taken,
         )
 
-    def _taken(self, result: str | None) -> None:
+    def _taken(self, result: CommentRequest | None) -> None:
         self.result = result
 
 
@@ -337,3 +341,31 @@ async def test_an_image_the_renderer_chokes_on_says_so() -> None:
     )
 
     assert "No preview" in text
+
+
+@pytest.mark.anyio
+async def test_a_asks_for_a_comment_to_be_written() -> None:
+    _, host = await _shown((_PLAIN,), "a")
+
+    assert host.result == CommentRequest(write=True)
+
+
+@pytest.mark.anyio
+async def test_the_hint_names_writing_a_comment() -> None:
+    text, _ = await _shown((_PLAIN,))
+
+    assert "a add" in text
+
+
+@pytest.mark.anyio
+async def test_d_asks_for_the_comment_under_the_cursor_to_go() -> None:
+    _, host = await _shown((_PLAIN, _WITH_IMAGE), "d")
+
+    assert host.result == CommentRequest(delete_id="c2")
+
+
+@pytest.mark.anyio
+async def test_d_on_an_empty_thread_asks_for_nothing() -> None:
+    _, host = await _shown((), "d")
+
+    assert host.result == "unset"  # still open, nothing to delete

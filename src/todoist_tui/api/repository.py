@@ -4,7 +4,7 @@ from typing import Any
 
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.activity import ActivityEvent, ActivityPage, EventKind
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -89,6 +89,16 @@ class ApiTaskRepository:
         body = await self._client.sync("*")
         live, _deleted = _split(body.get("reminders", []), _to_reminder)
         return live
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
+        await self._client.add_note(
+            str(task_id), content, attachment.to_api if attachment else None
+        )
+
+    async def delete_comment(self, comment_id: str) -> None:
+        await self._client.delete_note(comment_id)
 
     async def add_reminder(self, reminder: Reminder) -> None:
         await self._client.add_reminder(reminder.item_id, reminder.to_api)

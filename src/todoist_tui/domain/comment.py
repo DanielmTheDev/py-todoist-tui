@@ -37,6 +37,20 @@ class Attachment:
         )
 
     @property
+    def to_api(self) -> dict[str, Any]:
+        """The `file_attachment` a comment is posted with. Todoist hands this
+        dict back on upload and takes it again verbatim; the thumbnails it adds
+        later are its own business, not something to send."""
+        return {
+            "file_name": self.file_name,
+            "file_type": self.file_type,
+            "file_url": self.file_url,
+            "file_size": self.file_size,
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+        }
+
+    @property
     def is_image(self) -> bool:
         return self.file_type.startswith("image/")
 

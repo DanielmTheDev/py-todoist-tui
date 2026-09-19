@@ -4,7 +4,7 @@ import pytest
 
 from todoist_tui.application.move_task import move_task, move_to_parent
 from todoist_tui.domain.activity import ActivityPage, EventKind
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -59,6 +59,12 @@ class FakeRepository:
 
     async def comments(self, task_id: TaskId) -> list[Comment]:
         return []
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None: ...
+
+    async def delete_comment(self, comment_id: str) -> None: ...
 
     async def complete(self, task_id: TaskId) -> None: ...
 

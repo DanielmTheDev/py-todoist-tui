@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -24,9 +25,18 @@ _CURSOR = "❯ "  # marks the comment the keys act on
 _NO_CURSOR = "  "
 _ATTACHMENT = "\U0001f5bc "  # frames the file a comment carries
 _CLOSE_KEYS = ("escape", "q")
-_HINT = "j/k move \u00b7 o open the file \u00b7 esc close"
+_HINT = "a add \u00b7 j/k move \u00b7 o open the file \u00b7 d delete \u00b7 esc close"
 _DOWN_KEYS = ("j", "down")
 _UP_KEYS = ("k", "up")
+
+
+@dataclass(frozen=True, slots=True)
+class CommentRequest:
+    """What the thread was asked for, once it has stepped out of the way. The
+    app owns the screens a comment is written on and the writing itself."""
+
+    write: bool = False
+    delete_id: str | None = None
 
 
 type OpenFile = Callable[[Attachment], Awaitable[None]]
@@ -50,10 +60,10 @@ class CommentThread(Static):
     DEFAULT_CSS = PALETTE_CSS
 
 
-class CommentsScreen(ModalScreen[str | None]):
+class CommentsScreen(ModalScreen["CommentRequest | None"]):
     """One task's comments, oldest first, with the newest under the cursor —
-    that is the one you came to read. Read-only for now: `j`/`k` walk the
-    thread, escape or `q` closes it."""
+    that is the one you came to read. `j`/`k` walk the thread, `o` shows the
+    file a comment carries, `a` writes a new one, escape or `q` closes it."""
 
     DEFAULT_CSS = """
     CommentsScreen {
@@ -128,6 +138,10 @@ class CommentsScreen(ModalScreen[str | None]):
             self._move(-1)
         elif event.key == "o":
             self._open()
+        elif event.key == "a":
+            self.dismiss(CommentRequest(write=True))
+        elif event.key == "d":
+            self._delete()
         event.stop()  # consume every key so app bindings never fire under the modal
 
     def _open(self) -> None:
@@ -145,6 +159,10 @@ class CommentsScreen(ModalScreen[str | None]):
             self._say(f"Could not open {attachment.file_name}: {error}")
         else:
             self._say(_HINT)
+
+    def _delete(self) -> None:
+        if self._comments:  # an empty thread has nothing to take back
+            self.dismiss(CommentRequest(delete_id=self._comments[self._cursor].id))
 
     def _preview(self) -> None:
         """Draw the image the cursor rests on, and nothing else."""

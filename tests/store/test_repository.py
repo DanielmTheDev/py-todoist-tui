@@ -6,7 +6,7 @@ from datetime import date, time
 import pytest
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan, NewProject
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -81,6 +81,8 @@ class FakeInner:
         self.filtered_queries: list[str] = []
         self.activity_calls: list[tuple[EventKind | None, str | None]] = []
         self.comment_calls: list[TaskId] = []
+        self.posted_comments: list[tuple[TaskId, str, Attachment | None]] = []
+        self.deleted_comments: list[str] = []
         self._filtered_result = filtered_result or []
 
     async def today(self) -> list[Task]:
@@ -128,6 +130,14 @@ class FakeInner:
     async def comments(self, task_id: TaskId) -> list[Comment]:
         self.comment_calls.append(task_id)
         return []
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
+        self.posted_comments.append((task_id, content, attachment))
+
+    async def delete_comment(self, comment_id: str) -> None:
+        self.deleted_comments.append(comment_id)
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -712,3 +722,34 @@ async def test_a_filter_result_carries_the_comment_counts_too() -> None:
     (task,) = await repo.filtered("today")
 
     assert task.note_count == 2
+
+
+@pytest.mark.anyio
+async def test_a_comment_written_before_any_read_leaves_the_disk_copy_behind() -> None:
+    """A comment changes the count the marker reads, so it marks the snapshot
+    stale like any other mutation: the disk copy is skipped, and a read syncs."""
+    inner = FakeInner()
+    source = FakeSource(_incremental("after", deleted_task="a"))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
+
+    await repo.add_comment(TaskId("t1"), "ship it")
+    inbox = await repo.inbox()
+
+    assert inner.posted_comments == [(TaskId("t1"), "ship it", None)]
+    assert source.snapshot_calls == 1
+    assert [str(t.id) for t in inbox] == ["c"]
+
+
+@pytest.mark.anyio
+async def test_deleting_a_comment_marks_the_snapshot_stale_too() -> None:
+    inner = FakeInner()
+    source = FakeSource(_incremental("after", deleted_task="a"))
+    cache = FakeCache(stored=_snapshot("cached"))
+    repo = SnapshotTaskRepository(inner, source, cache, _CLOCK)
+
+    await repo.delete_comment("c1")
+    await repo.inbox()
+
+    assert inner.deleted_comments == ["c1"]
+    assert source.snapshot_calls == 1  # the disk copy no longer speaks for the count

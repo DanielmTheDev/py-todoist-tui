@@ -5,7 +5,7 @@ import pytest
 
 from todoist_tui.application.add_task import add_task
 from todoist_tui.domain.activity import ActivityPage, EventKind
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import (
     CreationPlan,
     NewChild,
@@ -68,6 +68,12 @@ class FakeRepository:
 
     async def comments(self, task_id: TaskId) -> list[Comment]:
         return []
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None: ...
+
+    async def delete_comment(self, comment_id: str) -> None: ...
 
     async def reminders(self) -> list[Reminder]:
         return []

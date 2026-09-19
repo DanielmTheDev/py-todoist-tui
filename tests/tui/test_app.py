@@ -71,6 +71,7 @@ from todoist_tui.tui.app import (
 from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.comments import CommentsScreen
+from todoist_tui.tui.screens.compose import ComposeCommentScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
 from todoist_tui.tui.screens.draft import (
@@ -119,6 +120,8 @@ class FakeRepository:
         self._events = events
         self._comments = comments
         self.comment_reads: list[TaskId] = []
+        self.posted: list[tuple[TaskId, str, Attachment | None]] = []
+        self.deleted_comments: list[str] = []
         self.added_reminders: list[Reminder] = []
         self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
@@ -186,6 +189,25 @@ class FakeRepository:
     async def comments(self, task_id: TaskId) -> list[Comment]:
         self.comment_reads.append(task_id)
         return list(self._comments)
+
+    async def delete_comment(self, comment_id: str) -> None:
+        self.deleted_comments.append(comment_id)
+        self._comments = tuple(c for c in self._comments if c.id != comment_id)
+
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
+        self.posted.append((task_id, content, attachment))
+        self._comments = (
+            *self._comments,
+            Comment(
+                id=f"c{len(self.posted)}",
+                task_id=str(task_id),
+                content=content,
+                posted_at=datetime.datetime(2026, 7, 21, 10, tzinfo=datetime.UTC),
+                attachment=attachment,
+            ),
+        )
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -369,6 +391,13 @@ class FakeRepository:
 
 class FailingCommentsRepository(FakeRepository):
     async def comments(self, task_id: TaskId) -> list[Comment]:
+        raise RuntimeError("offline")
+
+
+class FailingPostRepository(FakeRepository):
+    async def add_comment(
+        self, task_id: TaskId, content: str, attachment: Attachment | None = None
+    ) -> None:
         raise RuntimeError("offline")
 
 
@@ -9051,3 +9080,94 @@ async def test_the_thread_draws_the_image_it_opened_with() -> None:
 
         assert drawn == [Path("/cache/shot.png")]
         assert app.screen.query("#drawn")
+
+
+@pytest.mark.anyio
+async def test_a_in_the_thread_writes_a_comment_and_shows_it() -> None:
+    """Posting reopens the thread on what the server now holds, so the comment
+    is there to read rather than merely sent."""
+    repo = FakeRepository([_noted("t1")], [], comments=())
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ComposeCommentScreen)
+        for key in ("s", "h", "i", "p"):
+            await pilot.press(key)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.posted == [(TaskId("t1"), "ship", None)]
+        assert isinstance(app.screen, CommentsScreen)
+        assert "ship" in str(app.screen.query_one("#comments", Static).content)
+
+
+@pytest.mark.anyio
+async def test_a_comment_that_will_not_post_is_reported() -> None:
+    repo = FailingPostRepository([_noted("t1")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press("h", "i")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await settled(app)
+
+        assert "Failed to post the comment" in _status(app)
+
+
+@pytest.mark.anyio
+async def test_d_in_the_thread_takes_a_comment_back_once_confirmed() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_A_COMMENT,))
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted_comments == ["c1"]
+        assert isinstance(app.screen, CommentsScreen)
+        assert "No comments" in str(app.screen.query_one("#comments", Static).content)
+
+
+@pytest.mark.anyio
+async def test_a_comment_survives_a_declined_delete() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_A_COMMENT,))
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        await settled(app)
+
+        assert repo.deleted_comments == []
