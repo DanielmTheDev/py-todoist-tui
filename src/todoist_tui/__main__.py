@@ -3,15 +3,18 @@ import asyncio
 import sys
 from collections.abc import Sequence
 
+from todoist_tui.api.attachments import HttpAttachments
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.api.repository import ApiSnapshotSource, ApiTaskRepository
 from todoist_tui.config import (
     ConfigError,
+    default_attachment_dir,
     default_cache_path,
     default_config_path,
     load_token,
 )
 from todoist_tui.domain.clock import SystemClock
+from todoist_tui.store.attachments import CachedAttachments
 from todoist_tui.store.repository import SnapshotTaskRepository
 from todoist_tui.store.sqlite import (
     SqliteArrangementStore,
@@ -20,6 +23,7 @@ from todoist_tui.store.sqlite import (
     SqliteViewSlotStore,
 )
 from todoist_tui.tui.app import TodoistApp
+from todoist_tui.tui.imaging import graphics_pane
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -51,7 +55,10 @@ async def _run(token: str, reset_cache: bool = False) -> None:
     cache = SqliteSnapshotCache(cache_path)
     if reset_cache:
         await cache.clear()
-    async with TodoistClient.create(token) as client:
+    async with (
+        TodoistClient.create(token) as client,
+        HttpAttachments.create(token) as downloads,
+    ):
         repo = SnapshotTaskRepository(
             ApiTaskRepository(client),
             ApiSnapshotSource(client),
@@ -64,6 +71,8 @@ async def _run(token: str, reset_cache: bool = False) -> None:
             clock,
             slots=SqliteViewSlotStore(cache_path),
             folds=SqliteFoldStore(cache_path),
+            files=CachedAttachments(default_attachment_dir(), downloads),
+            image_pane=graphics_pane(),
         )
         await app.run_async()
 

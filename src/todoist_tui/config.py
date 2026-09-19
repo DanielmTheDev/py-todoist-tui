@@ -15,6 +15,12 @@ def default_cache_path() -> Path:
     return Path.home() / ".cache" / "todoist" / "tui.sqlite3"
 
 
+def default_attachment_dir() -> Path:
+    """Where a comment's files are kept once fetched — beside the cache, since
+    they are as disposable as it is."""
+    return Path.home() / ".cache" / "todoist" / "attachments"
+
+
 def load_token(path: Path) -> str:
     if not path.is_file():
         raise ConfigError(f"config not found: {path}")

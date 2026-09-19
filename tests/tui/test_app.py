@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -43,7 +44,7 @@ from todoist_tui.domain.arrange import (
     SortKey,
     TaskLine,
 )
-from todoist_tui.domain.comment import Comment
+from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -8965,3 +8966,88 @@ async def test_a_thread_that_cannot_be_read_is_reported_not_opened() -> None:
 
         assert not isinstance(app.screen, CommentsScreen)
         assert "Failed to load comments" in _status(app)
+
+
+class _FakeOpener:
+    def __init__(self) -> None:
+        self.opened: list[str] = []
+
+    def open(self, url: str) -> None:
+        self.opened.append(url)
+
+
+@pytest.mark.anyio
+async def test_the_thread_opens_an_attachment_through_the_cache_and_the_opener() -> (
+    None
+):
+    """The TUI hands over an attachment and gets back a local path to show; it
+    never fetches or writes anything itself."""
+
+    class FakeFiles:
+        def __init__(self) -> None:
+            self.asked: list[Attachment] = []
+
+        async def local(self, attachment: Attachment) -> Path:
+            self.asked.append(attachment)
+            return Path("/cache/abc.png")
+
+    attachment = Attachment(
+        file_name="shot.png",
+        file_type="image/png",
+        file_url="https://files.todoist.com/x/shot.png",
+    )
+    commented = replace(_A_COMMENT, attachment=attachment)
+    repo = FakeRepository([_noted("t1")], [], comments=(commented,))
+    files = FakeFiles()
+    opener = _FakeOpener()
+    app = TodoistApp(repo, link_opener=opener, files=files)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        await settled(app)
+
+        # once to preview it inline, once to hand it to the viewer — the second
+        # is free, the copy is already on disk
+        assert files.asked == [attachment, attachment]
+        assert opener.opened == ["/cache/abc.png"]
+
+
+@pytest.mark.anyio
+async def test_the_thread_draws_the_image_it_opened_with() -> None:
+    """The preview starts while the screen is still being mounted: its worker
+    must not mistake that for a screen that has gone away."""
+
+    class FakeFiles:
+        async def local(self, attachment: Attachment) -> Path:
+            return Path(f"/cache/{attachment.file_name}")
+
+    drawn: list[Path] = []
+
+    def pane(path: Path, file_name: str) -> Static:
+        drawn.append(path)
+        return Static(f"<image {file_name}>", id="drawn")
+
+    attachment = Attachment(
+        file_name="shot.png",
+        file_type="image/png",
+        file_url="https://files.todoist.com/x/shot.png",
+    )
+    repo = FakeRepository(
+        [_noted("t1")], [], comments=(replace(_A_COMMENT, attachment=attachment),)
+    )
+    app = TodoistApp(repo, files=FakeFiles(), image_pane=pane)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert drawn == [Path("/cache/shot.png")]
+        assert app.screen.query("#drawn")

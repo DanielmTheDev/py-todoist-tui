@@ -41,6 +41,7 @@ from todoist_tui.application.mutation import (
 from todoist_tui.application.mutation import (
     reorder_sections as reorder_sections_mutation,
 )
+from todoist_tui.application.open_attachment import open_attachment
 from todoist_tui.application.outbox import Command, Outbox
 from todoist_tui.application.reorder import (
     reorder,
@@ -79,7 +80,9 @@ from todoist_tui.domain.arrange import (
     group_path_of,
     group_paths,
 )
+from todoist_tui.domain.attachments import AttachmentFiles
 from todoist_tui.domain.clock import Clock, SystemClock
+from todoist_tui.domain.comment import Attachment
 from todoist_tui.domain.creation import NewChild
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -123,6 +126,7 @@ from todoist_tui.tui.format import (
     priority_dot,
     render_links,
 )
+from todoist_tui.tui.imaging import ImagePane, text_pane
 from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
 from todoist_tui.tui.screens.comments import CommentsScreen
@@ -441,6 +445,8 @@ class TodoistApp(App[None]):
         link_opener: LinkOpener | None = None,
         slots: ViewSlotStore | None = None,
         folds: FoldStore | None = None,
+        files: AttachmentFiles | None = None,
+        image_pane: ImagePane = text_pane,
     ) -> None:
         super().__init__()
         self.register_theme(TODOIST_THEME)
@@ -451,6 +457,11 @@ class TodoistApp(App[None]):
         self._folds = folds or InMemoryFolds()
         self._clock = clock or SystemClock()
         self._link_opener = link_opener or XdgOpenLinkOpener()
+        # no default: fetching a file needs the token and a cache directory,
+        # neither of which the TUI layer is allowed to reach for itself
+        self._files = files
+        # loaded before the app starts, where probing the terminal still works
+        self._image_pane = image_pane
         self._arrangement = Arrangement()  # current view's group/sort
         self._rows: list[TaskRow] = []  # last loaded rows, as the server has them
         self._visible: list[TaskRow] = []  # `_rows` with the outbox replayed on top
@@ -691,8 +702,26 @@ class TodoistApp(App[None]):
             self._reading_comments = False
             return
         self._push(
-            CommentsScreen(comments, self._clock.today()), self._on_comments_closed
+            CommentsScreen(
+                comments,
+                self._clock.today(),
+                open_file=self._show_file,
+                fetch_file=self._fetch_file,
+                image_pane=self._image_pane,
+            ),
+            self._on_comments_closed,
         )
+
+    async def _show_file(self, attachment: Attachment) -> None:
+        await open_attachment(self._attachments(), self._link_opener, attachment)
+
+    async def _fetch_file(self, attachment: Attachment) -> Path:
+        return await self._attachments().local(attachment)
+
+    def _attachments(self) -> AttachmentFiles:
+        if self._files is None:
+            raise RuntimeError("this build has nowhere to put a downloaded file")
+        return self._files
 
     def _on_comments_closed(self, _result: str | None) -> None:
         self._reading_comments = False

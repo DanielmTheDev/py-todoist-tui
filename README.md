@@ -21,7 +21,8 @@ elsewhere (i3 quick-add); this tool is for browsing, filtering, and bulk editing
 ./install.sh
 ```
 Installs `todoist-tui` as an editable [`uv` tool](https://docs.astral.sh/uv/guides/tools/)
-— the command tracks this checkout, so `git pull` is enough to update it — and
+— the command tracks this checkout, so `git pull` is enough to update it, unless
+the pull brought a new dependency: re-run `./install.sh` then — and
 adds uv's bin directory to `PATH` in your shell config (zsh, bash, fish, or
 `~/.profile`) if it isn't there already. Re-running it is safe.
 
@@ -52,7 +53,7 @@ uv run todoist-tui # from a checkout
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |
-| `C` | Read the comments on the task under the cursor (`❞` in a row marks a commented task) |
+| `C` | Read the comments on the task under the cursor (`❞` in a row marks a commented task); inside the thread, `j`/`k` move, the image under the cursor previews inline, and `o` opens the file in your usual viewer |
 | `j`/`↓` `k`/`↑` | Move the cursor down / up |
 | `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor; `h` keeps climbing out — to the parent task, then to the group holding it |
 | `J`/`K` | Move the task under the cursor down / up among its siblings; on a section header, move the section itself (project views only) |
@@ -64,6 +65,12 @@ cancels. `ctrl+s` marks the view the app opens into (`★`); pressing it again
 clears the mark and startup falls back to Today. Picking a `§` section opens
 its project with the cursor on that section's header — a section takes no jump
 key and no startup mark of its own.
+
+A comment's image previews inline when the terminal can draw one (ghostty,
+kitty, or anything with Sixel). Set `TODOIST_TUI_IMAGE` to `tgp`, `sixel`,
+`halfcell` or `unicode` to name the renderer yourself — `halfcell` draws with
+Unicode blocks and needs no graphics protocol. Without one, a comment names its
+file and `o` still opens it.
 
 Saved filters sync from your Todoist account; opening one runs its query on
 Todoist (full fidelity) and caches the result, refreshing in the background.
