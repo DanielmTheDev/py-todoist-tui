@@ -40,7 +40,11 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-allowed-confusables = ["›"]  # hierarchy separator in the arrange status line
+allowed-confusables = [
+    "›",  # hierarchy separator in the arrange status line
+    "❯",  # cursor in the comments thread
+    "×",  # between an image's width and height
+]
 
 [tool.pyright]
 include = ["src", "tests"]

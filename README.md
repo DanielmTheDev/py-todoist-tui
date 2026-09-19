@@ -52,6 +52,7 @@ uv run todoist-tui # from a checkout
 | `e` | Complete the highlighted task |
 | `z` | Undo the last complete |
 | `r` | Force a resync |
+| `C` | Read the comments on the task under the cursor (`❞` in a row marks a commented task) |
 | `j`/`↓` `k`/`↑` | Move the cursor down / up |
 | `l`/`→` `h`/`←` | Expand / collapse the task or group under the cursor; `h` keeps climbing out — to the parent task, then to the group holding it |
 | `J`/`K` | Move the task under the cursor down / up among its siblings; on a section header, move the section itself (project views only) |

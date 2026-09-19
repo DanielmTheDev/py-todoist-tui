@@ -34,6 +34,7 @@ def _row(
     description: str = "2% from the corner store",
     deadline: Deadline | None = None,
     reminders: tuple[Reminder, ...] = (),
+    note_count: int = 0,
 ) -> TaskRow:
     return TaskRow(
         id=TaskId("6X4"),
@@ -46,6 +47,7 @@ def _row(
         description=description,
         deadline=deadline,
         reminders=reminders,
+        note_count=note_count,
     )
 
 
@@ -429,3 +431,18 @@ async def test_the_card_lists_the_task_s_subtasks() -> None:
 @pytest.mark.anyio
 async def test_a_task_without_subtasks_gets_no_subtask_section() -> None:
     assert "SUBTASKS" not in await _shown(_row())
+
+
+@pytest.mark.anyio
+async def test_the_card_counts_the_comments_waiting_on_the_task() -> None:
+    shown = await _shown(_row(note_count=2))
+
+    assert "Comments" in shown
+    assert "2" in shown
+
+
+@pytest.mark.anyio
+async def test_a_task_nobody_commented_on_renders_a_dash() -> None:
+    shown = await _shown(_row(note_count=0))
+
+    assert "Comments" in shown

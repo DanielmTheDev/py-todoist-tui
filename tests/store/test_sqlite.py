@@ -62,6 +62,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 deadline=Deadline(date=datetime.date(2026, 8, 15)),
                 child_order=3,
                 day_order=2,
+                note_count=2,  # matches the two notes below
             ),
             Task(
                 id=TaskId("b"),
@@ -74,6 +75,7 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 day_order=-1,
             ),
         ],
+        notes={"n1": "a", "n2": "a"},
         reminders=[
             Reminder(id="rm1", item_id="a", type="relative", minute_offset=30),
             Reminder(
@@ -181,6 +183,7 @@ async def test_save_then_load_roundtrips_the_snapshot(tmp_path: Path) -> None:
     assert loaded.tasks[0].section_id == "s1"
     assert loaded.tasks[0].deadline == Deadline(date=datetime.date(2026, 8, 15))
     assert loaded.tasks[0].parent_id is None
+    assert loaded.notes == {"n1": "a", "n2": "a"}
     assert loaded.tasks[1].section_id is None
     assert loaded.tasks[1].deadline is None
     assert loaded.tasks[1].parent_id == "a"

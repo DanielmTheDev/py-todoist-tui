@@ -594,6 +594,7 @@ async def test_sync_posts_full_sync_and_returns_body() -> None:
         "sections",
         "labels",
         "reminders",
+        "notes",
     ]
     await client.aclose()
 
@@ -959,4 +960,42 @@ async def test_activities_passes_event_type_and_cursor() -> None:
     params = route.calls.last.request.url.params
     assert params["event_type"] == "completed"
     assert params["cursor"] == "abc"
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_comments_asks_for_one_task_and_drains_the_pages() -> None:
+    route = respx.get(f"{BASE_URL}/comments").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": [{"id": "c1"}], "next_cursor": "ab"}),
+            httpx.Response(200, json={"results": [{"id": "c2"}], "next_cursor": None}),
+        ]
+    )
+    client = TodoistClient.create("tok")
+
+    comments = await client.comments("t1")
+
+    assert [c["id"] for c in comments] == ["c1", "c2"]
+    assert route.calls.last.request.url.params["task_id"] == "t1"
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_sync_asks_for_the_notes_resource() -> None:
+    """The comment marker is counted from the notes; an item's own note_count is
+    only filled on a full sync and never refreshed afterwards."""
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={"full_sync": True, "items": [], "projects": [], "sync_token": "t"},
+        )
+    )
+    client = TodoistClient.create("tok")
+
+    await client.sync()
+
+    sent = parse_qs(route.calls.last.request.content.decode())
+    assert "notes" in json.loads(sent["resource_types"][0])
     await client.aclose()

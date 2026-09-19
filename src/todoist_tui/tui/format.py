@@ -2,6 +2,7 @@ import datetime
 
 from rich.text import Text
 
+from todoist_tui.domain.comment import Attachment
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.humanize import humanize_date
@@ -15,6 +16,7 @@ MATCH_STYLE = ACCENT  # undecorated accent: points at what matched
 _PRIORITY_DOT = "●"
 _ELLIPSIS = "…"
 _DESCRIPTION_GLYPH = " ≡"
+_COMMENT_GLYPH = " ❞"
 
 
 def priority_dot(priority: Priority) -> str:
@@ -85,6 +87,34 @@ def description_marker(description: str) -> str:
     """Mark a task that carries a description; presence only, since the list has
     no room for the note itself. Blank-only text doesn't count as one."""
     return _DESCRIPTION_GLYPH if description.strip() else ""
+
+
+def format_size(size: int) -> str:
+    """A file size a person can read at a glance: one decimal from KB up."""
+    if size < 1024:
+        return f"{size} B"
+    kilobytes = size / 1024
+    if kilobytes < 1024:
+        return f"{kilobytes:.1f} KB"
+    return f"{kilobytes / 1024:.1f} MB"
+
+
+def format_attachment(attachment: Attachment) -> str:
+    """The one line that names a comment's file: what it is, how big, how wide."""
+    parts = [attachment.file_name]
+    if attachment.file_size:
+        parts.append(format_size(attachment.file_size))
+    if attachment.image_width and attachment.image_height:
+        parts.append(f"{attachment.image_width}×{attachment.image_height}")
+    return " · ".join(parts)
+
+
+def comment_marker(count: int) -> str:
+    """Mark a task that carries comments, counted only past the first — as the
+    reminder badge does, so the common single comment stays a bare glyph."""
+    if count <= 0:
+        return ""
+    return _COMMENT_GLYPH if count == 1 else f"{_COMMENT_GLYPH}{count}"
 
 
 def date_tier(d: datetime.date, today: datetime.date) -> Tier:

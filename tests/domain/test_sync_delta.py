@@ -271,3 +271,65 @@ def test_incremental_removes_deleted_project() -> None:
     merged = merge(_prior(), delta)
 
     assert [p.id for p in merged.projects] == ["220"]
+
+
+def test_full_sync_replaces_the_notes_and_counts_them_onto_their_tasks() -> None:
+    prior = Snapshot(
+        projects=[], tasks=[_task("t1")], sync_token="old", notes={"n0": "t1"}
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[_task("t1"), _task("t2")],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=True,
+        notes={"n1": "t1", "n2": "t1", "n3": "t2"},
+    )
+
+    merged = merge(prior, delta)
+
+    assert merged.notes == {"n1": "t1", "n2": "t1", "n3": "t2"}
+    assert [(str(t.id), t.note_count) for t in merged.tasks] == [("t1", 2), ("t2", 1)]
+
+
+def test_a_comment_added_since_the_last_sync_counts_without_its_task() -> None:
+    """Todoist never re-sends the item when a note is added, so the count can
+    only come from the notes themselves."""
+    prior = Snapshot(projects=[], tasks=[_task("t1")], sync_token="old")
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        notes={"n1": "t1"},
+    )
+
+    merged = merge(prior, delta)
+
+    assert [(str(t.id), t.note_count) for t in merged.tasks] == [("t1", 1)]
+
+
+def test_a_deleted_comment_stops_counting() -> None:
+    prior = Snapshot(
+        projects=[],
+        tasks=[_task("t1")],
+        sync_token="old",
+        notes={"n1": "t1", "n2": "t1"},
+    )
+    delta = SyncDelta(
+        projects=[],
+        tasks=[],
+        deleted_project_ids=frozenset(),
+        deleted_task_ids=frozenset(),
+        sync_token="new",
+        full_sync=False,
+        deleted_note_ids=frozenset({"n1"}),
+    )
+
+    merged = merge(prior, delta)
+
+    assert merged.notes == {"n2": "t1"}
+    assert merged.tasks[0].note_count == 1

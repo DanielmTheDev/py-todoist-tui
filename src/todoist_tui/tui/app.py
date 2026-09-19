@@ -23,6 +23,7 @@ from textual.widgets import DataTable, Footer, Rule, Static
 from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.add_task import add_task
+from todoist_tui.application.comments import load_comments
 from todoist_tui.application.complete import complete_task, uncomplete_task
 from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
@@ -111,6 +112,7 @@ from todoist_tui.tui.columns import (
     fit_row,
 )
 from todoist_tui.tui.format import (
+    comment_marker,
     date_tier,
     description_marker,
     due_tier,
@@ -123,6 +125,7 @@ from todoist_tui.tui.format import (
 )
 from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen, Mode
+from todoist_tui.tui.screens.comments import CommentsScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import (
     CARD_BINDINGS,
@@ -402,6 +405,7 @@ class TodoistApp(App[None]):
         Binding("slash", "search", "Search", show=False),
         Binding("p", "views", "Views", show=False),
         Binding("c", "activity", "Activity", show=False),
+        Binding("C", "comments", "Comments", show=False),
         Binding("g", "arrange_group", "Group", show=False),
         Binding("s", "arrange_sort", "Sort", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -492,6 +496,7 @@ class TodoistApp(App[None]):
         self._bound = ViewSlots()  # jump keys, reloaded from the store on mount
         self._picking_labels = False  # guards against stacking the labels editor
         self._reading_activity = False  # guards against stacking the activity feed
+        self._reading_comments = False  # the same, for a task's thread
         # the server query of the open view — a saved filter's, or a search's —
         # re-run on every sync so that view stays live
         self._active_server_query: str | None = None
@@ -670,6 +675,27 @@ class TodoistApp(App[None]):
             ActivityScreen(rows, self._clock.today(), self._activity_page, cursor),
             self._on_activity_closed,
         )
+
+    async def action_comments(self) -> None:
+        if self._reading_comments:  # already loading or the thread is already open
+            return
+        table = self.query_one(TaskTable)
+        ids = self._targets(table)
+        if len(ids) != 1:  # nothing under the cursor, or a selection: no one thread
+            return
+        self._reading_comments = True
+        try:
+            comments = await load_comments(self._repo, TaskId(ids[0]))
+        except Exception as error:  # offline / refused: report, stay put
+            self._set_status(f"Failed to load comments: {error}")
+            self._reading_comments = False
+            return
+        self._push(
+            CommentsScreen(comments, self._clock.today()), self._on_comments_closed
+        )
+
+    def _on_comments_closed(self, _result: str | None) -> None:
+        self._reading_comments = False
 
     async def _activity_page(
         self, event_type: EventKind | None, cursor: str | None
@@ -2548,6 +2574,8 @@ def _title_cell(
     title.append(_expand_marker(line))
     title.append_text(render_links(row.content))
     if marker := description_marker(row.description):
+        title.append(marker, style=styles[Tier.MUTED])
+    if marker := comment_marker(row.note_count):
         title.append(marker, style=styles[Tier.MUTED])
     if unconfirmed:  # this row's change is still on its way to Todoist
         title.append(PENDING_MARK, style=styles[Tier.MUTED])

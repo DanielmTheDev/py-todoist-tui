@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from todoist_tui.domain.arrange import Arrangement, GroupPath
+from todoist_tui.domain.comment import with_note_counts
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.filter import Filter
@@ -38,6 +39,7 @@ _CACHED_TABLES = (
     "sections",
     "labels",
     "reminders",
+    "notes",
 )
 
 _DROPS = "".join(f"DROP TABLE IF EXISTS {table};\n" for table in _CACHED_TABLES)
@@ -69,6 +71,7 @@ CREATE TABLE reminders (
     id TEXT, item_id TEXT, type TEXT,
     due_date TEXT, due_time TEXT, minute_offset INTEGER, notify_uid TEXT
 );
+CREATE TABLE notes (id TEXT, item_id TEXT);
 """
 )
 
@@ -140,16 +143,24 @@ class SqliteSnapshotCache:
                         " minute_offset, notify_uid FROM reminders"
                     )
                 ]
+                notes = {
+                    str(note_id): str(item_id)
+                    for note_id, item_id in conn.execute(
+                        "SELECT id, item_id FROM notes"
+                    )
+                }
             except sqlite3.OperationalError:  # missing/legacy schema: treat as cold
                 return None
         return Snapshot(
             projects=projects,
-            tasks=tasks,
+            # the count is not stored with the task: it is whatever the notes say
+            tasks=with_note_counts(tasks, notes),
             sync_token=token_row[0],
             filters=filters,
             sections=sections,
             labels=labels,
             reminders=reminders,
+            notes=notes,
         )
 
     def _clear(self) -> None:
@@ -192,6 +203,10 @@ class SqliteSnapshotCache:
                 "INSERT INTO reminders (id, item_id, type, due_date, due_time,"
                 " minute_offset, notify_uid) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [_reminder_to_row(r) for r in snapshot.reminders],
+            )
+            conn.executemany(
+                "INSERT INTO notes (id, item_id) VALUES (?, ?)",
+                list(snapshot.notes.items()),
             )
             conn.commit()
 

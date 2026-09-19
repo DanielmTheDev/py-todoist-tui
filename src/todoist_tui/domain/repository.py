@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.arrange import Arrangement, GroupPath
+from todoist_tui.domain.comment import Comment
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.filter import Filter
@@ -52,6 +53,11 @@ class TaskRepository(Protocol):
         self, event_type: EventKind | None = None, cursor: str | None = None
     ) -> ActivityPage:
         """One page of the task activity log, newest first."""
+        ...
+
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        """One task's comments, oldest first. Read on demand and never cached:
+        a thread lives outside the sync token, as the activity log does."""
         ...
 
     async def complete(self, task_id: TaskId) -> None: ...
@@ -125,6 +131,8 @@ class Snapshot:
     sections: list[Section] = field(default_factory=list[Section])
     labels: list[Label] = field(default_factory=list[Label])
     reminders: list[Reminder] = field(default_factory=list[Reminder])
+    # comment id -> the task it hangs on: what the comment counts are read from
+    notes: dict[str, str] = field(default_factory=dict[str, str])
 
 
 class SnapshotSource(Protocol):

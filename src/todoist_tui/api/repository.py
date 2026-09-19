@@ -4,6 +4,7 @@ from typing import Any
 
 from todoist_tui.api.client import TodoistClient
 from todoist_tui.domain.activity import ActivityEvent, ActivityPage, EventKind
+from todoist_tui.domain.comment import Comment
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -94,6 +95,10 @@ class ApiTaskRepository:
 
     async def delete_reminder(self, reminder_id: str) -> None:
         await self._client.delete_reminder(reminder_id)
+
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        records = await self._client.comments(str(task_id))
+        return [Comment.from_api(record) for record in records]
 
     async def complete(self, task_id: TaskId) -> None:
         await self._client.close_item(str(task_id))
@@ -195,6 +200,7 @@ class ApiSnapshotSource:
         sections, deleted_sections = _split(body.get("sections", []), _to_section)
         labels, deleted_labels = _split(body.get("labels", []), _to_label)
         reminders, deleted_reminders = _split(body.get("reminders", []), _to_reminder)
+        notes, deleted_notes = _note_task_ids(body.get("notes", []))
         return SyncDelta(
             projects=projects,
             tasks=tasks,
@@ -210,7 +216,20 @@ class ApiSnapshotSource:
             deleted_label_ids=deleted_labels,
             reminders=reminders,
             deleted_reminder_ids=deleted_reminders,
+            notes=notes,
+            deleted_note_ids=deleted_notes,
         )
+
+
+def _note_task_ids(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Comment id -> task id, and the ids Todoist says are gone. Only the pairing
+    is kept: it is all the comment marker counts, and the thread itself is read
+    live when the user opens it."""
+    live = {str(r["id"]): str(r["item_id"]) for r in records if not r.get("is_deleted")}
+    deleted = frozenset(str(r["id"]) for r in records if r.get("is_deleted"))
+    return live, deleted
 
 
 def _is_gone(record: dict[str, Any]) -> bool:

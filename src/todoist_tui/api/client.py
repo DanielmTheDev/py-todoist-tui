@@ -90,6 +90,10 @@ class TodoistClient:
     async def tasks_in_project(self, project_id: str) -> list[dict[str, Any]]:
         return await self._paginate("/tasks", {"project_id": project_id})
 
+    async def comments(self, task_id: str) -> list[dict[str, Any]]:
+        """Every comment on one task, oldest first, straight from the server."""
+        return await self._paginate("/comments", {"task_id": task_id})
+
     async def projects(self) -> list[dict[str, Any]]:
         return await self._paginate("/projects", {})
 
@@ -113,7 +117,15 @@ class TodoistClient:
             data={
                 "sync_token": sync_token,
                 "resource_types": json.dumps(
-                    ["items", "projects", "filters", "sections", "labels", "reminders"]
+                    [
+                        "items",
+                        "projects",
+                        "filters",
+                        "sections",
+                        "labels",
+                        "reminders",
+                        "notes",
+                    ]
                 ),
             },
         )

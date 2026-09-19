@@ -1,6 +1,7 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
+from todoist_tui.domain.comment import with_note_counts
 from todoist_tui.domain.filter import Filter
 from todoist_tui.domain.label import Label
 from todoist_tui.domain.project import Project
@@ -32,6 +33,8 @@ class SyncDelta:
     deleted_label_ids: frozenset[str] = frozenset()
     reminders: list[Reminder] = field(default_factory=list[Reminder])
     deleted_reminder_ids: frozenset[str] = frozenset()
+    notes: dict[str, str] = field(default_factory=dict[str, str])
+    deleted_note_ids: frozenset[str] = frozenset()
 
 
 def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
@@ -39,19 +42,24 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
     if prior is None or delta.full_sync:
         return Snapshot(
             projects=delta.projects,
-            tasks=delta.tasks,
+            tasks=with_note_counts(delta.tasks, delta.notes),
             sync_token=delta.sync_token,
             filters=delta.filters,
             sections=delta.sections,
             labels=delta.labels,
             reminders=delta.reminders,
+            notes=delta.notes,
         )
+    notes = _applied_notes(prior.notes, delta)
     return Snapshot(
         projects=_apply(
             prior.projects, delta.projects, delta.deleted_project_ids, lambda p: p.id
         ),
-        tasks=_apply(
-            prior.tasks, delta.tasks, delta.deleted_task_ids, lambda t: str(t.id)
+        tasks=with_note_counts(
+            _apply(
+                prior.tasks, delta.tasks, delta.deleted_task_ids, lambda t: str(t.id)
+            ),
+            notes,
         ),
         sync_token=delta.sync_token,
         filters=_apply(
@@ -69,7 +77,15 @@ def merge(prior: Snapshot | None, delta: SyncDelta) -> Snapshot:
             delta.deleted_reminder_ids,
             lambda reminder: reminder.id,
         ),
+        notes=notes,
     )
+
+
+def _applied_notes(prior: Mapping[str, str], delta: SyncDelta) -> dict[str, str]:
+    notes = dict(prior) | delta.notes
+    for deleted_id in delta.deleted_note_ids:
+        notes.pop(deleted_id, None)
+    return notes
 
 
 def _apply[T](

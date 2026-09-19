@@ -1648,3 +1648,81 @@ async def test_activity_forwards_event_type_and_cursor() -> None:
     params = route.calls.last.request.url.params
     assert params["event_type"] == "added"
     assert params["cursor"] == "abc"
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_comments_reads_a_task_thread() -> None:
+    respx.get(f"{BASE_URL}/comments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "c1",
+                        "item_id": "t1",
+                        "content": "see the shot",
+                        "posted_at": "2026-09-18T19:04:11.000000Z",
+                        "file_attachment": {
+                            "file_name": "shot.png",
+                            "file_type": "image/png",
+                            "file_url": "https://files.todoist.com/x/shot.png",
+                        },
+                    }
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    repo = ApiTaskRepository(TodoistClient.create("tok"))
+
+    (comment,) = await repo.comments(TaskId("t1"))
+
+    assert comment.content == "see the shot"
+    assert comment.attachment is not None
+    assert comment.attachment.is_image
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_parses_notes_as_comment_counts() -> None:
+    """Only the note ids and the tasks they hang on are kept — the marker counts
+    them, and the thread itself is read live when asked for."""
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "full_sync": True,
+                "items": [],
+                "projects": [],
+                "notes": [
+                    {"id": "n1", "item_id": "t1", "content": "hi"},
+                    {"id": "n2", "item_id": "t1", "content": "again"},
+                    {"id": "n3", "item_id": "t2", "is_deleted": True},
+                ],
+                "sync_token": "t",
+            },
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert delta.notes == {"n1": "t1", "n2": "t1"}
+    assert delta.deleted_note_ids == frozenset({"n3"})
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_delta_tolerates_an_account_without_notes() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={"full_sync": True, "items": [], "projects": [], "sync_token": "t"},
+        )
+    )
+    source = ApiSnapshotSource(TodoistClient.create("tok"))
+
+    delta = await source.delta(None)
+
+    assert delta.notes == {}

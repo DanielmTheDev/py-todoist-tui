@@ -55,6 +55,7 @@ FORWARDED: Mapping[str, str] = {
     "d": "set_deadline",
     "at": "set_labels",
     "m": "reminders",
+    "C": "comments",
     "R": "reminders",
     "e": "complete",
     "delete": "delete",
@@ -109,6 +110,7 @@ class DetailCard(Static):
             ("Project", self._project),
             ("Section", self._section),
             ("Labels", self._labels),
+            ("Comments", self._comments),
         ):
             text.append(name.ljust(_LABEL_WIDTH), style=label)
             text.append_text(render(styles))
@@ -177,6 +179,10 @@ class DetailCard(Static):
 
     def _section(self, styles: Mapping[Tier, Style]) -> Text:
         return Text(self._row.section_name or _DASH, style=styles[Tier.PRIMARY])
+
+    def _comments(self, styles: Mapping[Tier, Style]) -> Text:
+        count = self._row.note_count
+        return Text(str(count) if count else _DASH, style=styles[Tier.PRIMARY])
 
     def _labels(self, styles: Mapping[Tier, Style]) -> Text:
         return Text(

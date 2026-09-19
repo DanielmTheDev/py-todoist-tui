@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, time
 
 import pytest
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
+from todoist_tui.domain.comment import Comment
 from todoist_tui.domain.creation import CreationPlan, NewProject
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -78,6 +80,7 @@ class FakeInner:
         self.applied: list[CreationPlan] = []
         self.filtered_queries: list[str] = []
         self.activity_calls: list[tuple[EventKind | None, str | None]] = []
+        self.comment_calls: list[TaskId] = []
         self._filtered_result = filtered_result or []
 
     async def today(self) -> list[Task]:
@@ -121,6 +124,10 @@ class FakeInner:
     ) -> ActivityPage:
         self.activity_calls.append((event_type, cursor))
         return ActivityPage(events=(), next_cursor="next")
+
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        self.comment_calls.append(task_id)
+        return []
 
     async def complete(self, task_id: TaskId) -> None:
         self.completed.append(task_id)
@@ -678,3 +685,30 @@ async def test_activity_goes_straight_to_the_backend() -> None:
 
     assert page.next_cursor == "next"
     assert inner.activity_calls == [(EventKind.COMPLETED, "abc")]
+
+
+@pytest.mark.anyio
+async def test_comments_go_straight_to_the_backend() -> None:
+    """A thread is read for one task on demand, so the snapshot never carries
+    one — as with the activity log."""
+    inner = FakeInner()
+    source = FakeSource(_full_delta(_snapshot()))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
+
+    assert await repo.comments(TaskId("t1")) == []
+    assert inner.comment_calls == [TaskId("t1")]
+
+
+@pytest.mark.anyio
+async def test_a_filter_result_carries_the_comment_counts_too() -> None:
+    """A saved filter is evaluated server-side, where the task's own note_count
+    is never filled — the snapshot's notes supply it."""
+    inner = FakeInner(filtered_result=[_task("t1", "9")])
+    snapshot = _snapshot()
+    source = FakeSource(replace(_full_delta(snapshot), notes={"n1": "t1", "n2": "t1"}))
+    repo = SnapshotTaskRepository(inner, source, FakeCache(), _CLOCK)
+    await repo.projects()  # as a view does: the snapshot is loaded alongside
+
+    (task,) = await repo.filtered("today")
+
+    assert task.note_count == 2

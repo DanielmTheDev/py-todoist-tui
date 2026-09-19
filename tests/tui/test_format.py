@@ -8,6 +8,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import (
     MATCH_STYLE,
+    comment_marker,
     date_tier,
     description_marker,
     due_tier,
@@ -146,6 +147,17 @@ def test_description_marker_flags_a_task_that_carries_one() -> None:
 def test_description_marker_ignores_blank_descriptions() -> None:
     assert description_marker("") == ""
     assert description_marker("  \n ") == ""
+
+
+def test_comment_marker_flags_a_commented_task() -> None:
+    assert comment_marker(1) == " ❞"
+
+
+def test_comment_marker_counts_only_beyond_the_first() -> None:
+    """One comment is the common case and reads as a bare glyph, as the reminder
+    badge does; more than one is worth a number."""
+    assert comment_marker(0) == ""
+    assert comment_marker(3) == " ❞3"
 
 
 def test_plain_text_has_no_styled_spans() -> None:

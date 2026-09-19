@@ -43,6 +43,7 @@ from todoist_tui.domain.arrange import (
     SortKey,
     TaskLine,
 )
+from todoist_tui.domain.comment import Comment
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -68,6 +69,7 @@ from todoist_tui.tui.app import (
 )
 from todoist_tui.tui.screens.activity import ActivityScreen
 from todoist_tui.tui.screens.arrange import ArrangeScreen
+from todoist_tui.tui.screens.comments import CommentsScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
 from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
 from todoist_tui.tui.screens.draft import (
@@ -103,6 +105,7 @@ class FakeRepository:
         reminders: list[Reminder] | None = None,
         pool: list[Task] | None = None,
         events: tuple[ActivityEvent, ...] = (),
+        comments: tuple[Comment, ...] = (),
     ) -> None:
         self._tasks = tasks
         self._projects = projects
@@ -113,6 +116,8 @@ class FakeRepository:
         self._labels = labels or []
         self._reminders = reminders or []
         self._events = events
+        self._comments = comments
+        self.comment_reads: list[TaskId] = []
         self.added_reminders: list[Reminder] = []
         self.deleted_reminders: list[str] = []
         self.label_edits: list[tuple[TaskId, tuple[str, ...], tuple[str, ...]]] = []
@@ -176,6 +181,10 @@ class FakeRepository:
         self, event_type: EventKind | None = None, cursor: str | None = None
     ) -> ActivityPage:
         return ActivityPage(events=self._events, next_cursor=None)
+
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        self.comment_reads.append(task_id)
+        return list(self._comments)
 
     async def set_labels(
         self, task_id: TaskId, labels: tuple[str, ...], create: tuple[str, ...] = ()
@@ -355,6 +364,11 @@ class FakeRepository:
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
+
+
+class FailingCommentsRepository(FakeRepository):
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        raise RuntimeError("offline")
 
 
 class FailingActivityRepository(FakeRepository):
@@ -6236,6 +6250,10 @@ def _noted(content: str, description: str = "") -> Task:
     )
 
 
+def _commented(content: str, note_count: int) -> Task:
+    return replace(_noted(content), note_count=note_count)
+
+
 def _attribute_strip(app: TodoistApp) -> str:
     return str(app.screen.query_one("#attributes", Static).content)
 
@@ -6250,6 +6268,20 @@ async def test_a_description_marks_the_title_and_a_bare_task_stays_clean() -> No
         await settled(app)
 
         assert _content_col(app.query_one(TaskTable)) == ["t1 ≡", "t2"]
+
+
+@pytest.mark.anyio
+async def test_a_commented_task_is_marked_and_a_second_comment_is_counted() -> None:
+    repo = FakeRepository(
+        [_commented("t1", 1), _commented("t2", 3), _commented("t3", 0)], []
+    )
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+
+        assert _content_col(app.query_one(TaskTable)) == ["t1 ❞", "t2 ❞3", "t3"]
 
 
 @pytest.mark.anyio
@@ -8894,3 +8926,42 @@ async def test_the_last_task_in_a_day_view_says_it_cannot_move() -> None:
 
         assert repo.day_orders == []
         assert any("below" in note.lower() for note in _notifications(app))
+
+
+_A_COMMENT = Comment(
+    id="c1",
+    task_id="t1",
+    content="ship it",
+    posted_at=datetime.datetime(2026, 7, 21, 9, 30, tzinfo=datetime.UTC),
+)
+
+
+@pytest.mark.anyio
+async def test_c_opens_the_thread_of_the_task_under_the_cursor() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_A_COMMENT,))
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CommentsScreen)
+        assert repo.comment_reads == [TaskId("t1")]
+        assert "ship it" in str(app.screen.query_one("#comments", Static).content)
+
+
+@pytest.mark.anyio
+async def test_a_thread_that_cannot_be_read_is_reported_not_opened() -> None:
+    repo = FailingCommentsRepository([_noted("t1")], [])
+    app = TodoistApp(repo)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, CommentsScreen)
+        assert "Failed to load comments" in _status(app)

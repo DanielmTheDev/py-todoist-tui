@@ -3,6 +3,7 @@ from collections.abc import Sequence
 
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.clock import Clock
+from todoist_tui.domain.comment import Comment, with_note_counts
 from todoist_tui.domain.creation import CreationPlan
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -114,13 +115,24 @@ class SnapshotTaskRepository:
 
     async def filtered(self, query: str) -> list[Task]:
         if query not in self._filter_cache:  # cache-first; refresh happens in bg
-            self._remember(query, await self._inner.filtered(query))
+            self._remember(query, self._counted(await self._inner.filtered(query)))
         return self._filter_cache[query]
 
     async def refresh_filtered(self, query: str) -> list[Task]:
-        result = await self._inner.filtered(query)  # server-side eval, live
+        result = self._counted(await self._inner.filtered(query))  # live, server-side
         self._remember(query, result)
         return result
+
+    def _counted(self, tasks: list[Task]) -> list[Task]:
+        """Stamp a server-evaluated result with the comment counts we hold.
+
+        Todoist fills `note_count` on a task only in a full sync, so a filter's
+        own tasks come back saying nothing about their comments. Only a snapshot
+        already in hand is consulted — a filter is meant to be live, and waiting
+        on a sync to draw its rows would cost more than a missing marker.
+        """
+        notes = self._snapshot.notes if self._snapshot is not None else {}
+        return with_note_counts(tasks, notes)
 
     def _remember(self, query: str, tasks: list[Task]) -> None:
         self._filter_cache.pop(query, None)  # re-insert, so it counts as the newest
@@ -142,6 +154,10 @@ class SnapshotTaskRepository:
     ) -> ActivityPage:
         # history is append-only and outside the sync token: always live
         return await self._inner.activity(event_type, cursor)
+
+    async def comments(self, task_id: TaskId) -> list[Comment]:
+        # a thread is outside the sync token, like the activity log: always live
+        return await self._inner.comments(task_id)
 
     async def complete(self, task_id: TaskId) -> None:
         await self._inner.complete(task_id)

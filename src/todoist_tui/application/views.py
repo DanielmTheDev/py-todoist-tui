@@ -42,6 +42,7 @@ class TaskRow:
     child_order: int = 0
     day_order: int = UNSET_DAY_ORDER
     reminders: tuple[Reminder, ...] = ()
+    note_count: int = 0
     matched: bool = True
 
 
@@ -272,6 +273,7 @@ async def load_view(repo: TaskRepository, view: View) -> list[TaskRow]:
             child_order=task.child_order,
             day_order=task.day_order,
             reminders=tuple(reminders_by_item.get(str(task.id), ())),
+            note_count=task.note_count,
             matched=task.id not in pulled_in,
         )
         for task in tasks
