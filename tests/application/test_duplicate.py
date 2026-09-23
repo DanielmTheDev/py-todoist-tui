@@ -49,6 +49,7 @@ class FakeRepository:
         self._sections = sections
         self._tasks = tasks
         self.applied: list[CreationPlan] = []
+        self.reordered_sections: list[list[tuple[str, int]]] = []
 
     async def projects(self) -> list[Project]:
         return self._projects
@@ -127,7 +128,8 @@ class FakeRepository:
 
     async def reorder(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 
-    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None: ...
+    async def reorder_sections(self, sections: Sequence[tuple[str, int]]) -> None:
+        self.reordered_sections.append(list(sections))
 
     async def set_day_orders(self, items: Sequence[tuple[TaskId, int]]) -> None: ...
 

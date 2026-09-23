@@ -22,6 +22,7 @@ from textual.widgets import DataTable, Footer, Rule, Static
 
 from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
+from todoist_tui.application.add_section import add_section
 from todoist_tui.application.add_task import add_task
 from todoist_tui.application.comments import (
     attach_file,
@@ -433,6 +434,7 @@ class TodoistApp(App[None]):
         Binding("n,V", "move_parent", "Move under parent", show=False),
         Binding("Y", "duplicate", "Duplicate project/section", show=False),
         Binding("D", "delete_section", "Delete section", show=False),
+        Binding("S", "add_section", "Add section", show=False),
         Binding("at", "set_labels", "Labels", show=False),
         Binding("m,R", "reminders", "Reminders", show=False),
         Binding("enter", "open_detail", "Detail", show=False),
@@ -2320,6 +2322,57 @@ class TodoistApp(App[None]):
             self.notify(f"Nothing {where} to swap with")
             return
         self._queue([work])
+
+    def action_add_section(self) -> None:
+        project_id = self._view.project_id
+        if project_id is None:
+            # section_order is one order per project, so a view spanning them
+            # cannot say which project the new section belongs to
+            self.notify("Open a project to add a section")
+            return
+        after_id = self._cursor_section_id()
+        self.push_screen(
+            TextPromptScreen("New section"),
+            lambda name: self._on_section_named(project_id, after_id, name),
+        )
+
+    def _cursor_section_id(self) -> str | None:
+        """The section the cursor is in, which a new one follows. None where the
+        cursor names no section — an unsectioned task, or a view grouped by
+        something else — and the new section goes to the end instead."""
+        group_by = self._arrangement.group_by
+        if not group_by or group_by[0] is not Field.SECTION:
+            return None
+        table = self.query_one(TaskTable)
+        label = next(
+            (
+                path[0]
+                for row in range(table.cursor_row, -1, -1)
+                if (path := self._header_paths.get(row)) is not None and len(path) == 1
+            ),
+            None,
+        )
+        section = next((s for s in self._current_sections() if s.name == label), None)
+        return section.id if section else None
+
+    def _on_section_named(
+        self, project_id: str, after_id: str | None, name: str | None
+    ) -> None:
+        if name is None:  # naming cancelled
+            return
+        self._set_status(f"Adding {name}…")
+        # the header only appears once the drain's sync pulls the section in
+        self._send(
+            partial(
+                add_section,
+                self._repo,
+                project_id,
+                name,
+                self._current_sections(),
+                after_id,
+            ),
+            "Failed to add section",
+        )
 
     def _sections_addressable(self, verb: str) -> bool:
         """Whether a header on screen names one section of one project — the only

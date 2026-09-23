@@ -9301,3 +9301,92 @@ async def test_an_empty_clipboard_is_reported_not_posted() -> None:
 
         assert repo.uploaded == []
         assert "no image on the clipboard" in _status(app)
+
+
+# --- adding a section ---
+
+
+@pytest.mark.anyio
+async def test_add_section_lands_below_the_section_the_cursor_is_in() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)  # the cursor opens on the Planning header
+        await pilot.press("S")
+        await pilot.pause()
+        assert isinstance(app.screen, TextPromptScreen)
+        await pilot.press(*"notes", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        (plan,) = repo.applied
+        (created,) = plan.sections
+        assert (created.name, created.project_ref, created.order) == ("notes", "9", 2)
+        # the sections it pushes down are renumbered so none shares its order
+        assert repo.section_reorders == [[("s2", 3), ("s3", 4)]]
+
+
+@pytest.mark.anyio
+async def test_add_section_follows_the_section_the_cursor_s_task_is_in() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("j", "j", "l", "j")  # unfold Backlog, onto "later"
+        assert "later" in _content_col(table)[table.cursor_row]
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press(*"notes", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.applied[0].sections[0].order == 4
+        assert repo.section_reorders == []  # nothing below it to push down
+
+
+@pytest.mark.anyio
+async def test_add_section_appends_when_the_view_is_not_grouped_by_section() -> None:
+    repo = _three_section_repo()
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement(group_by=(Field.PRIORITY,)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press(*"notes", "enter")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.applied[0].sections[0].order == 4
+
+
+@pytest.mark.anyio
+async def test_add_section_needs_a_project_view() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("S")  # Today spans projects, so no one project owns it
+        await pilot.pause()
+
+        assert not isinstance(app.screen, TextPromptScreen)
+        assert repo.applied == []
+        assert any("project" in note.lower() for note in _notifications(app))
+
+
+@pytest.mark.anyio
+async def test_add_section_cancelled_creates_nothing() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press(*"notes", "escape")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.applied == []
+        assert repo.section_reorders == []

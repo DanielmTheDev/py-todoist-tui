@@ -1,4 +1,9 @@
-from todoist_tui.domain.section import Section, sections_by_project, sorted_sections
+from todoist_tui.domain.section import (
+    Section,
+    section_insert_plan,
+    sections_by_project,
+    sorted_sections,
+)
 
 
 def test_section_holds_fields() -> None:
@@ -39,3 +44,40 @@ def test_sections_by_project_groups_in_display_order() -> None:
         "9": ["Planning", "Backlog"],
         "7": ["Errands"],
     }
+
+
+def test_insert_plan_into_empty_project_starts_at_one() -> None:
+    assert section_insert_plan([], after_id=None) == (1, [])
+
+
+def test_insert_plan_appends_after_a_clean_run() -> None:
+    a = Section(id="a", project_id="9", name="A", order=1)
+    b = Section(id="b", project_id="9", name="B", order=2)
+    assert section_insert_plan([a, b], after_id=None) == (3, [])
+
+
+def test_insert_plan_opens_a_slot_after_the_named_section() -> None:
+    a = Section(id="a", project_id="9", name="A", order=1)
+    b = Section(id="b", project_id="9", name="B", order=2)
+    c = Section(id="c", project_id="9", name="C", order=3)
+
+    assert section_insert_plan([a, b, c], after_id="a") == (2, [("b", 3), ("c", 4)])
+
+
+def test_insert_plan_renumbers_a_gapped_run() -> None:
+    a = Section(id="a", project_id="9", name="A", order=2)
+    b = Section(id="b", project_id="9", name="B", order=7)
+
+    assert section_insert_plan([a, b], after_id=None) == (3, [("a", 1), ("b", 2)])
+
+
+def test_insert_plan_separates_sections_sharing_an_order() -> None:
+    a = Section(id="a", project_id="9", name="A", order=1)
+    b = Section(id="b", project_id="9", name="B", order=1)
+
+    assert section_insert_plan([a, b], after_id="a") == (2, [("b", 3)])
+
+
+def test_insert_plan_appends_when_the_section_is_gone() -> None:
+    a = Section(id="a", project_id="9", name="A", order=1)
+    assert section_insert_plan([a], after_id="vanished") == (2, [])
