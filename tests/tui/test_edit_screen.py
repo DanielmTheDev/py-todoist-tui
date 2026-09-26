@@ -746,6 +746,29 @@ async def test_an_absolute_reminder_finishes_in_the_date_picker() -> None:
 
 
 @pytest.mark.anyio
+async def test_an_absolute_reminder_takes_a_recurring_phrase() -> None:
+    edited: list[TaskDraft | None] = []
+    host = _Host("Buy milk", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("a", "a", "s")
+        for key in "every day at 9am":
+            await pilot.press(key if key != " " else "space")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert f"{REMINDERS_ICON} every day at 9am" in _strip(host)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert edited[0] is not None
+        assert edited[0].reminders == (
+            Reminder("", "", "absolute", DueText("every day at 9am")),
+        )
+
+
+@pytest.mark.anyio
 async def test_naming_a_project_lifts_the_draft_out_of_its_parent() -> None:
     parent = _row("chores", project_name="Work", project_id="9")
     edited: list[TaskDraft | None] = []

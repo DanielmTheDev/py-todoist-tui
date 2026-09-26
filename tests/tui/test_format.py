@@ -3,7 +3,7 @@ import datetime
 from rich.text import Text
 
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.tui.format import (
@@ -133,6 +133,24 @@ def test_format_reminder_shows_an_absolute_date() -> None:
         due=Due(date=_TODAY, time=datetime.time(11, 0)),
     )
     assert format_reminder(reminder, _TODAY) == "Today 11:00"
+
+
+def test_format_reminder_names_a_recurring_rule() -> None:
+    due = Due(
+        date=_TODAY,
+        time=datetime.time(9, 0),
+        is_recurring=True,
+        string="every day at 9am",
+    )
+    reminder = Reminder(id="r", item_id="A", type="absolute", due=due)
+    assert format_reminder(reminder, _TODAY) == "every day at 9am"
+
+
+def test_format_reminder_shows_an_unsent_phrase_verbatim() -> None:
+    reminder = Reminder(
+        id="", item_id="", type="absolute", due=DueText("every mon 18:00")
+    )
+    assert format_reminder(reminder, _TODAY) == "every mon 18:00"
 
 
 def test_format_reminder_badge_counts_only_beyond_one() -> None:

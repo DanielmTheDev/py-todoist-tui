@@ -25,7 +25,7 @@ from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
-from todoist_tui.tui.screens.schedule import ScheduleScreen, rescheduled
+from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen, rescheduled
 from todoist_tui.tui.screens.scrolling import ScrollBody
 from todoist_tui.tui.screens.subtask_list import HINT, SubtaskList
 from todoist_tui.tui.theme import (
@@ -371,13 +371,15 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
 
     def _pick_reminder_time(self) -> None:
         self._pick(
-            ScheduleScreen(self._today),
-            lambda result: (
-                self._remembering(Reminder("", "", "absolute", result.due))
-                if result.due is not None
-                else self._draft
-            ),
+            ScheduleScreen(self._today, allow_text=True),
+            self._remembering_at,
         )
+
+    def _remembering_at(self, result: DueResult) -> TaskDraft:
+        due = rescheduled(result, None)
+        if due is None:  # cleared
+            return self._draft
+        return self._remembering(Reminder("", "", "absolute", due))
 
     def _remembering(self, reminder: Reminder) -> TaskDraft:
         return replace(self._draft, reminders=(*self._draft.reminders, reminder))

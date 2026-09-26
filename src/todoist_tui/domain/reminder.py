@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 
 ReminderType = Literal["absolute", "relative"]
 
@@ -11,14 +11,15 @@ DEFAULT_REMINDER_OFFSET = 0  # the account's `auto_reminder`: fire at the due ti
 
 @dataclass(frozen=True, slots=True)
 class Reminder:
-    """A task reminder. `absolute` fires at `due`'s datetime; `relative` fires
-    `minute_offset` minutes before the task's own due time. Location reminders
-    are not modelled — the TUI has no way to enter them."""
+    """A task reminder. `absolute` fires at `due`'s datetime — recurring when
+    its rule does, a `DueText` phrase until the server parses one; `relative`
+    fires `minute_offset` minutes before the task's own due time. Location
+    reminders are not modelled — the TUI has no way to enter them."""
 
     id: str
     item_id: str
     type: ReminderType
-    due: Due | None = None
+    due: Due | DueText | None = None
     minute_offset: int | None = None
     notify_uid: str | None = None
 

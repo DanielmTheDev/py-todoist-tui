@@ -1107,8 +1107,27 @@ async def test_reminder_add_absolute_picks_a_date() -> None:
         (reminder,) = repo.added_reminders
         assert reminder.item_id == "A"
         assert reminder.type == "absolute"
-        assert reminder.due is not None
-        assert reminder.due.date == datetime.date(2026, 7, 29)
+        assert reminder.due == Due(date=datetime.date(2026, 7, 29))
+
+
+@pytest.mark.anyio
+async def test_reminder_add_absolute_takes_a_recurring_phrase() -> None:
+    repo = FakeRepository([_row("A")], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("a", "a")
+        await pilot.pause()
+        await pilot.press("s", *_typing("every day at 9am"), "enter")
+        await settled(app)
+        await pilot.pause()
+
+        (reminder,) = repo.added_reminders
+        assert reminder.item_id == "A"
+        assert reminder.due == DueText("every day at 9am")
 
 
 @pytest.mark.anyio

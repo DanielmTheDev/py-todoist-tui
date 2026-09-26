@@ -69,7 +69,8 @@ CREATE TABLE labels (
 );
 CREATE TABLE reminders (
     id TEXT, item_id TEXT, type TEXT,
-    due_date TEXT, due_time TEXT, minute_offset INTEGER, notify_uid TEXT
+    due_date TEXT, due_time TEXT, due_recurring INTEGER,
+    due_string TEXT, due_lang TEXT, minute_offset INTEGER, notify_uid TEXT
 );
 CREATE TABLE notes (id TEXT, item_id TEXT);
 """
@@ -140,6 +141,7 @@ class SqliteSnapshotCache:
                     _row_to_reminder(row)
                     for row in conn.execute(
                         "SELECT id, item_id, type, due_date, due_time,"
+                        " due_recurring, due_string, due_lang,"
                         " minute_offset, notify_uid FROM reminders"
                     )
                 ]
@@ -200,8 +202,7 @@ class SqliteSnapshotCache:
                 [(label.id, label.name, label.order) for label in snapshot.labels],
             )
             conn.executemany(
-                "INSERT INTO reminders (id, item_id, type, due_date, due_time,"
-                " minute_offset, notify_uid) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO reminders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [_reminder_to_row(r) for r in snapshot.reminders],
             )
             conn.executemany(
@@ -391,36 +392,61 @@ class SqliteViewSlotStore:
             conn.commit()
 
 
+# due_date, due_time, due_recurring, due_string, due_lang
+_DueColumns = tuple[str | None, str | None, int | None, str | None, str | None]
+
+
+def _due_to_columns(due: Due | None) -> _DueColumns:
+    if due is None:
+        return (None, None, None, None, None)
+    return (
+        due.date.isoformat(),
+        due.time.isoformat() if due.time else None,
+        int(due.is_recurring),
+        due.string,
+        due.lang,
+    )
+
+
+def _columns_to_due(columns: _DueColumns) -> Due | None:
+    due_date, due_time, due_recurring, due_string, due_lang = columns
+    if due_date is None:
+        return None
+    return Due(
+        date=datetime.date.fromisoformat(due_date),
+        time=datetime.time.fromisoformat(due_time) if due_time else None,
+        is_recurring=bool(due_recurring),
+        string=due_string,
+        lang=due_lang,
+    )
+
+
 def _reminder_to_row(
     reminder: Reminder,
-) -> tuple[str, str, str, str | None, str | None, int | None, str | None]:
-    due = reminder.due
+) -> tuple[str, str, str, *_DueColumns, int | None, str | None]:
+    # only synced reminders are cached, and by then the server has parsed any
+    # phrase into a Due
+    due = reminder.due if isinstance(reminder.due, Due) else None
     return (
         reminder.id,
         reminder.item_id,
         reminder.type,
-        due.date.isoformat() if due else None,
-        due.time.isoformat() if due and due.time else None,
+        *_due_to_columns(due),
         reminder.minute_offset,
         reminder.notify_uid,
     )
 
 
 def _row_to_reminder(
-    row: tuple[str, str, str, str | None, str | None, int | None, str | None],
+    row: tuple[str, str, str, *_DueColumns, int | None, str | None],
 ) -> Reminder:
-    rid, item_id, rtype, due_date, due_time, minute_offset, notify_uid = row
-    due = None
-    if due_date is not None:
-        due = Due(
-            date=datetime.date.fromisoformat(due_date),
-            time=datetime.time.fromisoformat(due_time) if due_time else None,
-        )
+    rid, item_id, rtype = row[:3]
+    minute_offset, notify_uid = row[8:]
     return Reminder(
         id=rid,
         item_id=item_id,
         type=cast("ReminderType", rtype),
-        due=due,
+        due=_columns_to_due(row[3:8]),
         minute_offset=minute_offset,
         notify_uid=notify_uid,
     )
@@ -432,11 +458,7 @@ def _task_to_row(
     str,
     str,
     int,
-    str | None,
-    str | None,
-    int | None,
-    str | None,
-    str | None,
+    *_DueColumns,
     str,
     str | None,
     str,
@@ -446,17 +468,12 @@ def _task_to_row(
     int,
     int,
 ]:
-    due = task.due
     deadline = task.deadline
     return (
         task.id,
         task.content,
         task.priority.value,
-        due.date.isoformat() if due else None,
-        due.time.isoformat() if due and due.time else None,
-        int(due.is_recurring) if due else None,
-        due.string if due else None,
-        due.lang if due else None,
+        *_due_to_columns(task.due),
         task.project_id,
         task.section_id,
         json.dumps(list(task.labels)),
@@ -473,11 +490,7 @@ def _row_to_task(
         str,
         str,
         int,
-        str | None,
-        str | None,
-        int | None,
-        str | None,
-        str | None,
+        *_DueColumns,
         str,
         str | None,
         str | None,
@@ -488,15 +501,8 @@ def _row_to_task(
         int | None,
     ],
 ) -> Task:
+    tid, content, priority = row[:3]
     (
-        tid,
-        content,
-        priority,
-        due_date,
-        due_time,
-        due_recurring,
-        due_string,
-        due_lang,
         project_id,
         section_id,
         labels,
@@ -505,21 +511,12 @@ def _row_to_task(
         parent_id,
         child_order,
         day_order,
-    ) = row
-    due = None
-    if due_date is not None:
-        due = Due(
-            date=datetime.date.fromisoformat(due_date),
-            time=datetime.time.fromisoformat(due_time) if due_time else None,
-            is_recurring=bool(due_recurring),
-            string=due_string,
-            lang=due_lang,
-        )
+    ) = row[8:]
     return Task(
         id=TaskId(tid),
         content=content,
         priority=Priority(priority),
-        due=due,
+        due=_columns_to_due(row[3:8]),
         project_id=project_id,
         section_id=section_id,
         labels=tuple(json.loads(labels)) if labels else (),

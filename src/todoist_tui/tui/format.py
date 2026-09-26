@@ -4,7 +4,7 @@ from rich.text import Text
 
 from todoist_tui.domain.comment import Attachment
 from todoist_tui.domain.deadline import Deadline
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.humanize import humanize_date
 from todoist_tui.domain.links import parse
 from todoist_tui.domain.priority import Priority
@@ -74,7 +74,12 @@ def format_reminder(reminder: Reminder, today: datetime.date) -> str:
     if reminder.type == "relative":
         offset = reminder.minute_offset or 0
         return "at due time" if offset == 0 else f"{offset} min before"
-    return format_due(reminder.due, today) or "absolute"
+    due = reminder.due
+    if isinstance(due, DueText):
+        return due.text
+    if due is not None and due.is_recurring and due.string:
+        return due.string
+    return format_due(due, today) or "absolute"
 
 
 def format_reminder_badge(count: int) -> str:

@@ -2091,7 +2091,7 @@ class TodoistApp(App[None]):
             return
         if request.add_absolute:  # finish by picking the date + time
             self._push(
-                ScheduleScreen(self._clock.today(), kind="due"),
+                ScheduleScreen(self._clock.today(), allow_text=True),
                 lambda result: self._on_reminder_absolute(ids, result),
             )
         elif request.delete_id is not None:
@@ -2113,9 +2113,10 @@ class TodoistApp(App[None]):
         return row is not None and row.due is not None and row.due.time is not None
 
     def _on_reminder_absolute(self, ids: list[str], result: DueResult | None) -> None:
-        if result is None or result.due is None:  # picker cancelled or cleared
+        due = rescheduled(result, None) if result is not None else None
+        if due is None:  # picker cancelled or cleared
             return
-        template = Reminder(id="", item_id="", type="absolute", due=result.due)
+        template = Reminder(id="", item_id="", type="absolute", due=due)
         self._add_reminders(ids, template)
 
     def _add_reminders(self, ids: list[str], template: Reminder) -> None:

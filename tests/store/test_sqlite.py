@@ -82,7 +82,13 @@ def _snapshot(sync_token: str = "tok-1") -> Snapshot:
                 id="rm2",
                 item_id="a",
                 type="absolute",
-                due=Due(date=datetime.date(2026, 7, 22), time=datetime.time(8, 30)),
+                due=Due(
+                    date=datetime.date(2026, 7, 22),
+                    time=datetime.time(8, 30),
+                    is_recurring=True,
+                    string="every day at 8:30",
+                    lang="en",
+                ),
                 notify_uid="52617323",
             ),
         ],
@@ -218,6 +224,26 @@ async def test_load_returns_none_when_reminders_table_missing(tmp_path: Path) ->
             " section_order INTEGER);"
             "CREATE TABLE labels (id TEXT, name TEXT, item_order INTEGER);"
             "INSERT INTO meta (sync_token) VALUES ('tok');"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await SqliteSnapshotCache(path).load() is None
+
+
+@pytest.mark.anyio
+async def test_load_returns_none_when_reminders_lack_their_rule(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "cache.sqlite3"  # cache written before recurring reminders
+    await SqliteSnapshotCache(path).save(_snapshot())
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            "DROP TABLE reminders;"
+            "CREATE TABLE reminders (id TEXT, item_id TEXT, type TEXT, due_date TEXT,"
+            " due_time TEXT, minute_offset INTEGER, notify_uid TEXT);"
         )
         conn.commit()
     finally:

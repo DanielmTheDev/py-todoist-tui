@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from todoist_tui.domain.due import Due
+from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.reminder import (
     Reminder,
     default_reminder,
@@ -67,6 +67,41 @@ def test_to_api_emits_absolute_args() -> None:
         "type": "absolute",
         "due": {"date": "2030-01-01T08:30:00"},
     }
+
+
+def test_to_api_sends_a_phrase_for_the_server_to_parse() -> None:
+    reminder = Reminder(
+        id="", item_id="t1", type="absolute", due=DueText("every day at 9am")
+    )
+
+    assert reminder.to_api == {
+        "type": "absolute",
+        "due": {"string": "every day at 9am"},
+    }
+
+
+def test_from_api_keeps_a_recurring_rule() -> None:
+    reminder = Reminder.from_api(
+        {
+            "id": "r1",
+            "item_id": "t1",
+            "type": "absolute",
+            "due": {
+                "date": "2026-09-28T18:00:00",
+                "is_recurring": True,
+                "string": "every mon 18:00",
+                "lang": "en",
+            },
+        }
+    )
+
+    assert reminder.due == Due(
+        date=datetime.date(2026, 9, 28),
+        time=datetime.time(18, 0),
+        is_recurring=True,
+        string="every mon 18:00",
+        lang="en",
+    )
 
 
 def test_to_api_emits_relative_args() -> None:
