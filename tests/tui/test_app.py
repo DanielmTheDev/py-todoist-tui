@@ -723,6 +723,44 @@ async def test_undo_restores_the_whole_completed_batch() -> None:
 
 
 @pytest.mark.anyio
+async def test_undo_of_a_recurring_close_puts_its_due_back() -> None:
+    # closing a recurring task only moves it to the next occurrence, so
+    # item_uncomplete has nothing to reopen: the old due is written back instead
+    due = Due(date=_TODAY, is_recurring=True, string="every day", lang="en")
+    repo = FakeRepository([replace(_row("A"), due=due)], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("e")
+        await settled(app)
+        await pilot.press("z")
+        await settled(app)
+
+        assert repo.dues == [(TaskId("A"), due)]
+        assert repo.uncompleted == []
+
+
+@pytest.mark.anyio
+async def test_undo_reopens_a_recurring_subtask_its_parent_closed() -> None:
+    # the parent's cascade really closes a recurring subtask rather than moving it
+    due = Due(date=_TODAY, is_recurring=True, string="every day")
+    subtask = replace(_row("sub", parent_id="A"), due=due)
+    repo = FakeRepository([_row("A"), subtask], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("e")  # complete A, taking sub with it
+        await settled(app)
+        await pilot.press("z")
+        await settled(app)
+
+        assert repo.uncompleted == [TaskId("A"), TaskId("sub")]
+        assert repo.dues == []
+
+
+@pytest.mark.anyio
 async def test_completing_a_parent_takes_its_matching_subtask_with_it() -> None:
     # Todoist's item_close closes the whole subtree, so the subtask goes too —
     # even though it matched the view on its own

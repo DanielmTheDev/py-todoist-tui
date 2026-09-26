@@ -1019,14 +1019,22 @@ class TodoistApp(App[None]):
         self._focus_task_at(table, cursor_row)
 
     def _reopen_step(self, close: Close) -> Step:
-        return Step(
-            restore(close.rows), partial(self._reopen, close.rows), "Failed to undo"
-        )
+        return Step(restore(close.rows), partial(self._reopen, close), "Failed to undo")
 
-    async def _reopen(self, rows: list[TaskRow]) -> None:
+    async def _reopen(self, close: Close) -> None:
         # item_uncomplete restores ancestors only, so each closed child reopens itself
-        for row in rows:
-            await uncomplete_task(self._repo, TaskId(str(row.id)))
+        for row in close.rows:
+            task_id = TaskId(str(row.id))
+            # closing a recurring task only moved it to the next occurrence, so its
+            # old due goes back; a subtask the cascade took is really closed
+            if (
+                task_id == close.task_id
+                and row.due is not None
+                and row.due.is_recurring
+            ):
+                await set_due(self._repo, task_id, row.due)
+            else:
+                await uncomplete_task(self._repo, task_id)
 
     def action_undo(self) -> None:
         while self._undo:
