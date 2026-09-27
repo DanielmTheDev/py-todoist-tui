@@ -1301,8 +1301,9 @@ class TodoistApp(App[None]):
         )
 
     def _lands_beside(self, row: TaskRow | None) -> TaskDraft:
-        """Where a new task goes: the cursor row's company; on an empty view the
-        view's own project; past that the Inbox the service falls back to."""
+        """Where a new task goes: the cursor row's company; on a header the
+        section it names, if any, in the view's own project; past that the Inbox
+        the service falls back to."""
         if row is not None:
             return TaskDraft(
                 "",
@@ -1312,11 +1313,14 @@ class TodoistApp(App[None]):
                 section_id=row.section_id,
                 section_name=row.section_name,
             )
+        section = self._cursor_section()
         return TaskDraft(
             "",
             "",
             project_id=self._view.project_id,
             project_name=self._view.title if self._view.project_id else INBOX.title,
+            section_id=section.id if section else None,
+            section_name=section.name if section else None,
         )
 
     def _open_add(self, heading: str, draft: TaskDraft) -> None:
@@ -1356,6 +1360,8 @@ class TodoistApp(App[None]):
         row = self._provisional_row(draft)
         if draft.subtasks:  # same again, one level down
             self._expanded.add(row.id)
+        # the cursor stays on the header it was written from, which may be folded
+        self._unfold_to([*self._visible, row], str(row.id))
         self._queue([(self._add_step(draft, row), None)])
         if all(r.id != row.id for r in self._visible):
             # the view turned the new task away, so the band is the only word
@@ -2339,16 +2345,17 @@ class TodoistApp(App[None]):
             # cannot say which project the new section belongs to
             self.notify("Open a project to add a section")
             return
-        after_id = self._cursor_section_id()
+        section = self._cursor_section()
+        after_id = section.id if section else None
         self.push_screen(
             TextPromptScreen("New section"),
             lambda name: self._on_section_named(project_id, after_id, name),
         )
 
-    def _cursor_section_id(self) -> str | None:
-        """The section the cursor is in, which a new one follows. None where the
-        cursor names no section — an unsectioned task, or a view grouped by
-        something else — and the new section goes to the end instead."""
+    def _cursor_section(self) -> Section | None:
+        """The section the cursor is in. None where the cursor names no one
+        section — an unsectioned task, a view grouped by something else, or a
+        view spanning projects, which loads no sections to name."""
         group_by = self._arrangement.group_by
         if not group_by or group_by[0] is not Field.SECTION:
             return None
@@ -2361,8 +2368,7 @@ class TodoistApp(App[None]):
             ),
             None,
         )
-        section = next((s for s in self._current_sections() if s.name == label), None)
-        return section.id if section else None
+        return next((s for s in self._current_sections() if s.name == label), None)
 
     def _on_section_named(
         self, project_id: str, after_id: str | None, name: str | None
@@ -2563,7 +2569,10 @@ class TodoistApp(App[None]):
         task_id = self._cursor_task_id(table)
         if task_id is None or task_id not in touched(self._outbox.pending):
             return
-        path = group_path_of(self._visible, self._arrangement, task_id)
+        self._unfold_to(self._visible, task_id)
+
+    def _unfold_to(self, rows: list[TaskRow], task_id: str) -> None:
+        path = group_path_of(rows, self._arrangement, task_id)
         opened = {path[:depth] for depth in range(1, len(path) + 1)} - self._open_groups
         if opened:
             self._open_groups |= opened

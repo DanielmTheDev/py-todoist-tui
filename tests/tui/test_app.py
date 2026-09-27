@@ -8581,9 +8581,11 @@ async def test_a_move_survives_the_next_sync() -> None:
 # --- moving a section ---
 
 
-def _three_section_repo() -> FakeRepository:
+def _three_section_repo[R: FakeRepository](
+    kind: type[R] = FakeRepository,
+) -> R:
     """A Work project with three sections, the middle one holding no task."""
-    return FakeRepository(
+    return kind(
         [_row("planned", "9", section_id="s1"), _row("later", "9", section_id="s3")],
         [Project(id="9", name="Work")],
         sections=[
@@ -9431,6 +9433,100 @@ async def test_add_section_needs_a_project_view() -> None:
         assert not isinstance(app.screen, TextPromptScreen)
         assert repo.applied == []
         assert any("project" in note.lower() for note in _notifications(app))
+
+
+async def _add_from_cursor(app: TodoistApp, pilot: Pilot[None], content: str) -> None:
+    await pilot.press("a")
+    await pilot.pause()
+    await _type(pilot, content)
+    await pilot.press("ctrl+s")
+    await _settle(pilot)
+
+
+def _stripped(table: DataTable[object]) -> list[str]:
+    return [c.strip() for c in _content_col(table)]
+
+
+# --- adding a task on a section header ---
+
+
+@pytest.mark.anyio
+async def test_a_on_a_section_header_adds_into_that_section() -> None:
+    repo = _three_section_repo()
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        await _open_work(app, pilot)  # the cursor opens on the Planning header
+        await _add_from_cursor(app, pilot, "new")
+        await settled(app)
+
+        assert _added(repo).section_ref == "s1"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("moves", "section"),
+    [
+        ((), "Planning"),  # folded: it opens, so the task is seen landing
+        (("j",), "Waiting"),  # empty: no sibling to borrow a section order from
+    ],
+)
+async def test_a_on_a_section_header_shows_the_task_under_it(
+    moves: tuple[str, ...], section: str
+) -> None:
+    repo = _three_section_repo(HeldCreationRepository)
+    app = TodoistApp(repo)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press(*moves)
+        await _add_from_cursor(app, pilot, "new")
+
+        rows = _stripped(table)
+        header = next(i for i, r in enumerate(rows) if section in r)
+        below = rows[header + 1 :]
+        members = below[: next(i for i, r in enumerate(below) if "──" in r)]
+        assert "new" + PENDING_MARK in members
+
+        repo.hold.set()
+        await settled(app)
+
+
+@pytest.mark.anyio
+async def test_a_on_a_header_nested_under_a_section_adds_into_the_section() -> None:
+    repo = _three_section_repo()
+    store = InMemoryArrangements()
+    await store.save("project:9", Arrangement(group_by=(Field.SECTION, Field.PRIORITY)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        table = await _open_work(app, pilot)
+        await pilot.press("l", "j")  # unfold Planning, onto its P4 header
+        assert "P4" in _content_col(table)[table.cursor_row]
+        await _add_from_cursor(app, pilot, "new")
+        await settled(app)
+
+        assert _added(repo).section_ref == "s1"
+
+
+@pytest.mark.anyio
+async def test_a_on_a_section_header_spanning_projects_adds_no_section() -> None:
+    """Today's header can gather like-named sections of two projects, so it
+    names no one section to add into."""
+    repo = FakeRepository(
+        [_row("planned", "9", section_id="s1")],
+        [Project(id="220", name="Inbox", is_inbox=True), Project(id="9", name="Work")],
+        sections=[Section(id="s1", project_id="9", name="Planning", order=1)],
+    )
+    store = InMemoryArrangements()
+    await store.save("today", Arrangement(group_by=(Field.SECTION,)))
+    app = TodoistApp(repo, arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        table = app.query_one(TaskTable)
+        assert "Planning" in _content_col(table)[table.cursor_row]
+        await _add_from_cursor(app, pilot, "new")
+        await settled(app)
+
+        assert _added(repo).section_ref is None
 
 
 @pytest.mark.anyio
