@@ -3,7 +3,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from todoist_tui.application.add_task import add_task
+from todoist_tui.application.add_task import add_task, plan_task
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import (
@@ -32,8 +32,9 @@ class FakeRepository:
     async def projects(self) -> list[Project]:
         return self._projects
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         self.applied.append(plan)
+        return {}
 
     async def today(self) -> list[Task]:
         return []
@@ -381,3 +382,12 @@ async def test_a_reminder_still_points_at_the_parent_past_its_subtasks() -> None
     assert repo.applied[0].reminders[0] == NewReminder(
         "rem", "parent", Reminder("", "", "relative", minute_offset=30)
     )
+
+
+@pytest.mark.anyio
+async def test_a_planned_task_can_take_a_given_place_in_its_list() -> None:
+    plan = await plan_task(
+        FakeRepository(), "Trip", project_id="P", child_order=3, temp_ids=iter(["t"])
+    )
+
+    assert plan.tasks[0].child_order == 3

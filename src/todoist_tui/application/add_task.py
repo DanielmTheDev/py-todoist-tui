@@ -1,5 +1,6 @@
 """Create a single task, optionally under a parent. Todoist takes a create as a
-batched Sync command, so the work is one `CreationPlan` holding one task."""
+batched Sync command, so the work is one `CreationPlan` holding one task.
+`plan_task` answers that plan unsent, for a caller that adds to the batch."""
 
 import uuid
 from collections.abc import Iterator
@@ -41,7 +42,44 @@ async def add_task(
     subtasks: tuple[NewChild, ...] = (),
     temp_ids: Iterator[str] | None = None,
 ) -> None:
-    """Add `content` to `project_id`, falling back to the Inbox when it is None.
+    """Add `content` to `project_id` — see `plan_task`."""
+    await repo.apply_creation(
+        await plan_task(
+            repo,
+            content,
+            description,
+            project_id,
+            section_id,
+            parent_id,
+            due,
+            deadline,
+            priority,
+            labels,
+            reminders,
+            subtasks,
+            temp_ids=temp_ids,
+        )
+    )
+
+
+async def plan_task(
+    repo: TaskRepository,
+    content: str,
+    description: str = "",
+    project_id: str | None = None,
+    section_id: str | None = None,
+    parent_id: str | None = None,
+    due: Due | DueText | None = None,
+    deadline: Deadline | None = None,
+    priority: Priority = Priority.P4,
+    labels: tuple[str, ...] = (),
+    reminders: tuple[Reminder, ...] = (),
+    subtasks: tuple[NewChild, ...] = (),
+    child_order: int | None = None,
+    temp_ids: Iterator[str] | None = None,
+) -> CreationPlan:
+    """Plan adding `content` to `project_id`, falling back to the Inbox when it is
+    None. With no `child_order` Todoist appends the task to the end of its list.
 
     A subtask (`parent_id` set) inherits its parent's section, so the section is
     left out rather than sent alongside. A label Todoist doesn't know yet is
@@ -63,7 +101,7 @@ async def add_task(
         deadline=deadline,
         labels=labels,
         description=description,
-        child_order=None,  # let Todoist append it to the end of its list
+        child_order=child_order,
         project_ref=project_id or await _inbox_id(repo),
         section_ref=None if parent_id else section_id,
         parent_ref=parent_id,
@@ -78,7 +116,7 @@ async def add_task(
             NewReminder(next(ids), born.temp_id, reminder)
             for reminder in _wanted(child)
         ]
-    await repo.apply_creation(CreationPlan((), (), (task, *children), tuple(alerts)))
+    return CreationPlan((), (), (task, *children), tuple(alerts))
 
 
 def _known(due: Due | DueText | None) -> Due | None:

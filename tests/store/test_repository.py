@@ -196,8 +196,9 @@ class FakeInner:
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         self.text_edits.append((task_id, content, description))
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         self.applied.append(plan)
+        return {"tp": "P1"}
 
     async def refresh(self) -> None:  # pragma: no cover - must not be called
         raise AssertionError("refresh() is served by the snapshot repo")
@@ -509,9 +510,10 @@ async def test_apply_creation_delegates_to_the_api() -> None:
         projects=(NewProject(temp_id="tp", name="Work (copy)"),), sections=(), tasks=()
     )
 
-    await repo.apply_creation(plan)
+    created = await repo.apply_creation(plan)
 
     assert inner.applied == [plan]
+    assert created == {"tp": "P1"}  # the real ids pass through
 
 
 @pytest.mark.anyio

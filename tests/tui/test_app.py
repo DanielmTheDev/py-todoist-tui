@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import itertools
 import re
 from collections.abc import Sequence
 from dataclasses import replace
@@ -373,7 +374,7 @@ class FakeRepository:
         self.deleted_reminders.append(reminder_id)
         self._reminders = [r for r in self._reminders if r.id != reminder_id]
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         self.applied.append(plan)
         # created tasks land where the server would put them: readable on the
         # next sync, under the temp id the plan named them by
@@ -394,6 +395,9 @@ class FakeRepository:
                 for task in plan.tasks
             ),
         ]
+        for move in plan.moves:
+            await self.set_parent(move.task_id, move.parent_ref)
+        return {task.temp_id: task.temp_id for task in plan.tasks}
 
     async def refresh(self) -> None:
         self.refresh_calls += 1
@@ -6507,9 +6511,9 @@ class HeldCreationRepository(FakeRepository):
         super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
         self.hold = asyncio.Event()
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         await self.hold.wait()
-        await super().apply_creation(plan)
+        return await super().apply_creation(plan)
 
     async def today(self) -> list[Task]:
         # a task written into Today comes back in it, the way the server answers
@@ -6517,7 +6521,7 @@ class HeldCreationRepository(FakeRepository):
 
 
 class FailingCreationRepository(HeldCreationRepository):
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         await self.hold.wait()
         raise RuntimeError("boom")
 
@@ -9543,3 +9547,192 @@ async def test_add_section_cancelled_creates_nothing() -> None:
 
         assert repo.applied == []
         assert repo.section_reorders == []
+
+
+class CascadingRepository(FakeRepository):
+    """Deletes as Todoist does: the task's subtasks go with it."""
+
+    async def delete(self, task_id: TaskId) -> None:
+        await super().delete(task_id)
+        self._tasks = [t for t in self._tasks if t.parent_id != task_id]
+
+
+class StuckMoveRepository(CascadingRepository):
+    """Takes the collect, then refuses to move anything back out."""
+
+    async def set_project(
+        self, task_id: TaskId, project_id: str, section_id: str | None = None
+    ) -> None:
+        raise RuntimeError("boom")
+
+
+async def _collect(app: TodoistApp, pilot: Pilot[None], *keys: str) -> None:
+    await pilot.pause()
+    await pilot.press(*keys, "N")
+    await pilot.pause()
+    await _type(pilot, "trip")
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    await settled(app)
+    await pilot.pause()
+
+
+def _family(table: TaskTable, parent: str) -> list[str]:
+    """The subtasks shown under the expanded `parent`, pending marks aside."""
+    shown = [cell.removesuffix(" ⟳") for cell in _content_col(table)]
+    below = shown[shown.index(f"▾ {parent}") + 1 :]
+    return [c.strip() for c in itertools.takewhile(lambda c: c.startswith("  "), below)]
+
+
+def _collected(repo: FakeRepository) -> NewTask:
+    (plan,) = repo.applied
+    return plan.tasks[0]
+
+
+@pytest.mark.anyio
+async def test_shift_n_collects_the_selected_tasks_under_a_new_parent() -> None:
+    repo = HeldCreationRepository(
+        [_row("kid1"), _row("kid2"), _row("other")],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("x", "x", "N")
+        await pilot.pause()
+        await _type(pilot, "trip")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        table = app.query_one(TaskTable)
+        # in place at once, under a parent Todoist has yet to name
+        assert _family(table, "trip") == ["kid1", "kid2"]
+        assert _selected_rows(table) == []  # selection spent
+
+        repo.hold.set()
+        await settled(app)
+        await pilot.pause()
+
+        assert [m.task_id for m in repo.applied[0].moves] == ["kid1", "kid2"]
+        # the real parent is unfolded as the stand-in was
+        assert _family(table, "trip") == ["kid1", "kid2"]
+
+
+@pytest.mark.anyio
+async def test_shift_n_collects_the_cursor_task_when_nothing_is_selected() -> None:
+    repo = FakeRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot)
+
+        assert [m.task_id for m in repo.applied[0].moves] == ["kid"]
+
+
+@pytest.mark.anyio
+async def test_the_new_parent_takes_the_first_collected_tasks_place() -> None:
+    repo = FakeRepository(
+        [
+            _row("boss"),
+            _row("kid1", parent_id="boss", child_order=3),
+            _row("kid2", parent_id="boss", child_order=5),
+        ],
+        [Project(id="220", name="Errands")],
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot, "l", "j", "x", "j", "x")
+
+        parent = _collected(repo)
+        assert (parent.parent_ref, parent.child_order) == ("boss", 3)
+
+
+@pytest.mark.anyio
+async def test_collecting_clears_the_collected_tasks_dues() -> None:
+    repo = FakeRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot)
+
+        assert repo.dues == [(TaskId("kid"), None)]
+
+
+@pytest.mark.anyio
+async def test_a_parent_collected_in_today_is_due_today() -> None:
+    """The collected tasks lose their dues, so an undated parent would take the
+    whole bunch out of the view it was gathered in."""
+    repo = FakeRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot)
+
+        assert _collected(repo).due == Due(date=_TODAY)
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_collect_editor_changes_nothing() -> None:
+    repo = FakeRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("N")
+        await pilot.pause()
+        await pilot.press("escape")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.applied == [] and repo.dues == []
+        assert _content_col(app.query_one(TaskTable)) == ["kid"]
+
+
+@pytest.mark.anyio
+async def test_undo_lifts_the_collected_tasks_out_and_deletes_the_new_parent() -> None:
+    repo = CascadingRepository(
+        [_row("kid1"), _row("kid2")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot, "x", "x")
+        await pilot.press("z")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted == [TaskId(_collected(repo).temp_id)]
+        # moved back out before the delete, which would have taken them along
+        assert _content_col(app.query_one(TaskTable)) == ["kid1", "kid2"]
+        assert {task_id for task_id, due in repo.dues if due is not None} == {
+            "kid1",
+            "kid2",
+        }
+
+
+@pytest.mark.anyio
+async def test_an_undo_that_cannot_lift_a_task_out_deletes_nothing() -> None:
+    repo = StuckMoveRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot)
+        await pilot.press("z")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted == []
+
+
+@pytest.mark.anyio
+async def test_shift_n_on_the_detail_card_collects_the_open_task() -> None:
+    repo = FakeRepository(
+        [_row("kid"), _row("other")], [Project(id="220", name="Errands")]
+    )
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await _collect(app, pilot, "enter")
+
+        assert [m.task_id for m in repo.applied[0].moves] == ["kid"]

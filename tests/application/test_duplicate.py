@@ -63,8 +63,9 @@ class FakeRepository:
     async def all_tasks(self) -> list[Task]:
         return [task for tasks in self._tasks.values() for task in tasks]
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         self.applied.append(plan)
+        return {}
 
     async def today(self) -> list[Task]:
         return []

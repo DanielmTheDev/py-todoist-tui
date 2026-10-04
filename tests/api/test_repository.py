@@ -1789,3 +1789,57 @@ async def test_upload_attachment_turns_the_answer_into_an_attachment() -> None:
     assert attachment.file_url == "https://files.todoist.com/x/shot.png"
     assert attachment.is_image
     assert attachment.image_width == 4
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_apply_creation_moves_existing_tasks_under_one_it_creates() -> None:
+    """The new parent has no id until the batch lands, so each move names its
+    temp_id — and the create answers the id it became."""
+    from todoist_tui.domain.creation import CreationPlan, NewMove, NewTask
+
+    ids = iter(["u-1", "u-2", "u-3"])
+    route = respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sync_status": {"u-1": "ok", "u-2": "ok", "u-3": "ok"},
+                "temp_id_mapping": {"t1": "N1"},
+            },
+        )
+    )
+    repo = ApiTaskRepository(
+        TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+    )
+
+    created = await repo.apply_creation(
+        CreationPlan(
+            projects=(),
+            sections=(),
+            tasks=(
+                NewTask(
+                    temp_id="t1",
+                    content="parent",
+                    priority=Priority.P4,
+                    due=None,
+                    deadline=None,
+                    labels=(),
+                    description="",
+                    child_order=None,
+                    project_ref="P",
+                    section_ref=None,
+                    parent_ref=None,
+                ),
+            ),
+            moves=(NewMove(TaskId("A"), "t1"), NewMove(TaskId("B"), "t1")),
+        )
+    )
+
+    commands = json.loads(
+        parse_qs(route.calls.last.request.content.decode())["commands"][0]
+    )
+    assert commands[1:] == [
+        {"type": "item_move", "uuid": "u-2", "args": {"id": "A", "parent_id": "t1"}},
+        {"type": "item_move", "uuid": "u-3", "args": {"id": "B", "parent_id": "t1"}},
+    ]
+    assert created == {"t1": "N1"}

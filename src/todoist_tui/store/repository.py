@@ -243,9 +243,10 @@ class SnapshotTaskRepository:
         await self._inner.delete_reminder(reminder_id)
         self._mark_stale()
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
-        await self._inner.apply_creation(plan)
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
+        created = await self._inner.apply_creation(plan)
         self._mark_stale()
+        return created
 
     def _mark_stale(self) -> None:
         self._dirty = True

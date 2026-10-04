@@ -28,7 +28,7 @@ def _random_uuid() -> str:
     return str(uuid.uuid4())
 
 
-type _Queued = tuple[list[dict[str, Any]], asyncio.Future[None]]
+type _Queued = tuple[list[dict[str, Any]], asyncio.Future[dict[str, str]]]
 
 
 class SyncCommandError(Exception):
@@ -299,27 +299,31 @@ class TodoistClient:
         await self._command("item_move", {"id": task_id, "parent_id": parent_id})
 
     async def create_entities(
-        self, specs: list[tuple[str, str, dict[str, Any]]]
-    ) -> None:
-        """Batch-create resources in one trip. Each spec is
-        `(command_type, temp_id, args)`; args may reference another spec's
-        `temp_id` (as project_id/section_id/parent_id) — Todoist resolves those
-        within the batch."""
+        self, specs: list[tuple[str, str | None, dict[str, Any]]]
+    ) -> dict[str, str]:
+        """Batch-create resources in one trip, answering each temp_id's real id.
+        Each spec is `(command_type, temp_id, args)`; args may reference another
+        spec's `temp_id` (as project_id/section_id/parent_id) — Todoist resolves
+        those within the batch. A spec with no temp_id creates nothing: it acts on
+        something that exists or that the batch creates (an `item_move`)."""
         commands = [
-            {"type": kind, "uuid": self._uuid(), "temp_id": temp_id, "args": args}
+            {"type": kind, "uuid": self._uuid(), "args": args}
+            | ({"temp_id": temp_id} if temp_id is not None else {})
             for kind, temp_id, args in specs
         ]
-        await self._run(commands)
+        return await self._run(commands)
 
     async def _command(self, kind: str, args: dict[str, Any]) -> None:
         await self._run([{"type": kind, "uuid": self._uuid(), "args": args}])
 
-    async def _run(self, commands: list[dict[str, Any]]) -> None:
-        answer = asyncio.get_running_loop().create_future()
+    async def _run(self, commands: list[dict[str, Any]]) -> dict[str, str]:
+        answer: asyncio.Future[dict[str, str]] = (
+            asyncio.get_running_loop().create_future()
+        )
         self._queued.append((commands, answer))
         if self._flush is None or self._flush.done():
             self._flush = asyncio.create_task(self._send_queued())
-        await answer
+        return await answer
 
     async def _send_queued(self) -> None:
         """Post what is queued and answer each caller with its own commands'
@@ -341,9 +345,12 @@ class TodoistClient:
     async def _answer(self, batch: list[_Queued]) -> None:
         commands = [c for cs, _ in batch for c in cs]
         sync_status: dict[str, Any] = {}
+        created: dict[str, str] = {}
         try:
             for start in range(0, len(commands), COMMAND_LIMIT):
-                sync_status |= await self._post(commands[start : start + COMMAND_LIMIT])
+                body = await self._post(commands[start : start + COMMAND_LIMIT])
+                sync_status |= body["sync_status"]
+                created |= body.get("temp_id_mapping", {})
         except Exception as error:  # the whole trip failed: so did every caller
             for _commands, answer in batch:
                 answer.set_exception(error)
@@ -354,14 +361,14 @@ class TodoistClient:
             except Exception as error:  # incl. a verdict the response left out
                 answer.set_exception(error)
             else:
-                answer.set_result(None)
+                answer.set_result(_own_ids(own, created))
 
     async def _post(self, commands: list[dict[str, Any]]) -> dict[str, Any]:
         response = await self._http.post(
             "/sync", data={"commands": json.dumps(commands)}
         )
         response.raise_for_status()
-        return cast("dict[str, Any]", response.json())["sync_status"]
+        return cast("dict[str, Any]", response.json())
 
     async def _paginate(
         self, path: str, params: dict[str, str]
@@ -377,6 +384,16 @@ class TodoistClient:
             if not cursor:
                 return items
             query["cursor"] = cast("str", cursor)
+
+
+def _own_ids(commands: list[dict[str, Any]], created: dict[str, str]) -> dict[str, str]:
+    """The real ids of the temp ids among `commands` — not the whole request's,
+    which other callers share."""
+    return {
+        c["temp_id"]: created[c["temp_id"]]
+        for c in commands
+        if c.get("temp_id") in created
+    }
 
 
 def _raise_for_commands(

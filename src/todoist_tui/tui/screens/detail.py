@@ -50,6 +50,7 @@ FORWARDED: Mapping[str, str] = {
     "A": "add_subtask",
     "n": "move_parent",
     "V": "move_parent",
+    "N": "collect_parent",
     "v": "move_task",
     "t": "set_due",
     "d": "set_deadline",

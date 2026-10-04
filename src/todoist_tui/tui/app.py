@@ -23,7 +23,8 @@ from textual.widgets import DataTable, Footer, Rule, Static
 from todoist_tui.application.activity import ActivityRow, load_activity
 from todoist_tui.application.add_reminder import add_reminder
 from todoist_tui.application.add_section import add_section
-from todoist_tui.application.add_task import add_task
+from todoist_tui.application.add_task import add_task, plan_task
+from todoist_tui.application.collect import collect_under_new_parent
 from todoist_tui.application.comments import (
     attach_file,
     delete_comment,
@@ -48,7 +49,7 @@ from todoist_tui.application.mutation import (
     reorder_sections as reorder_sections_mutation,
 )
 from todoist_tui.application.open_attachment import open_attachment
-from todoist_tui.application.outbox import Command, Outbox
+from todoist_tui.application.outbox import Command, Outbox, as_mutations
 from todoist_tui.application.reorder import (
     reorder,
     reorder_sections,
@@ -432,6 +433,7 @@ class TodoistApp(App[None]):
         Binding("v", "move_task", "Move", show=False),
         # `n` for nest; `V` stays bound for the fingers that learned it
         Binding("n,V", "move_parent", "Move under parent", show=False),
+        Binding("N", "collect_parent", "Collect under a new parent", show=False),
         Binding("Y", "duplicate", "Duplicate project/section", show=False),
         Binding("D", "delete_section", "Delete section", show=False),
         Binding("S", "add_section", "Add section", show=False),
@@ -1266,14 +1268,12 @@ class TodoistApp(App[None]):
         row = self._cursor_row()
         self._open_add(
             "New task",
-            replace(
-                self._lands_beside(row),
-                # so the task the user just wrote in Today actually shows up there
-                due=Due(date=self._clock.today())
-                if self._view.key == TODAY.key
-                else None,
-            ),
+            replace(self._lands_beside(row), due=self._today_if_in_today()),
         )
+
+    def _today_if_in_today(self) -> Due | None:
+        """The due a new task needs to show up in the Today it was written in."""
+        return Due(date=self._clock.today()) if self._view.key == TODAY.key else None
 
     def action_add_inbox_task(self) -> None:
         """A capture: the editor opens on nothing the cursor stands in, so the
@@ -1329,12 +1329,12 @@ class TodoistApp(App[None]):
             self._on_new_task,
         )
 
-    def _catalog(self, editing: str | None = None) -> Catalog:
+    def _catalog(self, *editing: str) -> Catalog:
         """What the editor's pickers choose from. A task being edited can nest
         under neither itself nor anything already beneath it."""
         return Catalog(
             move_targets=self._move_targets,
-            parents=partial(self._parent_candidates, {editing} if editing else set()),
+            parents=partial(self._parent_candidates, set(editing)),
             labels=self._label_names,
         )
 
@@ -1894,6 +1894,115 @@ class TodoistApp(App[None]):
         if old_parent:
             return self._parent_step(row, old_parent[0])
         return self._where_it_was_step(row)
+
+    def action_collect_parent(self) -> None:
+        rows = self._rows_of(self._targets(self.query_one(TaskTable)))
+        if not rows:  # empty table or cursor on a group header
+            return
+        first = rows[0]
+        ids = [str(row.id) for row in rows]
+        # the new parent stands where the first of its tasks stood; in Today it
+        # is dated, else the tasks it takes undated would all leave the view
+        draft = replace(
+            self._lands_beside(first),
+            parent_id=first.parent_id,
+            due=self._today_if_in_today(),
+        )
+        heading = f"Collect {len(rows)} under a new parent"
+        self._push(
+            TaskEditScreen(draft, self._clock.today(), self._catalog(*ids), heading),
+            lambda done: self._on_collect_drafted(rows, done),
+        )
+
+    def _on_collect_drafted(self, rows: list[TaskRow], draft: TaskDraft | None) -> None:
+        if draft is None:  # editor was cancelled
+            return
+        first = rows[0]
+        parent = replace(self._provisional_row(draft), child_order=first.child_order)
+        self._expanded.add(parent.id)
+        self._selected.clear()
+        born: list[TaskId] = []  # the parent's real id, once the collect lands
+        work: list[tuple[Step, Step | None]] = [
+            (
+                self._collect_step(draft, parent, rows, born),
+                self._uncollect_step(parent, rows, born),
+            )
+        ]
+        # dated subtasks surface on their own in dated views, as `n` has it
+        for row in rows:
+            if row.due is not None:
+                task_id = str(row.id)
+                work.append(
+                    (self._due_step(task_id, None), self._due_step(task_id, row.due))
+                )
+        self._queue(work)
+
+    def _collect_step(
+        self,
+        draft: TaskDraft,
+        parent: TaskRow,
+        rows: list[TaskRow],
+        born: list[TaskId],
+    ) -> Step:
+        async def collect() -> None:
+            plan = await plan_task(
+                self._repo,
+                draft.content,
+                draft.description,
+                project_id=draft.project_id,
+                section_id=draft.section_id,
+                parent_id=draft.parent_id,
+                due=draft.due,
+                deadline=draft.deadline,
+                priority=draft.priority,
+                labels=draft.labels,
+                reminders=draft.reminders,
+                child_order=parent.child_order,
+            )
+            parent_id = await collect_under_new_parent(
+                self._repo, plan, [row.id for row in rows]
+            )
+            born.append(parent_id)
+            # the provisional row's unfolding dies with it; the real one inherits
+            self._expanded.add(parent_id)
+
+        return Step(
+            [
+                restore([parent]),
+                edit(
+                    [str(row.id) for row in rows],
+                    parent_id=str(parent.id),
+                    project_id=parent.project_id,
+                    project_name=parent.project_name,
+                    section_id=parent.section_id,
+                    section_name=parent.section_name,
+                ),
+            ],
+            collect,
+            "Failed to collect tasks",
+        )
+
+    def _uncollect_step(
+        self, parent: TaskRow, rows: list[TaskRow], born: list[TaskId]
+    ) -> Step:
+        """Every task back where it stood, then the parent gone. Todoist deletes a
+        task's subtree with it, so a task that cannot be moved out stops the
+        delete rather than going down with the parent."""
+        restores = [step for row in rows if (step := self._restore_parent_step(row))]
+
+        async def uncollect() -> None:
+            for step in restores:
+                await step.command()
+            await delete_task(self._repo, born[0])
+
+        return Step(
+            [
+                *(m for s in restores for m in as_mutations(s.mutation)),
+                hide([str(parent.id)]),
+            ],
+            uncollect,
+            "Failed to undo the collect",
+        )
 
     async def action_duplicate(self) -> None:
         if self._picking_duplicate:  # already loading or a step already open

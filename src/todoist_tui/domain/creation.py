@@ -11,6 +11,7 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.task import TaskId
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,8 +72,19 @@ class NewReminder:
 
 
 @dataclass(frozen=True, slots=True)
+class NewMove:
+    """An existing task to nest under a parent — typically one this same plan
+    creates, so `parent_ref` is its temp_id. Todoist hands the task, and its
+    subtree, the parent's project and section."""
+
+    task_id: TaskId
+    parent_ref: str
+
+
+@dataclass(frozen=True, slots=True)
 class CreationPlan:
     projects: tuple[NewProject, ...]
     sections: tuple[NewSection, ...]
     tasks: tuple[NewTask, ...]
     reminders: tuple[NewReminder, ...] = ()
+    moves: tuple[NewMove, ...] = ()  # applied in order, after every create

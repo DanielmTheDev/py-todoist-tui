@@ -786,6 +786,32 @@ async def test_create_entities_wraps_specs_in_temp_id_commands() -> None:
 
 @pytest.mark.anyio
 @respx.mock
+async def test_create_entities_answers_the_ids_its_temp_ids_became() -> None:
+    respx.post(f"{BASE_URL}/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sync_status": {"u-1": "ok", "u-2": "ok"},
+                "temp_id_mapping": {"tp": "P1", "tq": "P2"},
+            },
+        )
+    )
+    ids = iter(["u-1", "u-2"])
+    client = TodoistClient.create("tok", uuid_factory=lambda: next(ids))
+
+    # sharing a request, each caller hears only of its own temp ids
+    mine, theirs = await asyncio.gather(
+        client.create_entities([("project_add", "tp", {"name": "x"})]),
+        client.create_entities([("project_add", "tq", {"name": "y"})]),
+    )
+
+    assert mine == {"tp": "P1"}
+    assert theirs == {"tq": "P2"}
+    await client.aclose()
+
+
+@pytest.mark.anyio
+@respx.mock
 async def test_requests_use_a_generous_timeout() -> None:
     # a big batched duplicate create can take >5s server-side; httpx's 5s
     # default would ReadTimeout after the server already committed

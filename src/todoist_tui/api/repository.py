@@ -171,8 +171,8 @@ class ApiTaskRepository:
     async def set_text(self, task_id: TaskId, content: str, description: str) -> None:
         await self._client.update_item_text(str(task_id), content, description)
 
-    async def apply_creation(self, plan: CreationPlan) -> None:
-        specs: list[tuple[str, str, dict[str, Any]]] = []
+    async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
+        specs: list[tuple[str, str | None, dict[str, Any]]] = []
         for project in plan.projects:
             specs.append(("project_add", project.temp_id, {"name": project.name}))
         for section in plan.sections:
@@ -197,7 +197,11 @@ class ApiTaskRepository:
                     {"item_id": reminder.item_ref, **reminder.reminder.to_api},
                 )
             )
-        await self._client.create_entities(specs)
+        for move in plan.moves:
+            specs.append(
+                ("item_move", None, {"id": move.task_id, "parent_id": move.parent_ref})
+            )
+        return await self._client.create_entities(specs)
 
     async def refresh(self) -> None:
         """No-op: every read already hits the network, so there is no cache."""

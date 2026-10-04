@@ -77,7 +77,7 @@ class Outbox:
         `on_reject` runs if the server refuses the command — the caller's cue to
         forget whatever it staked on the change going through, such as its undo.
         """
-        self._entries.append(_Entry(_as_tuple(mutation), command, label, on_reject))
+        self._entries.append(_Entry(as_mutations(mutation), command, label, on_reject))
         self._on_change()
         if not self._dispatching:
             self._dispatching = True
@@ -145,7 +145,9 @@ class Outbox:
         self._task = asyncio.create_task(coroutine)
 
 
-def _as_tuple(mutation: Mutation | Sequence[Mutation] | None) -> tuple[Mutation, ...]:
+def as_mutations(
+    mutation: Mutation | Sequence[Mutation] | None,
+) -> tuple[Mutation, ...]:
     if mutation is None:
         return ()
     return (mutation,) if isinstance(mutation, Mutation) else tuple(mutation)
