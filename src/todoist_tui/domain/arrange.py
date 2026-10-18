@@ -86,6 +86,8 @@ class Field(Enum):
     DUE_DATE = "due_date"
     DUE_TIME = "due_time"
     DEADLINE = "deadline"
+    HAS_TIME = "has_time"
+    HAS_DEADLINE = "has_deadline"
     RECURRING = "recurring"
     CONTENT = "content"
     LABELS = "labels"
@@ -102,6 +104,8 @@ _FIELD_LABELS = {
     Field.DUE_DATE: "Due date",
     Field.DUE_TIME: "Due time",
     Field.DEADLINE: "Deadline",
+    Field.HAS_TIME: "Has time",
+    Field.HAS_DEADLINE: "Has deadline",
     Field.RECURRING: "Recurring",
     Field.CONTENT: "Content",
     Field.LABELS: "Labels",
@@ -153,12 +157,25 @@ def _buckets(field: Field, row: ArrangeRow) -> list[_Bucket]:
                 return [_Bucket((1, 0), _NO_DEADLINE)]
             deadline = row.deadline.date
             return [_Bucket((0, deadline.toordinal()), deadline.isoformat())]
+        case Field.HAS_TIME:
+            timed = row.due is not None and row.due.time is not None
+            return [_has_bucket(timed, "With time", _NO_DUE_TIME)]
+        case Field.HAS_DEADLINE:
+            return [
+                _has_bucket(row.deadline is not None, "With deadline", _NO_DEADLINE)
+            ]
         case Field.CONTENT:
             return [_Bucket((0, row.content.lower()), row.content)]
         case Field.LABELS:
             if not row.labels:
                 return [_Bucket((1, ""), _NO_LABELS)]
             return [_Bucket((0, name.lower()), name) for name in row.labels]
+
+
+def _has_bucket(has: bool, with_label: str, without_label: str) -> _Bucket:
+    # Both halves are present values, so descending flips them; ascending leads
+    # with the "without" half.
+    return _Bucket((0, int(has)), with_label if has else without_label)
 
 
 def _sort_order(field: Field, row: ArrangeRow) -> _OrderKey:

@@ -19,6 +19,8 @@ _FIELD_KEYS: dict[str, Field] = {
     "d": Field.DUE_DATE,
     "e": Field.DEADLINE,
     "t": Field.DUE_TIME,
+    "i": Field.HAS_TIME,
+    "a": Field.HAS_DEADLINE,
     "u": Field.RECURRING,
     "c": Field.CONTENT,
     "l": Field.LABELS,

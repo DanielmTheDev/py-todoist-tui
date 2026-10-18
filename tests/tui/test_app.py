@@ -5535,6 +5535,21 @@ async def test_g_then_field_keys_group_the_list_and_persist() -> None:
 
 
 @pytest.mark.anyio
+async def test_g_then_i_and_a_group_by_has_time_then_has_deadline() -> None:
+    store = InMemoryArrangements()
+    app = TodoistApp(_two_project_repo(), arrangements=store)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("g", "i", "a", "enter")
+        await pilot.pause()
+        await settled(app)
+        assert await store.get("today") == Arrangement(
+            group_by=(Field.HAS_TIME, Field.HAS_DEADLINE)
+        )
+
+
+@pytest.mark.anyio
 async def test_g_then_s_groups_the_list_by_section() -> None:
     repo = FakeRepository(
         [_in_section("planned", "s1")],

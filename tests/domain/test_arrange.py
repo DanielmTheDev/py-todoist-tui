@@ -303,6 +303,71 @@ def test_group_by_deadline_labels_dates_and_puts_no_deadline_last() -> None:
     ]
 
 
+def _timed(hour: int) -> Due:
+    return Due(date=datetime.date(2026, 8, 1), time=datetime.time(hour, 0))
+
+
+def test_group_by_has_time_splits_untimed_first() -> None:
+    rows = [
+        Row("1", "nine", due=_timed(9)),
+        Row("2", "all-day", due=_date(2026, 8, 1)),
+        Row("3", "fourteen", due=_timed(14)),
+        Row("4", "undated"),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(group_by=(Field.HAS_TIME,), sort_by=(SortKey(Field.CONTENT),)),
+        open_groups=frozenset({("No time",), ("With time",)}),
+    )
+
+    assert _shape(result) == [
+        ("H", 0, "No time"),
+        ("T", 1, "all-day"),
+        ("T", 1, "undated"),
+        ("H", 0, "With time"),
+        ("T", 1, "fourteen"),
+        ("T", 1, "nine"),
+    ]
+
+
+def test_group_by_has_deadline_descending_puts_deadlines_first() -> None:
+    rows = [
+        Row("1", "none"),
+        Row("2", "due", deadline=_deadline(2026, 8, 9)),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(
+            group_by=(Field.HAS_DEADLINE,), group_desc=frozenset({Field.HAS_DEADLINE})
+        ),
+        open_groups=frozenset({("No deadline",), ("With deadline",)}),
+    )
+
+    assert _shape(result) == [
+        ("H", 0, "With deadline"),
+        ("T", 1, "due"),
+        ("H", 0, "No deadline"),
+        ("T", 1, "none"),
+    ]
+
+
+def test_sort_by_has_time_leaves_ties_to_the_next_level() -> None:
+    rows = [
+        Row("1", "nine", priority=Priority.P4, due=_timed(9)),
+        Row("2", "undated"),
+        Row("3", "fourteen", priority=Priority.P1, due=_timed(14)),
+    ]
+
+    result = arrange(
+        rows,
+        Arrangement(sort_by=(SortKey(Field.HAS_TIME), SortKey(Field.PRIORITY))),
+    )
+
+    assert [c for _, _, c in _shape(result)] == ["undated", "fourteen", "nine"]
+
+
 def test_group_header_carries_subtree_task_count() -> None:
     rows = [
         Row("1", "w1", project_name="Work"),
