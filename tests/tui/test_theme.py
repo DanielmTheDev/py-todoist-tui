@@ -5,7 +5,8 @@ from rich.style import Style
 from textual.color import Color
 from textual.widget import Widget
 
-from tests.tui.test_app import FakeClock, FakeRepository
+from tests.fake_clock import FakeClock
+from tests.tui.test_app import FakeRepository
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.task import Task, TaskId

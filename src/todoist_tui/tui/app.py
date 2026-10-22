@@ -1134,6 +1134,7 @@ class TodoistApp(App[None]):
                 single.time if single else None,
                 allow_text=True,
                 current_text=single.string if single and single.is_recurring else None,
+                now=self._clock.now(),
             ),
             lambda result: self._on_scheduled([TaskId(i) for i in ids], result),
         )
@@ -1325,7 +1326,7 @@ class TodoistApp(App[None]):
 
     def _open_add(self, heading: str, draft: TaskDraft) -> None:
         self._push(
-            TaskEditScreen(draft, self._clock.today(), self._catalog(), heading),
+            TaskEditScreen(draft, self._clock, self._catalog(), heading),
             self._on_new_task,
         )
 
@@ -1439,7 +1440,7 @@ class TodoistApp(App[None]):
         self._push(
             TaskEditScreen(
                 draft_of(row, parent, self._children_of(row)),
-                self._clock.today(),
+                self._clock,
                 self._catalog(task_id),
             ),
             lambda saved: self._on_edited(row, saved),
@@ -1910,7 +1911,7 @@ class TodoistApp(App[None]):
         )
         heading = f"Collect {len(rows)} under a new parent"
         self._push(
-            TaskEditScreen(draft, self._clock.today(), self._catalog(*ids), heading),
+            TaskEditScreen(draft, self._clock, self._catalog(*ids), heading),
             lambda done: self._on_collect_drafted(rows, done),
         )
 
@@ -2206,7 +2207,9 @@ class TodoistApp(App[None]):
             return
         if request.add_absolute:  # finish by picking the date + time
             self._push(
-                ScheduleScreen(self._clock.today(), allow_text=True),
+                ScheduleScreen(
+                    self._clock.today(), allow_text=True, now=self._clock.now()
+                ),
                 lambda result: self._on_reminder_absolute(ids, result),
             )
         elif request.delete_id is not None:

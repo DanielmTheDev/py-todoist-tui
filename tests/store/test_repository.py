@@ -5,6 +5,7 @@ from datetime import date, time
 
 import pytest
 
+from tests.fake_clock import FakeClock
 from todoist_tui.domain.activity import ActivityPage, EventKind
 from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan, NewProject
@@ -21,15 +22,6 @@ from todoist_tui.domain.sync_delta import SyncDelta
 from todoist_tui.domain.task import Task, TaskId
 from todoist_tui.domain.upload import PendingUpload
 from todoist_tui.store.repository import FILTER_CACHE_LIMIT, SnapshotTaskRepository
-
-
-class FakeClock:
-    def __init__(self, today: date) -> None:
-        self._today = today
-
-    def today(self) -> date:
-        return self._today
-
 
 _TODAY = date(2026, 7, 23)
 _CLOCK = FakeClock(_TODAY)

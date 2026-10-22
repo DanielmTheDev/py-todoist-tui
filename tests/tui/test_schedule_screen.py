@@ -5,11 +5,18 @@ import pytest
 from textual.app import App
 from textual.widgets import Input, Static
 
-from todoist_tui.domain.due import Due
-from todoist_tui.tui.screens.schedule import DueResult, Kind, ScheduleScreen
+from todoist_tui.domain.due import Due, DueText
+from todoist_tui.domain.schedule import Postpone
+from todoist_tui.tui.screens.schedule import (
+    DueResult,
+    Kind,
+    ScheduleScreen,
+    rescheduled,
+)
 from todoist_tui.tui.screens.scrolling import ScrollBody
 
 _TUESDAY = datetime.date(2026, 7, 28)
+_NOW = datetime.datetime(2026, 7, 28, 14, 27)
 
 
 class _Host(App[None]):
@@ -22,8 +29,10 @@ class _Host(App[None]):
         kind: Kind = "due",
         allow_text: bool = False,
         current_text: str | None = None,
+        now: datetime.datetime | None = None,
     ) -> None:
         super().__init__()
+        self._now = now
         self._today = today
         self._on_result = on_result
         self._current = current
@@ -41,6 +50,7 @@ class _Host(App[None]):
                 self._kind,
                 allow_text=self._allow_text,
                 current_text=self._current_text,
+                now=self._now,
             ),
             self._on_result,
         )
@@ -59,10 +69,18 @@ async def _press(
     kind: Kind = "due",
     allow_text: bool = False,
     current_text: str | None = None,
+    now: datetime.datetime | None = None,
 ) -> DueResult | None:
     results: list[DueResult | None] = []
     host = _Host(
-        today, results.append, current, current_time, kind, allow_text, current_text
+        today,
+        results.append,
+        current,
+        current_time,
+        kind,
+        allow_text,
+        current_text,
+        now,
     )
     async with host.run_test() as pilot:
         await pilot.pause()
@@ -344,3 +362,107 @@ async def test_the_calendar_scrolls_on_a_short_terminal() -> None:
         field = host.screen.query_one(Input)
         assert field.region.bottom <= 10
         assert host.screen.focused is field
+
+
+def _postponed(minutes: int) -> DueResult:
+    return DueResult(postpone=Postpone(datetime.timedelta(minutes=minutes), _NOW))
+
+
+@pytest.mark.anyio
+async def test_plus_climbs_the_postpone_ladder() -> None:
+    assert await _press("plus", "plus", "enter", now=_NOW) == _postponed(30)
+
+
+@pytest.mark.anyio
+async def test_minus_steps_back_down_the_ladder() -> None:
+    result = await _press("plus", "plus", "minus", "enter", now=_NOW)
+    assert result == _postponed(15)
+
+
+@pytest.mark.anyio
+async def test_minus_to_zero_returns_to_the_calendar_pick() -> None:
+    result = await _press("plus", "minus", "minus", "enter", now=_NOW)
+    assert result == DueResult(Due(date=_TUESDAY))
+
+
+@pytest.mark.anyio
+async def test_plus_stops_at_the_top_of_the_ladder() -> None:
+    result = await _press(*["plus"] * 20, "enter", now=_NOW)
+    assert result == _postponed(480)
+
+
+@pytest.mark.anyio
+async def test_typing_a_time_drops_the_postpone() -> None:
+    result = await _press("plus", "9", "enter", now=_NOW)
+    assert result == DueResult(Due(date=_TUESDAY, time=datetime.time(9, 0)))
+
+
+@pytest.mark.anyio
+async def test_moving_the_calendar_drops_the_postpone() -> None:
+    result = await _press("plus", "l", "enter", now=_NOW)
+    assert result == DueResult(Due(date=datetime.date(2026, 7, 29)))
+
+
+@pytest.mark.anyio
+async def test_deadline_mode_ignores_plus() -> None:
+    result = await _press("plus", "enter", kind="deadline", now=_NOW)
+    assert result == DueResult(Due(date=_TUESDAY))
+
+
+@pytest.mark.anyio
+async def test_plus_without_a_clock_is_ignored() -> None:
+    assert await _press("plus", "enter") == DueResult(Due(date=_TUESDAY))
+
+
+@pytest.mark.anyio
+async def test_postpone_previews_the_offset_and_landing_time() -> None:
+    results: list[DueResult | None] = []
+    host = _Host(_TUESDAY, results.append, now=_NOW)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert "+/- in" in str(host.screen.query_one("#schedule", Static).render())
+        await pilot.press("plus", "plus", "plus", "plus", "plus")
+        await pilot.pause()
+        rendered = str(host.screen.query_one("#schedule", Static).render())
+        assert "in 1h30m" in rendered
+        assert "→ 16:00 today" in rendered
+
+
+@pytest.mark.anyio
+async def test_postpone_preview_counts_from_the_tasks_future_time() -> None:
+    results: list[DueResult | None] = []
+    host = _Host(
+        _TUESDAY,
+        results.append,
+        current=datetime.date(2026, 7, 29),
+        current_time=datetime.time(9, 0),
+        now=_NOW,
+    )
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("plus")
+        await pilot.pause()
+        rendered = str(host.screen.query_one("#schedule", Static).render())
+        assert "→ 09:15 Wed 29 Jul" in rendered
+
+
+def test_rescheduled_postpones_from_the_tasks_own_time() -> None:
+    result = DueResult(postpone=Postpone(datetime.timedelta(hours=1), _NOW))
+    current = Due(date=datetime.date(2026, 7, 28), time=datetime.time(18, 0))
+    assert rescheduled(result, current) == Due(
+        date=datetime.date(2026, 7, 28), time=datetime.time(19, 0)
+    )
+
+
+def test_rescheduled_postpones_a_typed_phrase_due_from_now() -> None:
+    result = DueResult(postpone=Postpone(datetime.timedelta(hours=1), _NOW))
+    assert rescheduled(result, DueText("tomorrow")) == Due(
+        date=datetime.date(2026, 7, 28), time=datetime.time(15, 30)
+    )
+
+
+@pytest.mark.anyio
+async def test_removing_or_erasing_the_time_drops_the_postpone() -> None:
+    plain = DueResult(Due(date=_TUESDAY))
+    assert await _press("plus", "r", "enter", now=_NOW) == plain
+    assert await _press("plus", "backspace", "enter", now=_NOW) == plain

@@ -7,6 +7,7 @@ from textual import events
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
+from tests.fake_clock import FakeClock
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
@@ -104,7 +105,8 @@ class _Host(App[None]):
 
     def on_mount(self) -> None:
         self.push_screen(
-            TaskEditScreen(self._draft, TODAY, self._catalog), self._on_result
+            TaskEditScreen(self._draft, FakeClock(TODAY), self._catalog),
+            self._on_result,
         )
 
 
@@ -961,3 +963,40 @@ async def test_delete_drops_the_highlighted_subtask() -> None:
         await pilot.pause()
 
         assert _sub_lines(host) == ["tag version"]
+
+
+@pytest.mark.anyio
+async def test_due_picker_postpones_from_the_clock_when_the_picker_opens() -> None:
+    edited: list[TaskDraft | None] = []
+    host = _Host("Buy milk", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+t")
+        await pilot.pause()
+        await pilot.press(*["plus"] * 4, "enter")  # in 1h from 14:27
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert edited == [
+        TaskDraft("Buy milk", "", due=Due(date=TODAY, time=datetime.time(15, 30)))
+    ]
+
+
+@pytest.mark.anyio
+async def test_absolute_reminder_picker_postpones_from_the_clock() -> None:
+    edited: list[TaskDraft | None] = []
+    host = _Host("Buy milk", "", edited.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+m")
+        await pilot.pause()
+        await pilot.press("a", "a")  # add, absolute
+        await pilot.pause()
+        await pilot.press(*["plus"] * 2, "enter")  # in 30m from 14:27
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert edited[0] is not None
+    assert edited[0].reminders == (
+        Reminder("", "", "absolute", Due(date=TODAY, time=datetime.time(15, 0))),
+    )

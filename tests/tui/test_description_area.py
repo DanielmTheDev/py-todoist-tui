@@ -8,6 +8,7 @@ from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.widgets import TextArea
 
+from tests.fake_clock import FakeClock
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
@@ -52,7 +53,9 @@ class _Host(App[None]):
 
     def on_mount(self) -> None:
         draft = TaskDraft("Buy milk", self._description)
-        self.push_screen(TaskEditScreen(draft, TODAY, EMPTY), self._on_result)
+        self.push_screen(
+            TaskEditScreen(draft, FakeClock(TODAY), EMPTY), self._on_result
+        )
 
     def action_intercepted(self) -> None:
         self.intercepted += 1

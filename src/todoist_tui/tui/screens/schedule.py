@@ -11,6 +11,8 @@ from textual.widgets import Input, Static
 
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.schedule import (
+    POSTPONE_LADDER,
+    Postpone,
     QuickKind,
     month_weeks,
     parse_time_digits,
@@ -26,13 +28,15 @@ Kind = Literal["due", "deadline"]
 @dataclass(frozen=True, slots=True)
 class DueResult:
     """A chosen date. `text` set means the user typed natural language for
-    Todoist to parse and wins over `due`; otherwise `due is None` means "clear
-    it" (distinct from a cancelled modal, which dismisses with None instead of a
+    Todoist to parse and wins over `due`; `postpone` set means "in X", resolved
+    per task against its own time; otherwise `due is None` means "clear it"
+    (distinct from a cancelled modal, which dismisses with None instead of a
     DueResult). In deadline mode the carried `Due` is date-only — the caller
     reads its `date`."""
 
     due: Due | None = None
     text: str | None = None
+    postpone: Postpone | None = None
 
 
 def rescheduled(
@@ -43,7 +47,10 @@ def rescheduled(
     so a recurring task keeps recurring."""
     if result.text is not None:
         return DueText(result.text)
-    return reschedule(current if isinstance(current, Due) else None, result.due)
+    original = current if isinstance(current, Due) else None
+    if result.postpone is not None:
+        return result.postpone.applied_to(original)
+    return reschedule(original, result.due)
 
 
 # Quick-key row: key -> (quick kind, label shown in the hint).
@@ -111,9 +118,14 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         kind: Kind = "due",
         allow_text: bool = False,
         current_text: str | None = None,
+        now: datetime.datetime | None = None,
     ) -> None:
         super().__init__()
         self._today = today
+        # "in X" counts from the wall clock, so +/- stay off without one
+        self._now = now if kind == "due" else None
+        self._current = Due(current, current_time) if current else None
+        self._postpone_step = 0  # rungs climbed on POSTPONE_LADDER; 0 = off
         self._kind = kind
         self._allow_text = allow_text
         self._current_text = current_text or ""
@@ -163,31 +175,39 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self.dismiss(DueResult(quick_due(kind, self._today)))
         elif self._allow_text and event.key == "s":
             self.query_one("#due-text", Input).focus()
+        elif self._now is not None and event.character in ("+", "-"):
+            step = self._postpone_step + (1 if event.character == "+" else -1)
+            self._postpone_step = max(0, min(len(POSTPONE_LADDER), step))
+            self._refresh()
         elif self._kind == "due" and event.character and event.character.isdigit():
             # a full buffer restarts, so a prefilled time is retyped without clearing
-            self._time = (
+            self._edit_time(
                 event.character
                 if len(self._time) == 4
                 else self._time + event.character
             )
-            self._error = None
-            self._refresh()
         elif self._kind == "due" and event.key == "backspace":
-            self._time = self._time[:-1]
-            self._error = None
-            self._refresh()
+            self._edit_time(self._time[:-1])
         elif self._kind == "due" and event.key == "r":  # remove time, keep date
-            self._time = ""
-            self._error = None
-            self._refresh()
+            self._edit_time("")
         elif (
             move := _NAV.get(event.key) or _NAV.get(event.character or "")
         ) is not None:
             self._cursor = move(self._cursor)
+            self._postpone_step = 0  # a picked day replaces "in X"
             self._refresh()
         event.stop()  # consume every key so app bindings never fire under the modal
 
+    def _edit_time(self, digits: str) -> None:
+        self._time = digits
+        self._postpone_step = 0  # any time edit replaces "in X"
+        self._error = None
+        self._refresh()
+
     def _confirm(self) -> None:
+        if (postpone := self._postpone) is not None:
+            self.dismiss(DueResult(postpone=postpone))
+            return
         try:
             time = parse_time_digits(self._time)
         except ValueError:
@@ -195,6 +215,12 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
             self._refresh()
             return
         self.dismiss(DueResult(Due(date=self._cursor, time=time)))
+
+    @property
+    def _postpone(self) -> Postpone | None:
+        if self._now is None or not self._postpone_step:
+            return None
+        return Postpone(POSTPONE_LADDER[self._postpone_step - 1], self._now)
 
     @property
     def _typing(self) -> bool:
@@ -231,6 +257,8 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         hint = "hjkl/arrows move  [ ] month"
         if self._kind == "due":
             hint += "  digits time"
+            if self._now is not None:
+                hint += "  +/- in"
             if self._time:
                 hint += "  r remove time"
         if self._allow_text:
@@ -241,6 +269,12 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
 
     def _time_line(self) -> Text:
         line = Text("Time: ", style="bold")
+        if (postpone := self._postpone) is not None:
+            landing = postpone.applied_to(self._current)
+            day = "today" if landing.date == self._today else f"{landing.date:%a %d %b}"
+            line.append(f"in {_offset_label(postpone.by)}")
+            line.append(f"  → {landing.time:%H:%M} {day}", style="dim")
+            return line
         if not self._time:
             line.append("all-day", style="dim")
             return line
@@ -252,3 +286,10 @@ class ScheduleScreen(ModalScreen["DueResult | None"]):
         if parsed is not None:
             line.append(f"  → {parsed:%H:%M}", style="dim")
         return line
+
+
+def _offset_label(offset: datetime.timedelta) -> str:
+    hours, minutes = divmod(int(offset.total_seconds()) // 60, 60)
+    if not hours:
+        return f"{minutes}m"
+    return f"{hours}h{minutes}m" if minutes else f"{hours}h"

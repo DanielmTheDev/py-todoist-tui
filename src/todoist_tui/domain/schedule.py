@@ -1,5 +1,6 @@
 import calendar
 import datetime
+from dataclasses import dataclass
 from typing import Literal
 
 from todoist_tui.domain.due import Due
@@ -66,6 +67,36 @@ def reschedule(original: Due | None, picked: Due | None) -> Due | None:
             lang=original.lang,
         )
     return picked
+
+
+# "in X" offsets the picker's +/- walk: fine steps near now, coarse further out
+POSTPONE_LADDER: tuple[datetime.timedelta, ...] = tuple(
+    datetime.timedelta(minutes=m) for m in (15, 30, 45, 60, 90, 120, 180, 240, 360, 480)
+)
+_GRID = datetime.timedelta(minutes=5)
+
+
+@dataclass(frozen=True, slots=True)
+class Postpone:
+    """ "In X": `by` after the task's own due time, or after `now` when it has
+    no time or that time has passed (an overdue task should land in the future).
+    Applied per task, so a selection each shifts from its own time."""
+
+    by: datetime.timedelta
+    now: datetime.datetime
+
+    def applied_to(self, original: Due | None) -> Due:
+        base = self.now
+        if original is not None and original.time is not None:
+            base = max(base, datetime.datetime.combine(original.date, original.time))
+        target = _ceil_to_grid(base + self.by)
+        picked = Due(date=target.date(), time=target.time())
+        return reschedule(original, picked) or picked
+
+
+def _ceil_to_grid(moment: datetime.datetime) -> datetime.datetime:
+    floor = datetime.datetime.combine(moment.date(), datetime.time())
+    return floor + -((floor - moment) // _GRID) * _GRID
 
 
 def shift_month(day: datetime.date, months: int) -> datetime.date:

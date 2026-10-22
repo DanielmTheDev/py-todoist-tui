@@ -4,6 +4,8 @@ import pytest
 
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.schedule import (
+    POSTPONE_LADDER,
+    Postpone,
     month_weeks,
     parse_time_digits,
     quick_due,
@@ -177,3 +179,61 @@ def test_month_weeks_start_on_monday() -> None:
     first_week = month_weeks(2026, 7)[0]
     assert first_week[0] is None and first_week[1] is None
     assert first_week[2] == datetime.date(2026, 7, 1)
+
+
+_NOW = datetime.datetime(2026, 7, 28, 14, 27, 30)
+_HOUR = datetime.timedelta(hours=1)
+
+
+def _at(day: int, hour: int, minute: int) -> Due:
+    return Due(date=datetime.date(2026, 7, day), time=datetime.time(hour, minute))
+
+
+def test_postpone_counts_from_now_when_there_is_no_due() -> None:
+    by = datetime.timedelta(minutes=30)
+    assert Postpone(by, _NOW).applied_to(None) == _at(28, 15, 0)  # 14:57:30 rounds up
+
+
+def test_postpone_keeps_a_time_already_on_the_five_minute_grid() -> None:
+    now = datetime.datetime(2026, 7, 28, 14, 25)
+    by = datetime.timedelta(minutes=5)
+    assert Postpone(by, now).applied_to(None) == _at(28, 14, 30)
+
+
+def test_postpone_counts_from_a_future_due_time() -> None:
+    assert Postpone(_HOUR, _NOW).applied_to(_at(28, 18, 0)) == _at(28, 19, 0)
+
+
+def test_postpone_counts_from_now_when_the_due_time_is_past() -> None:
+    assert Postpone(_HOUR, _NOW).applied_to(_at(27, 18, 0)) == _at(28, 15, 30)
+
+
+def test_postpone_counts_from_now_for_an_all_day_due() -> None:
+    all_day = Due(date=datetime.date(2026, 7, 30))
+    assert Postpone(_HOUR, _NOW).applied_to(all_day) == _at(28, 15, 30)
+
+
+def test_postpone_crosses_midnight() -> None:
+    now = datetime.datetime(2026, 7, 28, 23, 50)
+    by = datetime.timedelta(minutes=30)
+    assert Postpone(by, now).applied_to(None) == _at(29, 0, 20)
+
+
+def test_postpone_keeps_a_recurring_rule() -> None:
+    daily = Due(
+        date=datetime.date(2026, 7, 28),
+        time=datetime.time(18, 0),
+        is_recurring=True,
+        string="every day at 18:00",
+    )
+    assert Postpone(_HOUR, _NOW).applied_to(daily) == Due(
+        date=datetime.date(2026, 7, 28),
+        time=datetime.time(19, 0),
+        is_recurring=True,
+        string="every day at 18:00",
+    )
+
+
+def test_postpone_ladder_climbs_from_a_quarter_hour_to_hours() -> None:
+    assert POSTPONE_LADDER[0] == datetime.timedelta(minutes=15)
+    assert list(POSTPONE_LADDER) == sorted(POSTPONE_LADDER)

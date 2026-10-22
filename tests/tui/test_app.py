@@ -25,6 +25,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from tests.fake_clock import FakeClock
 from tests.tui.tiers import (
     cell_tier,
     priority_of,
@@ -420,14 +421,6 @@ class FailingActivityRepository(FakeRepository):
         self, event_type: EventKind | None = None, cursor: str | None = None
     ) -> ActivityPage:
         raise RuntimeError("offline")
-
-
-class FakeClock:
-    def __init__(self, today: datetime.date) -> None:
-        self._today = today
-
-    def today(self) -> datetime.date:
-        return self._today
 
 
 _TODAY = datetime.date(2026, 7, 28)  # a Tuesday
@@ -981,6 +974,36 @@ async def test_scheduling_applies_to_the_whole_selection() -> None:
         tomorrow = Due(date=datetime.date(2026, 7, 29))
         assert set(repo.dues) == {(TaskId("A"), tomorrow), (TaskId("C"), tomorrow)}
         assert "selected" not in _status(app)
+
+
+@pytest.mark.anyio
+async def test_postpone_shifts_each_selected_task_from_its_own_time() -> None:
+    def at(content: str, hour: int) -> Task:
+        due = Due(date=_TODAY, time=datetime.time(hour, 0))
+        return Task(
+            id=TaskId(content),
+            content=content,
+            priority=Priority.P4,
+            due=due,
+            project_id="220",
+        )
+
+    repo = FakeRepository([at("A", 16), at("B", 18)], [])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("x", "j", "x", "t")
+        await pilot.pause()
+        assert isinstance(app.screen, ScheduleScreen)
+        await pilot.press("plus", "plus", "plus", "plus", "enter")  # in 1h
+        await settled(app)
+        await pilot.pause()
+
+        assert set(repo.dues) == {
+            (TaskId("A"), Due(date=_TODAY, time=datetime.time(17, 0))),
+            (TaskId("B"), Due(date=_TODAY, time=datetime.time(19, 0))),
+        }
 
 
 def _timed(content: str) -> Task:

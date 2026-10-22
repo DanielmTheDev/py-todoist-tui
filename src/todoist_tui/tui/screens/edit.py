@@ -1,4 +1,3 @@
-import datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import ClassVar, cast
@@ -11,6 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.clock import Clock
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
 from todoist_tui.domain.links import attach, sole_url
@@ -129,7 +129,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     def __init__(
         self,
         draft: TaskDraft,
-        today: datetime.date,
+        clock: Clock,
         catalog: Catalog,
         heading: str | None = None,
         nests: bool = True,
@@ -137,7 +137,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         super().__init__()
         self._nests = nests
         self._draft = draft
-        self._today = today
+        self._clock = clock
         self._catalog = catalog
         self._heading = heading
         self._pending_url: str | None = None
@@ -202,11 +202,12 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         due = self._draft.due if isinstance(self._draft.due, Due) else None
         self._pick(
             ScheduleScreen(
-                self._today,
+                self._clock.today(),
                 due.date if due else None,
                 due.time if due else None,
                 allow_text=True,
                 current_text=due.string if due and due.is_recurring else None,
+                now=self._clock.now(),
             ),
             lambda result: replace(
                 self._draft, due=rescheduled(result, self._draft.due)
@@ -217,7 +218,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         current = self._draft.deadline
         self._pick(
             ScheduleScreen(
-                self._today,
+                self._clock.today(),
                 current.date if current else None,
                 kind="deadline",
             ),
@@ -305,7 +306,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
                 onto(saved)
 
         self._app.push_screen(
-            TaskEditScreen(draft, self._today, self._catalog, heading, nests=False),
+            TaskEditScreen(draft, self._clock, self._catalog, heading, nests=False),
             written,
         )
 
@@ -344,7 +345,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         due = self._draft.due
         self._pick(
             RemindersScreen(
-                self._today,
+                self._clock.today(),
                 self._draft.reminders,
                 # a relative reminder fires off the task's own due time
                 allow_relative=isinstance(due, Due) and due.time is not None,
@@ -371,7 +372,7 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
 
     def _pick_reminder_time(self) -> None:
         self._pick(
-            ScheduleScreen(self._today, allow_text=True),
+            ScheduleScreen(self._clock.today(), allow_text=True, now=self._clock.now()),
             self._remembering_at,
         )
 
@@ -401,7 +402,10 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
     def _repaint(self) -> None:
         self.query_one("#attributes", Static).update(
             attribute_strip(
-                self._draft, self._today, tier_styles(self), priority_styles(self)
+                self._draft,
+                self._clock.today(),
+                tier_styles(self),
+                priority_styles(self),
             )
         )
         if self._nests:
