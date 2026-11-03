@@ -25,7 +25,12 @@ from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
-from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen, rescheduled
+from todoist_tui.tui.screens.schedule import (
+    DueResult,
+    ScheduleScreen,
+    deadline_start,
+    rescheduled,
+)
 from todoist_tui.tui.screens.scrolling import ScrollBody
 from todoist_tui.tui.screens.subtask_list import HINT, SubtaskList
 from todoist_tui.tui.theme import (
@@ -215,11 +220,10 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         )
 
     def action_set_deadline(self) -> None:
-        current = self._draft.deadline
         self._pick(
             ScheduleScreen(
                 self._clock.today(),
-                current.date if current else None,
+                deadline_start(self._draft.deadline, self._draft.due),
                 kind="deadline",
             ),
             # the deadline screen carries a date-only Due; map it to a Deadline

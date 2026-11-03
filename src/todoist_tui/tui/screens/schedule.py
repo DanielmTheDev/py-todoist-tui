@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.schedule import (
     POSTPONE_LADDER,
@@ -51,6 +52,16 @@ def rescheduled(
     if result.postpone is not None:
         return result.postpone.applied_to(original)
     return reschedule(original, result.due)
+
+
+def deadline_start(
+    deadline: Deadline | None, due: Due | DueText | None
+) -> datetime.date | None:
+    """Where the deadline calendar opens: the deadline itself, else the due
+    date, since a deadline usually lands on or after it."""
+    if deadline is not None:
+        return deadline.date
+    return due.date if isinstance(due, Due) else None
 
 
 # Quick-key row: key -> (quick kind, label shown in the hint).

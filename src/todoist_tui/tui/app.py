@@ -163,7 +163,12 @@ from todoist_tui.tui.screens.labels import LabelsScreen
 from todoist_tui.tui.screens.parent_picker import ParentPickerScreen, ParentTarget
 from todoist_tui.tui.screens.project_picker import MoveTarget, ProjectPickerScreen
 from todoist_tui.tui.screens.reminders import ReminderRequest, RemindersScreen
-from todoist_tui.tui.screens.schedule import DueResult, ScheduleScreen, rescheduled
+from todoist_tui.tui.screens.schedule import (
+    DueResult,
+    ScheduleScreen,
+    deadline_start,
+    rescheduled,
+)
 from todoist_tui.tui.screens.search import SearchScreen
 from todoist_tui.tui.screens.text_prompt import TextPromptScreen
 from todoist_tui.tui.screens.views import ViewsOutcome, ViewsScreen
@@ -1145,9 +1150,10 @@ class TodoistApp(App[None]):
         if not ids:  # empty table or cursor on a group header
             return
         row = next((r for r in self._visible if str(r.id) == ids[0]), None)
-        current = row.deadline.date if len(ids) == 1 and row and row.deadline else None
+        # one target opens on its deadline (else due); a selection on a blank date
+        start = deadline_start(row.deadline, row.due) if len(ids) == 1 and row else None
         self._push(
-            ScheduleScreen(self._clock.today(), current, kind="deadline"),
+            ScheduleScreen(self._clock.today(), start, kind="deadline"),
             lambda result: self._on_deadline([TaskId(i) for i in ids], result),
         )
 

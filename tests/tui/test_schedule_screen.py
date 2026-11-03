@@ -5,12 +5,14 @@ import pytest
 from textual.app import App
 from textual.widgets import Input, Static
 
+from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.schedule import Postpone
 from todoist_tui.tui.screens.schedule import (
     DueResult,
     Kind,
     ScheduleScreen,
+    deadline_start,
     rescheduled,
 )
 from todoist_tui.tui.screens.scrolling import ScrollBody
@@ -466,3 +468,23 @@ async def test_removing_or_erasing_the_time_drops_the_postpone() -> None:
     plain = DueResult(Due(date=_TUESDAY))
     assert await _press("plus", "r", "enter", now=_NOW) == plain
     assert await _press("plus", "backspace", "enter", now=_NOW) == plain
+
+
+_AUG_5 = datetime.date(2026, 8, 5)
+
+
+@pytest.mark.parametrize(
+    ("deadline", "due", "expected"),
+    [
+        (Deadline(date=_AUG_5), Due(date=_TUESDAY), _AUG_5),  # deadline wins
+        (None, Due(date=_AUG_5), _AUG_5),
+        (None, DueText("every mon"), None),  # an unparsed phrase has no date
+        (None, None, None),
+    ],
+)
+def test_deadline_start_falls_back_to_the_due_date(
+    deadline: Deadline | None,
+    due: Due | DueText | None,
+    expected: datetime.date | None,
+) -> None:
+    assert deadline_start(deadline, due) == expected

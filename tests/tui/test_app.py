@@ -1235,6 +1235,25 @@ async def test_setting_deadline_applies_to_the_whole_selection() -> None:
 
 
 @pytest.mark.anyio
+async def test_deadline_calendar_opens_on_today_for_a_selection() -> None:
+    repo = FakeRepository([_row("A"), _row("B")], [])  # both carry a due
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("x")
+        await pilot.press("j")
+        await pilot.press("x")
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")
+        await settled(app)
+
+        by = Deadline(date=_TODAY)
+        assert set(repo.deadlines) == {(TaskId("A"), by), (TaskId("B"), by)}
+
+
+@pytest.mark.anyio
 async def test_moving_applies_to_the_whole_selection() -> None:
     repo = FakeRepository(
         [_row("A", "220"), _row("B", "220")],
@@ -3165,6 +3184,31 @@ async def test_pressing_d_sets_a_deadline_and_shows_it() -> None:
         ]
         table = app.query_one(DataTable[object])
         assert str(_cell(table, 0, "Deadline")) == "Tomorrow"
+
+
+@pytest.mark.anyio
+async def test_deadline_calendar_opens_on_the_due_date_when_no_deadline() -> None:
+    due = datetime.date(2026, 8, 5)
+    task = Task(
+        id=TaskId("6X4"),
+        content="Ship it",
+        priority=Priority.P2,
+        due=Due(date=due),
+        project_id="220",
+    )
+    repo = FakeRepository([task], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await open_view(pilot, "Errands")
+        await settled(app)
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")  # confirm the day the cursor starts on
+        await settled(app)
+
+        assert repo.deadlines == [(TaskId("6X4"), Deadline(date=due))]
 
 
 @pytest.mark.anyio

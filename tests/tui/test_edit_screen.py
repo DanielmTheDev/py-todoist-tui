@@ -493,6 +493,44 @@ async def test_alt_d_picks_a_deadline_into_the_draft() -> None:
 
 
 @pytest.mark.anyio
+async def test_deadline_calendar_opens_on_the_drafts_due_date() -> None:
+    edited: list[TaskDraft | None] = []
+    due = Due(date=datetime.date(2026, 8, 30))
+    host = _Host("Buy milk", "", edited.append, TaskDraft("Buy milk", "", due=due))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+d")
+        await pilot.pause()
+        await pilot.press("enter")  # confirm the day the cursor starts on
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert edited == [
+            TaskDraft("Buy milk", "", due=due, deadline=Deadline(date=due.date))
+        ]
+
+
+@pytest.mark.anyio
+async def test_deadline_calendar_prefers_the_existing_deadline_over_due() -> None:
+    edited: list[TaskDraft | None] = []
+    due = Due(date=datetime.date(2026, 8, 30))
+    deadline = Deadline(date=datetime.date(2026, 9, 4))
+    draft = TaskDraft("Buy milk", "", due=due, deadline=deadline)
+    host = _Host("Buy milk", "", edited.append, draft)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+d")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert edited == [draft]
+
+
+@pytest.mark.anyio
 async def test_cancelling_a_picker_leaves_the_draft_alone() -> None:
     edited: list[TaskDraft | None] = []
     host = _Host("Buy milk", "", edited.append)
