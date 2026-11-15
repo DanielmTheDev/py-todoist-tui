@@ -48,6 +48,9 @@ class PickList(OptionList):
 
     def on_resize(self) -> None:
         fit_to_terminal(self, self.SHARE)
+        # a highlight set at mount was scrolled to while the list was still uncapped,
+        # so a row below the new cap would sit out of sight
+        self.call_after_refresh(self.scroll_to_highlight)
 
 
 def page_scrolled(screen: Widget, key: str) -> bool:

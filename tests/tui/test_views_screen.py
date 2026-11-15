@@ -469,3 +469,16 @@ async def test_typing_keeps_the_highlight_on_the_section_it_was_on() -> None:
         index = _highlighted(host)
         assert index is not None
         assert _labels(host)[index] == view_label("Work / Planning", sigil="§")
+
+
+@pytest.mark.anyio
+async def test_a_current_view_below_the_fold_is_scrolled_into_sight() -> None:
+    """The list is capped to the terminal only after the highlight is set, so the
+    cursor sat on a row below the cap, out of sight."""
+    host = _Host(lambda _o: None, current="inbox")
+    async with host.run_test(size=(80, 9)) as pilot:
+        await pilot.pause()
+        options = host.screen.query_one(OptionList)
+        assert options.highlighted == 5  # Inbox sits last
+        top = options.scroll_offset.y
+        assert top <= 5 < top + options.scrollable_content_region.height
