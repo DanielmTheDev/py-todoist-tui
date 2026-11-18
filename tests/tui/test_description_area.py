@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Callable
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -35,6 +36,9 @@ async def _no_labels() -> list[str]:
 class _NoClipboard:
     def grab(self) -> PendingUpload:
         raise UploadRejected("no image on the clipboard")
+
+    def copy(self, path: Path, content_type: str) -> None:
+        raise AssertionError("the editor copies nothing")
 
 
 EMPTY = Catalog(_no_targets, _no_parents, _no_labels, _NoClipboard())

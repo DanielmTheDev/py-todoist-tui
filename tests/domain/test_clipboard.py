@@ -1,6 +1,9 @@
+import subprocess
+from pathlib import Path
+
 import pytest
 
-from todoist_tui.domain.clipboard import XclipClipboard
+from todoist_tui.domain.clipboard import ClipboardFailed, XclipClipboard
 from todoist_tui.domain.upload import MAX_UPLOAD_BYTES, UploadRejected
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
@@ -86,3 +89,59 @@ def test_an_xclip_that_cannot_run_is_reported_not_raised() -> None:
 
     with pytest.raises(UploadRejected, match="could not read the clipboard"):
         XclipClipboard(denied).grab()
+
+
+def test_copy_hands_the_file_to_xclip_under_its_type(tmp_path: Path) -> None:
+    shot = tmp_path / "shot.png"
+    written: list[tuple[str, Path]] = []
+
+    XclipClipboard(
+        _FakeXclip({}), lambda target, path: written.append((target, path))
+    ).copy(shot, "image/png")
+
+    assert written == [("image/png", shot)]
+
+
+def test_copy_runs_xclip_detached_from_this_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """xclip stays behind to serve the selection; output pipes it inherited
+    would hold the call open until the next copy."""
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(argv: list[str], **kwargs: object) -> None:
+        calls.append((argv, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+    XclipClipboard().copy(tmp_path / "a.png", "image/png")
+
+    ((argv, kwargs),) = calls
+    assert argv == [
+        "xclip",
+        "-selection",
+        "clipboard",
+        "-t",
+        "image/png",
+        "-i",
+        str(tmp_path / "a.png"),
+    ]
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+
+
+@pytest.mark.parametrize(
+    ("error", "said"),
+    [
+        (FileNotFoundError("xclip"), "xclip is not installed"),
+        (subprocess.CalledProcessError(1, ["xclip"]), "the clipboard refused it"),
+        (subprocess.TimeoutExpired(["xclip"], 5), "the clipboard refused it"),
+    ],
+)
+def test_a_copy_that_fails_says_so_in_plain_words(
+    error: Exception, said: str, tmp_path: Path
+) -> None:
+    def failing(target: str, path: Path) -> None:
+        raise error
+
+    with pytest.raises(ClipboardFailed, match=said):
+        XclipClipboard(_FakeXclip({}), failing).copy(tmp_path / "a.png", "image/png")

@@ -1,6 +1,7 @@
 import datetime
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from textual import events
@@ -104,6 +105,9 @@ class FakeClipboard:
         if self.image is None:
             raise UploadRejected("no image on the clipboard")
         return self.image
+
+    def copy(self, path: Path, content_type: str) -> None:
+        raise AssertionError("the editor copies nothing")
 
 
 SHOT = PendingUpload("clipboard-1.png", "image/png", b"png")

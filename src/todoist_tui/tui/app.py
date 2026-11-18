@@ -32,6 +32,7 @@ from todoist_tui.application.comments import (
     post_comment,
 )
 from todoist_tui.application.complete import complete_task, uncomplete_task
+from todoist_tui.application.copy_image import copy_image, newest_image
 from todoist_tui.application.delete import delete_section, delete_task
 from todoist_tui.application.delete_reminder import delete_reminder
 from todoist_tui.application.duplicate import duplicate_project, duplicate_section
@@ -200,11 +201,14 @@ def card_rows(bindings: list[BindingType]) -> list[tuple[str, str]]:
     list describes them but keyed as the card reaches them, then what only the
     card can do. Several keys onto one action list as one row."""
     described = {b.action: b.description for b in map(as_binding, bindings)}
+    card_only = {as_binding(b).action for b in CARD_BINDINGS}
     keys: dict[str, list[str]] = {}
     for key, action in FORWARDED.items():
         keys.setdefault(action, []).append(key)
     forwarded = [
-        (pressed(*reached), described[action]) for action, reached in keys.items()
+        (pressed(*reached), described[action])
+        for action, reached in keys.items()
+        if action not in card_only  # the card names those itself, below
     ]
     return forwarded + shortcut_rows(CARD_BINDINGS)
 
@@ -740,12 +744,33 @@ class TodoistApp(App[None]):
                 open_file=self._show_file,
                 fetch_file=self._fetch_file,
                 image_pane=self._image_pane,
+                copy_file=self._copy_file,
             ),
             self._on_comments_closed,
         )
 
     async def _show_file(self, attachment: Attachment) -> None:
         await open_attachment(self._attachments(), self._link_opener, attachment)
+
+    async def _copy_file(self, attachment: Attachment) -> None:
+        await copy_image(self._attachments(), self._clipboard_images, attachment)
+
+    async def action_copy_image(self) -> None:
+        """The task's newest image onto the clipboard — the card's `y`. The list
+        leaves `y` to a view slot, so there it is reached through the card."""
+        ids = self._targets(self.query_one(TaskTable))
+        if len(ids) != 1:
+            return
+        try:
+            image = newest_image(await load_comments(self._repo, TaskId(ids[0])))
+            if image is None:
+                self._set_status("No image on this task")
+                return
+            await self._copy_file(image)
+        except Exception as error:  # offline, refused, no xclip
+            self._set_status(f"Failed to copy the image: {error}")
+            return
+        self._set_status(f"Copied {image.file_name}")
 
     async def _fetch_file(self, attachment: Attachment) -> Path:
         return await self._attachments().local(attachment)

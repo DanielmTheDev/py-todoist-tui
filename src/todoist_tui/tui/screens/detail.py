@@ -59,6 +59,7 @@ FORWARDED: Mapping[str, str] = {
     "C": "comments",
     "R": "reminders",
     "e": "complete",
+    "y": "copy_image",
     "delete": "delete",
     **{str(n): f"set_priority('P{n}')" for n in range(1, 5)},
 }
@@ -68,6 +69,7 @@ FORWARDED: Mapping[str, str] = {
 CARD_BINDINGS: list[BindingType] = [
     Binding(f"{FIRST_LINK}-{LAST_LINK}", "open_link", "Open link"),
     Binding("o", "open_link", "Open the first link"),
+    Binding("y", "copy_image", "Copy the task's newest image"),
     Binding(",".join(CLOSE_KEYS), "close", "Close"),
 ]
 

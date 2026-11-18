@@ -35,6 +35,7 @@ THREAD_BINDINGS: list[BindingType] = [
     Binding("u", "", "Attach a file by its path"),
     Binding("p", "", "Attach the image on the clipboard"),
     Binding("o", "", "Open the file this comment carries"),
+    Binding("y", "", "Copy this comment's image to the clipboard"),
     Binding("d", "", "Delete this comment"),
     Binding("j,k", "", "Move through the thread"),
     Binding("pageup,pagedown", "", "Scroll a long thread"),
@@ -63,6 +64,10 @@ async def _nothing_to_open(attachment: Attachment) -> None:
     """Stand-in for a screen built without a way to reach the file — the tests
     that only read a thread never press `o`."""
     raise RuntimeError(f"no viewer for {attachment.file_name}")
+
+
+async def _nothing_to_copy(attachment: Attachment) -> None:
+    raise RuntimeError(f"no clipboard for {attachment.file_name}")
 
 
 async def _nothing_to_fetch(attachment: Attachment) -> Path:
@@ -119,6 +124,7 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         open_file: OpenFile = _nothing_to_open,
         fetch_file: FetchFile = _nothing_to_fetch,
         image_pane: ImagePane = text_pane,
+        copy_file: OpenFile = _nothing_to_copy,
     ) -> None:
         super().__init__()
         self._comments = comments
@@ -127,6 +133,7 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
         self._open_file = open_file
         self._fetch_file = fetch_file
         self._image_pane = image_pane
+        self._copy_file = copy_file
         self._cursor = max(len(comments) - 1, 0)
         self._shown_image = 0  # bumped per preview, so a late one knows it is late
 
@@ -157,6 +164,8 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
             self._move(-1)
         elif event.key == "o":
             self._open()
+        elif event.key == "y":
+            self._copy()
         elif event.key == "a":
             self.dismiss(CommentRequest(write=True))
         elif event.key == "u":
@@ -174,6 +183,21 @@ class CommentsScreen(ModalScreen["CommentRequest | None"]):
             return
         self._say(f"Opening {attachment.file_name}\u2026")
         self.run_worker(self._showing(attachment))
+
+    def _copy(self) -> None:
+        attachment = self._selected_attachment()
+        if attachment is None or not attachment.is_image:
+            self._say("No image on this comment")
+            return
+        self.run_worker(self._copying(attachment))
+
+    async def _copying(self, attachment: Attachment) -> None:
+        try:
+            await self._copy_file(attachment)
+        except Exception as error:  # offline, refused, no xclip
+            self._say(f"Could not copy {attachment.file_name}: {error}")
+        else:
+            self._say(f"Copied {attachment.file_name}")
 
     async def _showing(self, attachment: Attachment) -> None:
         try:

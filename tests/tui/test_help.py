@@ -279,3 +279,9 @@ async def test_f1_opens_help_too_over_the_list_and_over_the_card() -> None:
 
         assert isinstance(app.screen, HelpScreen)
         assert "Open link" in str(app.screen.query_one("#help", Static).render())
+
+
+def test_card_rows_name_what_only_the_card_forwards() -> None:
+    """`y` copies an image from the card; the list leaves `y` to a view slot,
+    so the list has no row to borrow the description from."""
+    assert ("y", "Copy the task's newest image") in card_rows(TodoistApp.BINDINGS)

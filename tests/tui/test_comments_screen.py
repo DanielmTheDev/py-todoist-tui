@@ -100,10 +100,12 @@ class _Host(App[None]):
         opener: OpenFile | None = None,
         files: _Files | None = None,
         panes: _Panes | None = None,
+        copier: OpenFile | None = None,
     ) -> None:
         super().__init__()
         self._comments = comments
         self._opener = opener
+        self._copier = copier
         self._files = files
         self._panes = panes
         self.result: CommentRequest | None | str = "unset"
@@ -117,6 +119,7 @@ class _Host(App[None]):
                 open_file=self._opener or _no_viewer,
                 fetch_file=self._files or _no_copy,
                 image_pane=self._panes or text_pane,
+                copy_file=self._copier or _no_viewer,
             ),
             self._taken,
         )
@@ -131,8 +134,9 @@ async def _shown(
     opener: OpenFile | None = None,
     files: _Files | None = None,
     panes: _Panes | None = None,
+    copier: OpenFile | None = None,
 ) -> tuple[str, _Host]:
-    host = _Host(comments, opener, files, panes)
+    host = _Host(comments, opener, files, panes, copier)
     async with host.run_test() as pilot:
         await pilot.pause()
         for key in keys:
@@ -400,3 +404,47 @@ async def test_p_asks_for_the_clipboard_image() -> None:
     _, host = await _shown((_PLAIN,), "p")
 
     assert host.result == CommentRequest(paste=True)
+
+
+_WITH_PDF = Comment(
+    id="c3",
+    task_id="t1",
+    content="the spec",
+    posted_at=_AT,
+    attachment=Attachment(
+        file_name="spec.pdf",
+        file_type="application/pdf",
+        file_url="https://files.todoist.com/x/spec.pdf",
+    ),
+)
+
+
+@pytest.mark.anyio
+async def test_y_copies_the_image_the_cursor_rests_on() -> None:
+    copier = _Opener()
+
+    text, host = await _shown((_PLAIN, _WITH_IMAGE), "y", copier=copier)
+
+    assert copier.opened == [_WITH_IMAGE.attachment]
+    assert "Copied shot.png" in text
+    assert host.result == "unset"  # the thread stays open
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("comment", [_PLAIN, _WITH_PDF])
+async def test_y_on_a_comment_without_an_image_copies_nothing(comment: Comment) -> None:
+    copier = _Opener()
+
+    text, _host = await _shown((comment,), "y", copier=copier)
+
+    assert copier.opened == []
+    assert "No image on this comment" in text
+
+
+@pytest.mark.anyio
+async def test_a_copy_that_fails_says_why() -> None:
+    copier = _Opener(error=RuntimeError("offline"))
+
+    text, _host = await _shown((_WITH_IMAGE,), "y", copier=copier)
+
+    assert "Could not copy shot.png: offline" in text

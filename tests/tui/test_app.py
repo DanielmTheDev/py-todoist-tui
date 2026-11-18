@@ -46,6 +46,7 @@ from todoist_tui.domain.arrange import (
     SortKey,
     TaskLine,
 )
+from todoist_tui.domain.clipboard import ClipboardFailed
 from todoist_tui.domain.comment import Attachment, Comment
 from todoist_tui.domain.creation import CreationPlan, NewTask
 from todoist_tui.domain.deadline import Deadline
@@ -76,7 +77,7 @@ from todoist_tui.tui.screens.arrange import ArrangeScreen
 from todoist_tui.tui.screens.comments import CommentsScreen
 from todoist_tui.tui.screens.compose import ComposeCommentScreen
 from todoist_tui.tui.screens.confirm import ConfirmScreen
-from todoist_tui.tui.screens.detail import FORWARDED, TaskDetailScreen
+from todoist_tui.tui.screens.detail import CARD_BINDINGS, FORWARDED, TaskDetailScreen
 from todoist_tui.tui.screens.draft import (
     DEADLINE_ICON,
     DUE_ICON,
@@ -7334,12 +7335,16 @@ async def test_cancelling_the_editor_returns_to_the_detail_card() -> None:
 
 def test_every_forwarded_card_key_matches_a_list_binding() -> None:
     """The card names app actions by hand, so nothing stops the two drifting
-    apart but this. `a` is a deliberate alias for the list's `A`."""
+    apart but this. `a` is a deliberate alias for the list's `A`; an action the
+    card lists itself (`y`, left to a view slot in the list) has no list key."""
     listed = list(map(as_binding, TodoistApp.BINDINGS))
     bound = {b.action: b.key.split(",") for b in listed}
     described = {b.action: b.description for b in listed}
+    card_only = {as_binding(b).action for b in CARD_BINDINGS}
 
     for key, action in FORWARDED.items():
+        if action in card_only:
+            continue
         assert action in bound, f"{key} names {action}, which no list binding runs"
         assert key in bound[action] or key == "a"
         # the card's help names actions by their list description
@@ -9398,6 +9403,12 @@ class _FakeClipboard:
     def __init__(self, error: Exception | None = None) -> None:
         self.grabs = 0
         self._error = error
+        self.copied: list[tuple[Path, str]] = []
+
+    def copy(self, path: Path, content_type: str) -> None:
+        if self._error is not None:
+            raise self._error
+        self.copied.append((path, content_type))
 
     def grab(self) -> PendingUpload:
         self.grabs += 1
@@ -10019,3 +10030,99 @@ async def test_an_image_for_a_subtask_gone_since_the_editor_opened_is_dropped() 
         await pilot.pause()
 
         assert repo.posted == []
+
+
+class _CachedFiles:
+    async def local(self, attachment: Attachment) -> Path:
+        return Path(f"/cache/{attachment.file_name}")
+
+
+def _imaged(name: str, minutes: int) -> Comment:
+    return replace(
+        _A_COMMENT,
+        id=name,
+        posted_at=_A_COMMENT.posted_at + datetime.timedelta(minutes=minutes),
+        attachment=Attachment(name, "image/png", f"https://files.todoist.com/{name}"),
+    )
+
+
+@pytest.mark.anyio
+async def test_y_in_the_thread_copies_the_comment_s_cached_image() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_imaged("shot.png", 0),))
+    clipboard = _FakeClipboard()
+    app = TodoistApp(repo, clipboard=clipboard, files=_CachedFiles())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("C")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert clipboard.copied == [(Path("/cache/shot.png"), "image/png")]
+
+
+@pytest.mark.anyio
+async def test_y_on_the_card_copies_the_task_s_newest_image() -> None:
+    repo = FakeRepository(
+        [_noted("t1")],
+        [],
+        comments=(_imaged("new.png", 5), _A_COMMENT, _imaged("old.png", 0)),
+    )
+    clipboard = _FakeClipboard()
+    app = TodoistApp(repo, clipboard=clipboard, files=_CachedFiles())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.comment_reads == [TaskId("t1")]
+        assert clipboard.copied == [(Path("/cache/new.png"), "image/png")]
+        assert _status(app) == "Copied new.png"
+
+
+@pytest.mark.anyio
+async def test_y_on_the_card_of_a_task_without_an_image_says_so() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_A_COMMENT,))
+    clipboard = _FakeClipboard()
+    app = TodoistApp(repo, clipboard=clipboard, files=_CachedFiles())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert clipboard.copied == []
+        assert _status(app) == "No image on this task"
+
+
+@pytest.mark.anyio
+async def test_a_card_copy_that_fails_says_why() -> None:
+    repo = FakeRepository([_noted("t1")], [], comments=(_imaged("shot.png", 0),))
+    clipboard = _FakeClipboard(error=ClipboardFailed("xclip is not installed"))
+    app = TodoistApp(repo, clipboard=clipboard, files=_CachedFiles())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await settled(app)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert _status(app) == "Failed to copy the image: xclip is not installed"
