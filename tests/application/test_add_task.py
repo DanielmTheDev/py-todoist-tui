@@ -34,7 +34,7 @@ class FakeRepository:
 
     async def apply_creation(self, plan: CreationPlan) -> dict[str, str]:
         self.applied.append(plan)
-        return {}
+        return {task.temp_id: f"real-{task.temp_id}" for task in plan.tasks}
 
     async def today(self) -> list[Task]:
         return []
@@ -391,3 +391,23 @@ async def test_a_planned_task_can_take_a_given_place_in_its_list() -> None:
     )
 
     assert plan.tasks[0].child_order == 3
+
+
+@pytest.mark.anyio
+async def test_add_task_answers_the_ids_of_the_task_and_its_subtasks() -> None:
+    """The ids only exist once the batch lands, and a comment needs one."""
+    repo = FakeRepository()
+
+    created = await add_task(
+        repo,
+        "Ship release",
+        project_id="P",
+        subtasks=(NewChild("tag version"), NewChild("write changelog")),
+        temp_ids=iter(["parent", "kid-1", "kid-2"]),
+    )
+
+    assert created == (
+        TaskId("real-parent"),
+        TaskId("real-kid-1"),
+        TaskId("real-kid-2"),
+    )

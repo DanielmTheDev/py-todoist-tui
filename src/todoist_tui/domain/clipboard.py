@@ -9,7 +9,7 @@ import subprocess
 from collections.abc import Callable
 from typing import Protocol
 
-from todoist_tui.domain.upload import PendingUpload, UploadRejected
+from todoist_tui.domain.upload import MAX_UPLOAD_BYTES, PendingUpload, UploadRejected
 
 _TIMEOUT_SECONDS = 5.0  # a selection owner that never answers must not hang the app
 # what we can send, best first; each is (target, extension, magic bytes)
@@ -53,11 +53,15 @@ class XclipClipboard:
                     break  # offered but empty: the manager has nothing to give
                 if not data.startswith(magic):
                     raise UploadRejected(f"the clipboard is not a {target[6:].upper()}")
+                if len(data) > MAX_UPLOAD_BYTES:
+                    raise UploadRejected(f"too big: {len(data)} bytes")
                 return PendingUpload(_named(suffix), target, data)
         except FileNotFoundError as missing:
             raise UploadRejected("xclip is not installed") from missing
         except subprocess.SubprocessError as failed:
             raise UploadRejected(f"the clipboard did not answer: {failed}") from failed
+        except OSError as error:
+            raise UploadRejected(f"could not read the clipboard: {error}") from error
         raise UploadRejected(_NO_IMAGE)
 
 

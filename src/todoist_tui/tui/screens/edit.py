@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import ClassVar, cast
@@ -10,6 +11,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
 
 from todoist_tui.application.views import TaskRow
+from todoist_tui.domain.clipboard import Clipboard
 from todoist_tui.domain.clock import Clock
 from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due
@@ -18,6 +20,7 @@ from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
+from todoist_tui.domain.upload import UploadRejected
 from todoist_tui.tui.screens.description import VIM_KEYS, DescriptionArea
 from todoist_tui.tui.screens.draft import Subtask, TaskDraft, attribute_strip
 from todoist_tui.tui.screens.help import HelpScreen, shortcut_rows
@@ -48,12 +51,13 @@ _UNBOUND: list[BindingType] = [Binding("tab", "focus_next", "Editor: switch fiel
 
 @dataclass(frozen=True, slots=True)
 class Catalog:
-    """What the editor's pickers choose from, fetched only once a chord asks —
+    """What the editor reaches outside itself for, read only once a chord asks —
     opening the editor should cost nothing."""
 
     move_targets: Callable[[], Awaitable[tuple[list[Project], list[Section]]]]
     parents: Callable[[], Awaitable[list[TaskRow]]]
     labels: Callable[[], Awaitable[list[str]]]
+    clipboard: Clipboard
 
 
 class TitleInput(Input):
@@ -111,6 +115,11 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
         Binding("alt+2", "set_priority('P2')", "Editor: P2", show=False),
         Binding("alt+3", "set_priority('P3')", "Editor: P3", show=False),
         Binding("alt+4", "set_priority('P4')", "Editor: P4", show=False),
+        # Input and TextArea paste the app's own text on ctrl+v; the terminal's
+        # paste is ctrl+shift+v, and it carries text only
+        Binding(
+            "ctrl+v", "paste_image", "Editor: attach clipboard image", priority=True
+        ),
     ]
 
     COMPONENT_CLASSES: ClassVar[set[str]] = set(PALETTE_CLASSES)
@@ -232,6 +241,16 @@ class TaskEditScreen(ModalScreen["TaskDraft | None"]):
                 deadline=Deadline(date=result.due.date) if result.due else None,
             ),
         )
+
+    async def action_paste_image(self) -> None:
+        try:
+            # reading the selection shells out and can block: off the event loop
+            image = await asyncio.to_thread(self._catalog.clipboard.grab)
+        except UploadRejected as rejected:
+            self.query_one("#hint", Static).update(str(rejected))
+            return
+        self._draft = replace(self._draft, images=(*self._draft.images, image))
+        self._repaint()
 
     def action_set_priority(self, name: str) -> None:
         self._draft = replace(self._draft, priority=Priority[name])

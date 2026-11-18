@@ -9818,3 +9818,204 @@ async def test_shift_n_on_the_detail_card_collects_the_open_task() -> None:
         await _collect(app, pilot, "enter")
 
         assert [m.task_id for m in repo.applied[0].moves] == ["kid"]
+
+
+_SHOT = "clipboard-2026-09-19-101500.png"
+
+
+def _attached(repo: FakeRepository) -> list[tuple[TaskId, str]]:
+    return [
+        (task_id, attachment.file_name if attachment else "")
+        for task_id, _, attachment in repo.posted
+    ]
+
+
+@pytest.mark.anyio
+async def test_an_image_pasted_into_a_new_task_lands_as_its_comment() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert _attached(repo) == [(TaskId(_added(repo).temp_id), _SHOT)]
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_editor_sends_its_pasted_image_nowhere() -> None:
+    repo = FakeRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await settled(app)
+
+        assert repo.uploaded == [] and repo.posted == []
+
+
+@pytest.mark.anyio
+async def test_images_pasted_while_editing_land_on_the_task_and_its_subtask() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("ctrl+e")  # the highlighted subtask's own editor
+        await pilot.pause()
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert sorted(_attached(repo)) == [
+            (TaskId("c1"), _SHOT),
+            (TaskId("p1"), _SHOT),
+        ]
+        assert repo.text_edits == []  # an image alone changes nothing else
+
+
+@pytest.mark.anyio
+async def test_an_image_pasted_onto_a_new_subtask_lands_on_it() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("alt+a")
+        await pilot.pause()
+        await _type(pilot, "c3")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        (plan,) = repo.applied
+        assert _attached(repo) == [(TaskId(plan.tasks[0].temp_id), _SHOT)]
+
+
+@pytest.mark.anyio
+async def test_an_image_pasted_into_the_collect_editor_lands_on_the_new_parent() -> (
+    None
+):
+    repo = FakeRepository([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("N")
+        await pilot.pause()
+        await _type(pilot, "trip")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await settled(app)
+        await pilot.pause()
+
+        assert _attached(repo) == [(TaskId(_collected(repo).temp_id), _SHOT)]
+
+
+class FailingUploadRepository(FakeRepository):
+    async def upload_attachment(self, upload: PendingUpload) -> Attachment:
+        raise RuntimeError("too big")
+
+
+@pytest.mark.anyio
+async def test_an_image_that_fails_to_upload_leaves_the_new_task_standing() -> None:
+    repo = FailingUploadRepository([], [Project(id="220", name="Inbox", is_inbox=True)])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        await _type(pilot, "new")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert _added(repo).content == "new"
+        assert _status(app) == f"Failed to attach {_SHOT}: too big"
+
+
+@pytest.mark.anyio
+async def test_a_collect_whose_image_fails_can_still_be_undone() -> None:
+    class Failing(FailingUploadRepository, CascadingRepository):
+        pass
+
+    repo = Failing([_row("kid")], [Project(id="220", name="Errands")])
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.press("N")
+        await pilot.pause()
+        await _type(pilot, "trip")
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+        assert _status(app) == f"Failed to attach {_SHOT}: too big"
+
+        await pilot.press("z")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.deleted == [TaskId(_collected(repo).temp_id)]
+
+
+@pytest.mark.anyio
+async def test_an_image_for_a_subtask_gone_since_the_editor_opened_is_dropped() -> None:
+    repo = _parented()
+    app = TodoistApp(repo, clock=FakeClock(_TODAY), clipboard=_FakeClipboard())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        app.screen.query_one(SubtaskList).focus()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await repo.delete(TaskId("c1"))  # another client took it meanwhile
+        app.action_refresh()
+        await settled(app)
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await settled(app)
+        await pilot.pause()
+
+        assert repo.posted == []

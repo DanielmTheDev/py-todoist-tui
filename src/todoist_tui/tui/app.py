@@ -1343,6 +1343,7 @@ class TodoistApp(App[None]):
             move_targets=self._move_targets,
             parents=partial(self._parent_candidates, set(editing)),
             labels=self._label_names,
+            clipboard=self._clipboard_images,
         )
 
     async def _move_targets(self) -> tuple[list[Project], list[Section]]:
@@ -1377,10 +1378,9 @@ class TodoistApp(App[None]):
 
     def _add_step(self, draft: TaskDraft, row: TaskRow) -> Step:
         children = tuple(s.draft for s in draft.subtasks if s.row is None)
-        return Step(
-            restore([row, *(self._provisional_child(row, c) for c in children)]),
-            partial(
-                add_task,
+
+        async def adding() -> None:
+            created = await add_task(
                 self._repo,
                 draft.content,
                 draft.description,
@@ -1393,7 +1393,13 @@ class TodoistApp(App[None]):
                 labels=draft.labels,
                 reminders=draft.reminders,
                 subtasks=tuple(_child_of(c) for c in children),
-            ),
+            )
+            for task_id, owner in zip(created, (draft, *children), strict=True):
+                self._attach_images(task_id, owner.images)
+
+        return Step(
+            restore([row, *(self._provisional_child(row, c) for c in children)]),
+            adding,
             "Failed to add task",
         )
 
@@ -1470,6 +1476,12 @@ class TodoistApp(App[None]):
         if work:  # a save that changed nothing queues nothing, and so undoes nothing
             self._queue(work)
         self._apply_reminders(row, draft)
+        self._attach_images(row.id, draft.images)
+        children = {c.id for c in self._children_of(row)}
+        for subtask in draft.subtasks:
+            # a new one takes its images as it is made; a gone one has no thread
+            if subtask.row is not None and subtask.row.id in children:
+                self._attach_images(subtask.row.id, subtask.draft.images)
         self._drop_subtasks(row, draft.subtasks)
 
     def _subtask_steps(
@@ -1495,10 +1507,9 @@ class TodoistApp(App[None]):
 
     def _add_subtask_step(self, parent: TaskRow, draft: TaskDraft) -> Step:
         self._expanded.add(parent.id)  # else the new subtask lands out of sight
-        return Step(
-            restore([self._provisional_child(parent, draft)]),
-            partial(
-                add_task,
+
+        async def adding() -> None:
+            (created,) = await add_task(
                 self._repo,
                 draft.content,
                 draft.description,
@@ -1509,7 +1520,12 @@ class TodoistApp(App[None]):
                 priority=draft.priority,
                 labels=draft.labels,
                 reminders=draft.reminders,
-            ),
+            )
+            self._attach_images(created, draft.images)
+
+        return Step(
+            restore([self._provisional_child(parent, draft)]),
+            adding,
             "Failed to add subtask",
         )
 
@@ -1549,6 +1565,18 @@ class TodoistApp(App[None]):
         """The task and everything under it, in view order."""
         subtree = with_subtrees(self._visible, {task_id})
         return [row for row in self._visible if str(row.id) in subtree]
+
+    def _attach_images(
+        self, task_id: TaskId, images: tuple[PendingUpload, ...]
+    ) -> None:
+        """Each pasted image becomes a comment of its own, sent on its own: a
+        failed upload must not read as a failed save, nor cost the save its
+        undo. A comment is no attribute of the task, so it is not undone."""
+        for image in images:
+            self._send(
+                partial(attach_file, self._repo, task_id, image),
+                f"Failed to attach {image.file_name}",
+            )
 
     def _apply_reminders(self, row: TaskRow, draft: TaskDraft) -> None:
         """Reminders are their own resources, added and deleted one by one — the
@@ -1972,6 +2000,7 @@ class TodoistApp(App[None]):
             born.append(parent_id)
             # the provisional row's unfolding dies with it; the real one inherits
             self._expanded.add(parent_id)
+            self._attach_images(parent_id, draft.images)
 
         return Step(
             [

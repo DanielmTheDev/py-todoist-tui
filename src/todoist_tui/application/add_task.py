@@ -20,6 +20,7 @@ from todoist_tui.domain.reminder import (
     wants_default_reminder,
 )
 from todoist_tui.domain.repository import TaskRepository
+from todoist_tui.domain.task import TaskId
 
 
 def _uuid_temp_ids() -> Iterator[str]:
@@ -41,25 +42,26 @@ async def add_task(
     reminders: tuple[Reminder, ...] = (),
     subtasks: tuple[NewChild, ...] = (),
     temp_ids: Iterator[str] | None = None,
-) -> None:
-    """Add `content` to `project_id` — see `plan_task`."""
-    await repo.apply_creation(
-        await plan_task(
-            repo,
-            content,
-            description,
-            project_id,
-            section_id,
-            parent_id,
-            due,
-            deadline,
-            priority,
-            labels,
-            reminders,
-            subtasks,
-            temp_ids=temp_ids,
-        )
+) -> tuple[TaskId, ...]:
+    """Add `content` to `project_id` — see `plan_task` — answering the ids the
+    task and then its subtasks became, in the order given."""
+    plan = await plan_task(
+        repo,
+        content,
+        description,
+        project_id,
+        section_id,
+        parent_id,
+        due,
+        deadline,
+        priority,
+        labels,
+        reminders,
+        subtasks,
+        temp_ids=temp_ids,
     )
+    created = await repo.apply_creation(plan)
+    return tuple(TaskId(created[task.temp_id]) for task in plan.tasks)
 
 
 async def plan_task(

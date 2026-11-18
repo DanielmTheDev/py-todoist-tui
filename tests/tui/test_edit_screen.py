@@ -16,7 +16,9 @@ from todoist_tui.domain.project import Project
 from todoist_tui.domain.reminder import Reminder
 from todoist_tui.domain.section import Section
 from todoist_tui.domain.task import TaskId
+from todoist_tui.domain.upload import PendingUpload, UploadRejected
 from todoist_tui.tui.screens.draft import (
+    ATTACHMENTS_ICON,
     DEADLINE_ICON,
     DUE_ICON,
     LABELS_ICON,
@@ -74,6 +76,7 @@ def _catalog(
     parents: list[TaskRow] | None = None,
     labels: list[str] | None = None,
     fails: str | None = None,
+    clipboard: "FakeClipboard | None" = None,
 ) -> Catalog:
     async def move_targets() -> tuple[list[Project], list[Section]]:
         if fails == "projects":
@@ -86,7 +89,24 @@ def _catalog(
     async def all_labels() -> list[str]:
         return labels or []
 
-    return Catalog(move_targets, all_parents, all_labels)
+    return Catalog(
+        move_targets, all_parents, all_labels, clipboard or FakeClipboard(None)
+    )
+
+
+class FakeClipboard:
+    """Hands out `image`, or refuses as an empty clipboard does."""
+
+    def __init__(self, image: PendingUpload | None) -> None:
+        self.image = image
+
+    def grab(self) -> PendingUpload:
+        if self.image is None:
+            raise UploadRejected("no image on the clipboard")
+        return self.image
+
+
+SHOT = PendingUpload("clipboard-1.png", "image/png", b"png")
 
 
 class _Host(App[None]):
@@ -1038,3 +1058,64 @@ async def test_absolute_reminder_picker_postpones_from_the_clock() -> None:
     assert edited[0].reminders == (
         Reminder("", "", "absolute", Due(date=TODAY, time=datetime.time(15, 0))),
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("field", ["title", "description"])
+async def test_ctrl_v_takes_the_clipboard_image_along_on_save(field: str) -> None:
+    results: list[TaskDraft | None] = []
+    host = _Host(
+        "Fix dialog",
+        "",
+        results.append,
+        catalog=_catalog(clipboard=FakeClipboard(SHOT)),
+    )
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        if field == "description":
+            await pilot.press("tab")
+        await pilot.press("ctrl+v", "ctrl+v")
+        await pilot.pause()
+        assert f"{ATTACHMENTS_ICON} 2 images" in _strip(host)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    saved = results[0]
+    assert saved is not None and saved.images == (SHOT, SHOT)
+    assert saved.description == ""  # the image is not pasted as text too
+
+
+@pytest.mark.anyio
+async def test_ctrl_v_with_no_image_says_why_and_adds_nothing() -> None:
+    results: list[TaskDraft | None] = []
+    host = _Host("Fix dialog", "", results.append)
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+v")
+        await pilot.pause()
+        assert _hint(host) == "no image on the clipboard"
+        assert ATTACHMENTS_ICON not in _strip(host)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    saved = results[0]
+    assert saved is not None and saved.images == ()
+
+
+@pytest.mark.anyio
+async def test_a_subtask_editor_takes_a_clipboard_image_too() -> None:
+    results: list[TaskDraft | None] = []
+    host = _Host(
+        "Ship", "", results.append, catalog=_catalog(clipboard=FakeClipboard(SHOT))
+    )
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+a")
+        await pilot.pause()
+        await pilot.press(*"tag", "ctrl+v")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    saved = results[0]
+    assert saved is not None and saved.images == ()
+    assert saved.subtasks[0].draft.images == (SHOT,)

@@ -12,6 +12,7 @@ from tests.fake_clock import FakeClock
 from todoist_tui.application.views import TaskRow
 from todoist_tui.domain.project import Project
 from todoist_tui.domain.section import Section
+from todoist_tui.domain.upload import PendingUpload, UploadRejected
 from todoist_tui.tui.screens.description import DescriptionArea
 from todoist_tui.tui.screens.draft import TaskDraft
 from todoist_tui.tui.screens.edit import Catalog, TaskEditScreen
@@ -31,7 +32,12 @@ async def _no_labels() -> list[str]:
     return []
 
 
-EMPTY = Catalog(_no_targets, _no_parents, _no_labels)
+class _NoClipboard:
+    def grab(self) -> PendingUpload:
+        raise UploadRejected("no image on the clipboard")
+
+
+EMPTY = Catalog(_no_targets, _no_parents, _no_labels, _NoClipboard())
 
 
 class _Host(App[None]):

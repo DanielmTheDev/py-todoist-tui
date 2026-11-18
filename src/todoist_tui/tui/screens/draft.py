@@ -17,6 +17,7 @@ from todoist_tui.domain.deadline import Deadline
 from todoist_tui.domain.due import Due, DueText
 from todoist_tui.domain.priority import Priority
 from todoist_tui.domain.reminder import Reminder
+from todoist_tui.domain.upload import PendingUpload
 from todoist_tui.tui.format import (
     format_deadline,
     format_due,
@@ -34,6 +35,7 @@ PARENT_ICON = "\U000f005d"  # arrow-up
 SUBTASKS_ICON = "\U000f0645"  # file-tree
 REMINDERS_ICON = "\U000f009a"  # bell
 LABELS_ICON = "\U000f04f9"  # tag
+ATTACHMENTS_ICON = "\U000f0066"  # attachment
 _SEPARATOR = " · "
 
 
@@ -72,6 +74,8 @@ class TaskDraft:
     parent: TaskRow | None = None
     subtasks: tuple[Subtask, ...] = ()
     reminders: tuple[Reminder, ...] = ()
+    # posted as comments once the save has given the task an id
+    images: tuple[PendingUpload, ...] = ()
 
 
 def draft_of(
@@ -117,6 +121,7 @@ def attribute_strip(
         (SUBTASKS_ICON, _subtasks(draft)),
         (REMINDERS_ICON, _reminders(draft, today)),
         (LABELS_ICON, format_labels(draft.labels)),
+        (ATTACHMENTS_ICON, _images(draft)),
     ):
         if not shown:
             continue
@@ -134,6 +139,13 @@ def _parent(draft: TaskDraft) -> str:
     if draft.parent is not None:
         return draft.parent.content
     return "(a task)" if draft.parent_id else ""
+
+
+def _images(draft: TaskDraft) -> str:
+    count = len(draft.images)
+    if not count:
+        return ""
+    return "1 image" if count == 1 else f"{count} images"
 
 
 def _subtasks(draft: TaskDraft) -> str:

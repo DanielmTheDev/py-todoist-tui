@@ -1,7 +1,7 @@
 import pytest
 
 from todoist_tui.domain.clipboard import XclipClipboard
-from todoist_tui.domain.upload import UploadRejected
+from todoist_tui.domain.upload import MAX_UPLOAD_BYTES, UploadRejected
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
@@ -70,3 +70,19 @@ def test_a_missing_xclip_says_so_rather_than_crashing() -> None:
 
     with pytest.raises(UploadRejected, match="xclip"):
         XclipClipboard(xclip).grab()
+
+
+def test_an_image_over_the_upload_cap_is_refused_before_it_is_queued() -> None:
+    huge = _PNG + b"0" * MAX_UPLOAD_BYTES
+    xclip = _FakeXclip({"TARGETS": b"image/png\n", "image/png": huge})
+
+    with pytest.raises(UploadRejected, match="too big"):
+        XclipClipboard(xclip).grab()
+
+
+def test_an_xclip_that_cannot_run_is_reported_not_raised() -> None:
+    def denied(target: str) -> bytes:
+        raise PermissionError("xclip")
+
+    with pytest.raises(UploadRejected, match="could not read the clipboard"):
+        XclipClipboard(denied).grab()
